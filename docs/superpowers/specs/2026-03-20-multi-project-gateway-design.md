@@ -20,8 +20,8 @@ Discord Server
   ├── #rallyhub     ─┐
   ├── #mochi         │
   ├── #takumi        ├──▶  Multi-Project Gateway
-  ├── #intentlayer   │     (single Discord bot)
-  └── #general       ─┘         │
+  └── #intentlayer   ─┘     (single Discord bot)
+                                │
                                 │  Channel Router
                                 │  (channel ID → project config)
                                 │
@@ -43,34 +43,43 @@ Discord Server
 - Sends 👀 reaction on receipt
 - Forwards message text to router
 - Receives response from session, sends back to Discord channel
-- Auto-chunks messages at 2000 chars (Discord limit)
+- Auto-chunks messages at 2000 chars (Discord limit), splitting at newline boundaries to avoid breaking code blocks. Chunks sent as sequential messages with rate-limit awareness.
 
 #### 2. Channel Router (`router.ts`)
 
 - Looks up channel ID in config
 - Returns project config (name, directory) or null for unmapped channels
-- Discord threads inherit parent channel's routing
+- Discord threads inherit parent channel's routing and share the parent channel's session (v1 — thread-based isolation is a future enhancement)
 
 #### 3. Session Manager (`session-manager.ts`)
 
 - Manages a pool of Claude Code CLI subprocesses, one per project
-- **Spawn**: On first message for a project, spawns:
+- **Spawn**: On first message for a project, spawns Claude CLI using `child_process.spawn` with `{ cwd: project.directory }` to set the working directory (there is no `--project-dir` flag):
   ```
-  claude --print --dangerously-skip-permissions \
-    --output-format stream-json \
-    --project-dir <project_directory>
+  spawn('claude', ['--print', '--dangerously-skip-permissions', '--output-format', 'stream-json', '<prompt>'], {
+    cwd: '/home/yamakei/Documents/RallyHub'
+  })
   ```
-- **Resume**: For follow-up messages, uses `--resume <session_id>` to maintain conversational context
-- **Idle timeout**: 30 minutes of inactivity → kill process, clean up session reference
-- **Crash recovery**: If a process dies, log error, notify Discord channel, remove stale session. Next message spawns fresh.
+- **Resume**: For follow-up messages, uses `--resume <session_id>` with the prompt as a positional argument:
+  ```
+  spawn('claude', ['--print', '--dangerously-skip-permissions', '--output-format', 'stream-json', '--resume', '<session_id>', '<prompt>'], {
+    cwd: '/home/yamakei/Documents/RallyHub'
+  })
+  ```
+  Note: Consider using `--session-id <uuid>` instead of `--resume` — this allows specifying a deterministic session ID per project upfront, simplifying session tracking.
+- **Prompt delivery**: The user's message is passed as the final positional argument to the `claude` CLI, not via stdin.
+- **Spawn-per-message model**: Each Discord message results in a new `claude --print` process invocation. The `--resume` flag provides conversational continuity across invocations without keeping a long-lived process. This avoids complexity of managing persistent bidirectional subprocesses.
+- **Idle timeout**: 30 minutes of inactivity → discard session ID. Next message starts a fresh session (no process to kill since processes are short-lived per message).
+- **Crash recovery**: If a process exits with non-zero status, log error, notify Discord channel. Next message spawns fresh.
+- **Concurrency**: Different projects run in parallel (one process per project at a time). A global concurrency limit (default: 4) prevents resource exhaustion when many projects are active simultaneously.
 
 #### 4. Claude CLI Wrapper (`claude-cli.ts`)
 
-- Spawns `claude` as a child process via `child_process.spawn`
-- Pipes message as input
-- Parses `stream-json` output for response text
-- Returns collected response to caller
-- Tracks session ID from output for future `--resume`
+- Spawns `claude` as a child process via `child_process.spawn` with `cwd` set to the project directory
+- Passes prompt as a positional argument (final arg)
+- Parses `stream-json` output for response text and session metadata
+- **Session ID extraction**: The `stream-json` output includes a `result` event at the end of each response containing `session_id`. The wrapper captures this for use with `--resume` on subsequent messages. The exact JSON shape should be verified against `claude --print --output-format stream-json` output during implementation.
+- Returns collected response text to caller
 
 #### 5. Config (`config.ts` + `config.json`)
 
@@ -89,19 +98,19 @@ Discord Server
     ]
   },
   "projects": {
-    "<CHANNEL_ID>": {
+    "RALLYHUB_CHANNEL_ID": {
       "name": "RallyHub",
       "directory": "/home/yamakei/Documents/RallyHub"
     },
-    "<CHANNEL_ID>": {
+    "MOCHI_CHANNEL_ID": {
       "name": "Mochi",
       "directory": "/home/yamakei/Documents/Mochi"
     },
-    "<CHANNEL_ID>": {
+    "TAKUMI_CHANNEL_ID": {
       "name": "Takumi",
       "directory": "/home/yamakei/Documents/Takumi"
     },
-    "<CHANNEL_ID>": {
+    "INTENTLAYER_CHANNEL_ID": {
       "name": "intentLayer",
       "directory": "/home/yamakei/Documents/intentLayer"
     }
@@ -117,9 +126,9 @@ Bot token is read from `DISCORD_BOT_TOKEN` environment variable (not stored in c
 2. Gateway receives message, reacts with 👀
 3. Router maps channel ID → RallyHub project config
 4. Session manager checks: active session for RallyHub?
-   - **No**: Spawn new `claude --print` process in `/home/yamakei/Documents/RallyHub`
-   - **Yes**: Use `claude --print --resume <session_id>`
-5. Message piped to Claude CLI subprocess
+   - **No**: Spawn `claude --print "<message>"` with `cwd` set to RallyHub directory
+   - **Yes**: Spawn `claude --print --resume <session_id> "<message>"` with same `cwd`
+5. Claude CLI process runs with the message as a positional argument
 6. Claude works on the task (reads files, runs commands, edits code, etc.)
 7. Response streamed back as JSON
 8. Gateway parses response text, sends to `#rallyhub` channel
@@ -133,7 +142,9 @@ Bot token is read from `DISCORD_BOT_TOKEN` environment variable (not stored in c
 | Session crash | Notify channel, remove stale session, next msg spawns fresh |
 | Long-running task | 👀 on receipt, deliver final result when done |
 | Concurrent messages (same project) | Queue, deliver after current response completes |
-| `--resume` failure | Fall back to fresh session |
+| Concurrent messages (different projects) | Run in parallel, up to global concurrency limit (default: 4) |
+| `--resume` failure | Fall back to fresh session AND replay the current message into it |
+| Attachments | Ignored in v1 (text messages only) |
 
 ### Project Structure
 
