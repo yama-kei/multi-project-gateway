@@ -56,13 +56,13 @@ Discord Server
 - Manages a pool of Claude Code CLI subprocesses, one per project
 - **Spawn**: On first message for a project, spawns Claude CLI using `child_process.spawn` with `{ cwd: project.directory }` to set the working directory (there is no `--project-dir` flag):
   ```
-  spawn('claude', ['--print', '--dangerously-skip-permissions', '--output-format', 'stream-json', '<prompt>'], {
+  spawn('claude', ['--print', '--dangerously-skip-permissions', '--output-format', 'json', '<prompt>'], {
     cwd: '/home/yamakei/Documents/RallyHub'
   })
   ```
 - **Resume**: For follow-up messages, uses `--resume <session_id>` with the prompt as a positional argument:
   ```
-  spawn('claude', ['--print', '--dangerously-skip-permissions', '--output-format', 'stream-json', '--resume', '<session_id>', '<prompt>'], {
+  spawn('claude', ['--print', '--dangerously-skip-permissions', '--output-format', 'json', '--resume', '<session_id>', '<prompt>'], {
     cwd: '/home/yamakei/Documents/RallyHub'
   })
   ```
@@ -77,8 +77,8 @@ Discord Server
 
 - Spawns `claude` as a child process via `child_process.spawn` with `cwd` set to the project directory
 - Passes prompt as a positional argument (final arg)
-- Parses `stream-json` output for response text and session metadata
-- **Session ID extraction**: The `stream-json` output includes a `result` event at the end of each response containing `session_id`. The wrapper captures this for use with `--resume` on subsequent messages. The exact JSON shape should be verified against `claude --print --output-format stream-json` output during implementation.
+- Parses JSON output for response text and session metadata
+- **Session ID extraction**: The `json` output is a single JSON object: `{"type":"result","subtype":"success","is_error":false,"result":"<text>","session_id":"<uuid>",...}`. The wrapper extracts `result` and `session_id`.
 - Returns collected response text to caller
 
 #### 5. Config (`config.ts` + `config.json`)
@@ -94,7 +94,7 @@ Discord Server
     "idleTimeoutMs": 1800000,
     "claudeArgs": [
       "--dangerously-skip-permissions",
-      "--output-format", "stream-json"
+      "--output-format", "json"
     ]
   },
   "projects": {
