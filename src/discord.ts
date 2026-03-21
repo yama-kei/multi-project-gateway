@@ -54,6 +54,8 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager)
   client.on(Events.MessageCreate, async (message: Message) => {
     if (message.author.bot) return;
 
+    if (!('send' in message.channel)) return;
+
     const parentId = message.channel.isThread() ? message.channel.parentId ?? undefined : undefined;
     const resolved = router.resolve(message.channelId, parentId);
     if (!resolved) return;
