@@ -183,6 +183,12 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
       }
     }
 
+    // Show typing indicator while Claude is processing
+    const typingInterval = setInterval(() => {
+      replyChannel.sendTyping().catch(() => {});
+    }, 7_000);
+    replyChannel.sendTyping().catch(() => {});
+
     try {
       const result = await sessionManager.send(
         resolved.channelId,
@@ -200,6 +206,8 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
       await replyChannel.send(
         `**Error** (${resolved.name}): ${errorMsg.slice(0, 1800)}`,
       );
+    } finally {
+      clearInterval(typingInterval);
     }
   });
 
