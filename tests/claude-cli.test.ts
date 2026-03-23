@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { parseClaudeJsonOutput, buildClaudeArgs } from '../src/claude-cli.js';
+import { parseClaudeJsonOutput, buildClaudeArgs, friendlyError } from '../src/claude-cli.js';
 
 describe('parseClaudeJsonOutput', () => {
   it('extracts result text and session_id from JSON output', () => {
@@ -56,5 +56,37 @@ describe('buildClaudeArgs', () => {
       '--resume', 'session-uuid-123',
       'Now add tests',
     ]);
+  });
+});
+
+describe('friendlyError', () => {
+  it('detects rate limit errors', () => {
+    expect(friendlyError('API Error: Rate limit reached')).toContain('usage limit reached');
+  });
+
+  it('detects rate_limit_error JSON type', () => {
+    expect(friendlyError('429 {"type":"error","error":{"type":"rate_limit_error"}}')).toContain('usage limit reached');
+  });
+
+  it('detects overloaded errors', () => {
+    expect(friendlyError('API Error (529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}})')).toContain('overloaded');
+  });
+
+  it('detects authentication errors', () => {
+    expect(friendlyError('Invalid API key')).toContain('authentication failed');
+  });
+
+  it('detects authentication_error JSON type', () => {
+    expect(friendlyError('{"type":"error","error":{"type":"authentication_error"}}')).toContain('authentication failed');
+  });
+
+  it('detects empty response errors', () => {
+    expect(friendlyError('No messages returned')).toContain('empty response');
+  });
+
+  it('falls back to truncated raw error for unknown patterns', () => {
+    const msg = friendlyError('something unexpected happened');
+    expect(msg).toContain('Claude error:');
+    expect(msg).toContain('something unexpected happened');
   });
 });

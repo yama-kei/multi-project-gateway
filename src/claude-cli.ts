@@ -29,6 +29,23 @@ export function buildClaudeArgs(
   return args;
 }
 
+export function friendlyError(stderr: string): string {
+  const combined = stderr.toLowerCase();
+  if (combined.includes('rate limit') || combined.includes('rate_limit_error')) {
+    return 'Claude usage limit reached — please wait a few minutes and try again.';
+  }
+  if (combined.includes('overloaded') || combined.includes('overloaded_error')) {
+    return 'Claude API is temporarily overloaded — please try again shortly.';
+  }
+  if (combined.includes('invalid api key') || combined.includes('authentication_error') || combined.includes('authentication failed')) {
+    return 'Claude authentication failed — check your API key or CLI login.';
+  }
+  if (combined.includes('no messages returned')) {
+    return 'Claude returned an empty response — try sending your message again.';
+  }
+  return `Claude error: ${stderr.slice(0, 500)}`;
+}
+
 export function runClaude(
   cwd: string,
   baseArgs: string[],
@@ -55,7 +72,7 @@ export function runClaude(
 
     proc.on('close', (code) => {
       if (code !== 0) {
-        reject(new Error(`claude exited with code ${code}: ${stderr}`));
+        reject(new Error(friendlyError(stderr)));
         return;
       }
       try {

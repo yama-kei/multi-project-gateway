@@ -103,4 +103,49 @@ describe('handleCommand', () => {
     expect(result).toContain('!sessions');
     expect(result).toContain('!kill');
   });
+
+  it('shows current thread session with !session (no args) in a thread', () => {
+    const sm = mockSessionManager([
+      { sessionId: 'thread-sid-abc', projectKey: 'thread-99', lastActivity: Date.now() - 3000, queueLength: 1 },
+    ]);
+    const result = handleCommand('!session', testConfig, sm, {
+      channelId: 'thread-99',
+      projectName: 'Alpha',
+      isThread: true,
+    });
+    expect(result).toContain('Alpha');
+    expect(result).toContain('(thread)');
+    expect(result).toContain('thread-sid-abc');
+    expect(result).toContain('Queue depth: 1');
+  });
+
+  it('shows no active session for !session (no args) in a thread with no session', () => {
+    const sm = mockSessionManager();
+    const result = handleCommand('!session', testConfig, sm, {
+      channelId: 'thread-99',
+      projectName: 'Alpha',
+      isThread: true,
+    });
+    expect(result).toContain('no active session in this thread');
+  });
+
+  it('shows current channel session with !session (no args) in a main channel', () => {
+    const sm = mockSessionManager([
+      { sessionId: 'ch-sid-xyz', projectKey: 'ch-1', lastActivity: Date.now(), queueLength: 0 },
+    ]);
+    const result = handleCommand('!session', testConfig, sm, {
+      channelId: 'ch-1',
+      projectName: 'Alpha',
+      isThread: false,
+    });
+    expect(result).toContain('Alpha');
+    expect(result).not.toContain('(thread)');
+    expect(result).toContain('ch-sid-xyz');
+  });
+
+  it('falls back to usage hint for !session (no args) without context', () => {
+    const sm = mockSessionManager();
+    const result = handleCommand('!session', testConfig, sm);
+    expect(result).toContain('!session <project name>');
+  });
 });

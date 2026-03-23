@@ -70,6 +70,7 @@ export function handleCommand(
   command: string,
   config: GatewayConfig,
   sessionManager: SessionManager,
+  context?: { channelId: string; projectName: string; isThread: boolean },
 ): string | null {
   const parts = command.trim().split(/\s+/);
   const cmd = parts[0]?.toLowerCase();
@@ -91,7 +92,22 @@ export function handleCommand(
 
   if (cmd === '!session') {
     const name = parts.slice(1).join(' ');
-    if (!name) return 'Usage: `!session <project name>`';
+
+    // No arguments: show session for the current thread (or project channel)
+    if (!name && context) {
+      const info = sessionManager.getSession(context.channelId);
+      if (!info) return `**${context.projectName}** — no active session in this ${context.isThread ? 'thread' : 'channel'}.`;
+      const idle = formatTimeSince(info.lastActivity);
+      const sid = info.sessionId || 'none';
+      return [
+        `**${context.projectName}**${context.isThread ? ' (thread)' : ''}`,
+        `Session ID: \`${sid}\``,
+        `Last active: ${idle}`,
+        `Queue depth: ${info.queueLength}`,
+      ].join('\n');
+    }
+
+    if (!name) return 'Usage: `!session <project name>` or run `!session` in a thread';
     const project = findProjectByName(config, name);
     if (!project) return `No project found matching "${name}".`;
     const info = sessionManager.getSession(project.channelId);
@@ -120,7 +136,7 @@ export function handleCommand(
     return [
       '**Gateway commands**',
       '`!sessions` — list all active sessions',
-      '`!session <name>` — inspect a specific project session',
+      '`!session` — show session for the current thread (or use `!session <name>`)',
       '`!kill <name>` — force-close a project session',
       '`!help` — show this message',
     ].join('\n');
@@ -148,7 +164,11 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
       const parentId = message.channel.isThread() ? message.channel.parentId ?? undefined : undefined;
       const resolved = router.resolve(message.channelId, parentId);
       if (resolved) {
-        const response = handleCommand(message.content, config, sessionManager);
+        const response = handleCommand(message.content, config, sessionManager, {
+          channelId: resolved.channelId,
+          projectName: resolved.name,
+          isThread: resolved.isThread,
+        });
         if (response) {
           await message.channel.send(response);
           return;
