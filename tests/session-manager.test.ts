@@ -12,6 +12,13 @@ vi.mock('../src/claude-cli.js', () => ({
   buildClaudeArgs: vi.fn(),
 }));
 
+vi.mock('../src/worktree.js', () => ({
+  createWorktree: vi.fn().mockReturnValue('/tmp/a/.worktrees/thread-1'),
+  removeWorktree: vi.fn(),
+  listWorktrees: vi.fn().mockReturnValue([]),
+  worktreePath: vi.fn((dir: string, key: string) => `${dir}/.worktrees/${key}`),
+}));
+
 const defaults = {
   idleTimeoutMs: 500,
   maxConcurrentSessions: 2,
@@ -44,6 +51,10 @@ describe('SessionManager', () => {
       sessionId: 'mock-session-id',
       isError: false,
     });
+    const { createWorktree, removeWorktree } = await import('../src/worktree.js');
+    vi.mocked(createWorktree).mockReset();
+    vi.mocked(createWorktree).mockReturnValue('/tmp/a/.worktrees/thread-1');
+    vi.mocked(removeWorktree).mockReset();
     manager = createSessionManager(defaults);
   });
 
@@ -238,6 +249,75 @@ describe('SessionManager', () => {
       const result = await m.send('proj-a', '/tmp/a', 'Back again');
       expect(result.text).toBe('Resumed');
       expect(mockRun).toHaveBeenLastCalledWith('/tmp/a', defaults.claudeArgs, 'Back again', 'sid-1');
+      m.shutdown();
+    });
+  });
+
+  describe('worktree sessions', () => {
+    it('creates a worktree when worktree option is true', async () => {
+      const { createWorktree } = await import('../src/worktree.js');
+      const { runClaude } = await import('../src/claude-cli.js');
+      const mockCreate = vi.mocked(createWorktree);
+      const mockRun = vi.mocked(runClaude);
+
+      mockCreate.mockReturnValue('/tmp/a/.worktrees/thread-1');
+
+      await manager.send('thread-1', '/tmp/a', 'Hello', { worktree: true });
+
+      expect(mockCreate).toHaveBeenCalledWith('/tmp/a', 'thread-1');
+      expect(mockRun).toHaveBeenCalledWith(
+        '/tmp/a/.worktrees/thread-1',
+        defaults.claudeArgs,
+        'Hello',
+        undefined,
+      );
+    });
+
+    it('reuses existing worktree for subsequent messages', async () => {
+      const { createWorktree } = await import('../src/worktree.js');
+      const mockCreate = vi.mocked(createWorktree);
+      mockCreate.mockReturnValue('/tmp/a/.worktrees/thread-1');
+
+      await manager.send('thread-1', '/tmp/a', 'First', { worktree: true });
+      await manager.send('thread-1', '/tmp/a', 'Second', { worktree: true });
+
+      // createWorktree called only once — session reuses cached worktree path
+      expect(mockCreate).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not create worktree when option is absent', async () => {
+      const { createWorktree } = await import('../src/worktree.js');
+      const { runClaude } = await import('../src/claude-cli.js');
+      const mockCreate = vi.mocked(createWorktree);
+      const mockRun = vi.mocked(runClaude);
+
+      await manager.send('project-a', '/tmp/a', 'Hello');
+
+      expect(mockCreate).not.toHaveBeenCalled();
+      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Hello', undefined);
+    });
+
+    it('removes worktree on clearSession', async () => {
+      const { createWorktree, removeWorktree } = await import('../src/worktree.js');
+      const mockCreate = vi.mocked(createWorktree);
+      const mockRemove = vi.mocked(removeWorktree);
+      mockCreate.mockReturnValue('/tmp/a/.worktrees/thread-1');
+
+      await manager.send('thread-1', '/tmp/a', 'Hello', { worktree: true });
+      manager.clearSession('thread-1');
+
+      expect(mockRemove).toHaveBeenCalledWith('/tmp/a', 'thread-1');
+    });
+
+    it('persists worktreePath to store', async () => {
+      const { createWorktree } = await import('../src/worktree.js');
+      vi.mocked(createWorktree).mockReturnValue('/tmp/a/.worktrees/thread-1');
+
+      const store = createMockStore();
+      const m = createSessionManager(defaults, store);
+      await m.send('thread-1', '/tmp/a', 'Hello', { worktree: true });
+
+      expect(store.saved!.get('thread-1')?.worktreePath).toBe('/tmp/a/.worktrees/thread-1');
       m.shutdown();
     });
   });

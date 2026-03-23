@@ -7,6 +7,8 @@ import { createSessionManager } from './session-manager.js';
 import { createFileSessionStore } from './session-store.js';
 import { createDiscordBot } from './discord.js';
 import { runInit } from './init.js';
+import { runHealthChecks } from './health.js';
+import { reconcileWorktrees } from './worktree.js';
 
 const args = process.argv.slice(2);
 const command = args[0] ?? 'start';
@@ -84,18 +86,31 @@ function start() {
     process.exit(1);
   }
 
-  // Validate project directories exist
-  for (const [channelId, project] of Object.entries(config.projects)) {
-    if (!existsSync(project.directory)) {
-      console.warn(`Warning: directory not found for ${project.name}: ${project.directory}`);
-    }
-  }
+  runHealthChecks(config);
 
   console.log(`Loaded ${projectCount} project(s) from config`);
 
   const router = createRouter(config);
   const sessionStore = createFileSessionStore(resolve(configDir, '.sessions.json'));
   const sessionManager = createSessionManager(config.defaults, sessionStore);
+
+  // Reconcile orphaned worktrees from crashed sessions
+  const persistedSessions = sessionStore.load();
+  const knownKeysByProject = new Map<string, Set<string>>();
+  for (const [key, entry] of persistedSessions) {
+    if (entry.projectDir) {
+      let keys = knownKeysByProject.get(entry.projectDir);
+      if (!keys) {
+        keys = new Set();
+        knownKeysByProject.set(entry.projectDir, keys);
+      }
+      keys.add(key);
+    }
+  }
+  for (const [projectDir, keys] of knownKeysByProject) {
+    reconcileWorktrees(projectDir, keys);
+  }
+
   const bot = createDiscordBot(router, sessionManager, config);
 
   function shutdown() {

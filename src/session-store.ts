@@ -6,6 +6,8 @@ export interface PersistedSession {
   projectKey: string;
   cwd: string;
   lastActivity: number;
+  worktreePath?: string;
+  projectDir?: string;
 }
 
 export interface SessionStore {
