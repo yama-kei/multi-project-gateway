@@ -138,6 +138,17 @@ describe('SessionManager', () => {
     expect(r3.text).toBe('C done');
   });
 
+  it('clears a specific session', async () => {
+    await manager.send('project-a', '/tmp/a', 'Hello');
+    expect(manager.getSession('project-a')).toBeDefined();
+    expect(manager.clearSession('project-a')).toBe(true);
+    expect(manager.getSession('project-a')).toBeUndefined();
+  });
+
+  it('returns false when clearing a non-existent session', () => {
+    expect(manager.clearSession('no-such-project')).toBe(false);
+  });
+
   it('lists active sessions', async () => {
     await manager.send('project-a', '/tmp/a', 'Hello');
     await manager.send('project-b', '/tmp/b', 'Hello');

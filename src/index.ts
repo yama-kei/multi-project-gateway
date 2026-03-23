@@ -29,7 +29,7 @@ console.log(`Loaded ${projectCount} project(s) from config`);
 const router = createRouter(config);
 const sessionStore = createFileSessionStore(resolve(process.cwd(), '.sessions.json'));
 const sessionManager = createSessionManager(config.defaults, sessionStore);
-const bot = createDiscordBot(router, sessionManager);
+const bot = createDiscordBot(router, sessionManager, config);
 
 // Graceful shutdown
 function shutdown() {

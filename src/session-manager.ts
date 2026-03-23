@@ -12,6 +12,7 @@ export interface SessionManager {
   send(projectKey: string, cwd: string, prompt: string): Promise<ClaudeResult>;
   getSession(projectKey: string): SessionInfo | undefined;
   listSessions(): SessionInfo[];
+  clearSession(projectKey: string): boolean;
   shutdown(): void;
 }
 
@@ -204,6 +205,15 @@ export function createSessionManager(defaults: {
         lastActivity: s.lastActivity,
         queueLength: s.queue.length,
       }));
+    },
+
+    clearSession(projectKey: string): boolean {
+      const session = sessions.get(projectKey);
+      if (!session) return false;
+      if (session.idleTimer) clearTimeout(session.idleTimer);
+      sessions.delete(projectKey);
+      persistSessions();
+      return true;
     },
 
     shutdown() {

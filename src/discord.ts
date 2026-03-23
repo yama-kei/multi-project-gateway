@@ -1,6 +1,7 @@
 import { Client, GatewayIntentBits, Events, type Message } from 'discord.js';
 import type { Router } from './router.js';
 import type { SessionManager } from './session-manager.js';
+import type { GatewayConfig } from './config.js';
 
 export function chunkMessage(text: string, limit: number): string[] {
   if (text.length <= limit) return [text];
@@ -42,7 +43,93 @@ export interface DiscordBot {
   stop(): void;
 }
 
-export function createDiscordBot(router: Router, sessionManager: SessionManager): DiscordBot {
+function resolveProjectName(config: GatewayConfig, channelId: string): string {
+  return config.projects[channelId]?.name ?? channelId;
+}
+
+function findProjectByName(config: GatewayConfig, name: string): { channelId: string; name: string } | null {
+  const lower = name.toLowerCase();
+  for (const [channelId, project] of Object.entries(config.projects)) {
+    if (project.name.toLowerCase() === lower) {
+      return { channelId, name: project.name };
+    }
+  }
+  return null;
+}
+
+function formatTimeSince(timestamp: number): string {
+  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m ago`;
+}
+
+export function handleCommand(
+  command: string,
+  config: GatewayConfig,
+  sessionManager: SessionManager,
+): string | null {
+  const parts = command.trim().split(/\s+/);
+  const cmd = parts[0]?.toLowerCase();
+
+  if (cmd === '!sessions') {
+    const allSessions = sessionManager.listSessions();
+    if (allSessions.length === 0) {
+      return 'No active sessions.';
+    }
+    const lines = allSessions.map((s) => {
+      const name = resolveProjectName(config, s.projectKey);
+      const idle = formatTimeSince(s.lastActivity);
+      const queue = s.queueLength > 0 ? ` | queue: ${s.queueLength}` : '';
+      const sid = s.sessionId ? ` | \`${s.sessionId.slice(0, 8)}…\`` : '';
+      return `- **${name}** — last active ${idle}${queue}${sid}`;
+    });
+    return `**Active sessions (${allSessions.length})**\n${lines.join('\n')}`;
+  }
+
+  if (cmd === '!session') {
+    const name = parts.slice(1).join(' ');
+    if (!name) return 'Usage: `!session <project name>`';
+    const project = findProjectByName(config, name);
+    if (!project) return `No project found matching "${name}".`;
+    const info = sessionManager.getSession(project.channelId);
+    if (!info) return `**${project.name}** — no active session.`;
+    const idle = formatTimeSince(info.lastActivity);
+    const sid = info.sessionId || 'none';
+    return [
+      `**${project.name}**`,
+      `Session ID: \`${sid}\``,
+      `Last active: ${idle}`,
+      `Queue depth: ${info.queueLength}`,
+    ].join('\n');
+  }
+
+  if (cmd === '!kill') {
+    const name = parts.slice(1).join(' ');
+    if (!name) return 'Usage: `!kill <project name>`';
+    const project = findProjectByName(config, name);
+    if (!project) return `No project found matching "${name}".`;
+    const cleared = sessionManager.clearSession(project.channelId);
+    if (cleared) return `Session for **${project.name}** cleared.`;
+    return `**${project.name}** — no active session to clear.`;
+  }
+
+  if (cmd === '!help') {
+    return [
+      '**Gateway commands**',
+      '`!sessions` — list all active sessions',
+      '`!session <name>` — inspect a specific project session',
+      '`!kill <name>` — force-close a project session',
+      '`!help` — show this message',
+    ].join('\n');
+  }
+
+  return null;
+}
+
+export function createDiscordBot(router: Router, sessionManager: SessionManager, config: GatewayConfig): DiscordBot {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -55,6 +142,19 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager)
     if (message.author.bot) return;
 
     if (!('send' in message.channel)) return;
+
+    // Handle gateway commands from any mapped channel
+    if (message.content.startsWith('!')) {
+      const parentId = message.channel.isThread() ? message.channel.parentId ?? undefined : undefined;
+      const resolved = router.resolve(message.channelId, parentId);
+      if (resolved) {
+        const response = handleCommand(message.content, config, sessionManager);
+        if (response) {
+          await message.channel.send(response);
+          return;
+        }
+      }
+    }
 
     const parentId = message.channel.isThread() ? message.channel.parentId ?? undefined : undefined;
     const resolved = router.resolve(message.channelId, parentId);

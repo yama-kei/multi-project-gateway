@@ -108,6 +108,17 @@ npm run build && npm start   # production
 | `npm test` | Run tests once |
 | `npm run test:watch` | Run tests in watch mode |
 
+## Commands
+
+The gateway responds to commands in any mapped Discord channel:
+
+| Command | Description |
+|---------|-------------|
+| `!sessions` | List all active sessions with idle time and queue depth |
+| `!session <name>` | Inspect a specific project's session (ID, idle time, queue) |
+| `!kill <name>` | Force-close a project's session |
+| `!help` | Show available commands |
+
 ## Limitations
 
 - **Text only** — attachments and embeds are not forwarded to Claude
