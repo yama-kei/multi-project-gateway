@@ -21,9 +21,13 @@ Inline checks in the `start()` function in `src/cli.ts`, after `loadConfig()` su
 
 ### Checks (in order)
 
-1. **Claude CLI reachable** — `execFileSync('claude', ['--version'])` wrapped in try/catch. Runs once (not per-project). On failure, log error with install guidance and `process.exit(1)`.
+Extract a `runHealthChecks(config: GatewayConfig): void` function within `cli.ts` for testability. Called from `start()`.
 
-2. **Project directories exist** — Iterate all `config.projects` entries, call `fs.existsSync(project.directory)` for each. Collect all missing directories and report them together, then `process.exit(1)`.
+1. **Claude CLI reachable** — `execFileSync('claude', ['--version'], { timeout: 5000, stdio: 'ignore' })` wrapped in try/catch. Runs once (not per-project). On failure, `console.error` with install guidance and `process.exit(1)`.
+
+2. **Project directories exist** — Iterate all `config.projects` entries, call `fs.statSync(project.directory).isDirectory()` (wrapped in try/catch) for each. This catches both missing paths and paths that are files, not directories. Collect all failures and report them together via `console.error`, then `process.exit(1)`.
+
+This replaces the existing `console.warn` directory loop (cli.ts lines ~87-92) — that non-fatal warning becomes a fatal error.
 
 ### Error output format
 
@@ -40,8 +44,8 @@ Health check failed:
 
 ### Testing
 
-Add tests in `tests/cli.test.ts` that mock `fs.existsSync` and `child_process.execFileSync` to verify:
-- Startup proceeds when all checks pass
-- Startup exits when `claude` CLI is not found
-- Startup exits when one or more project directories are missing
+Add tests in `tests/cli.test.ts` for `runHealthChecks()`. Mock `fs.statSync`, `child_process.execFileSync`, and `process.exit` to verify:
+- Function returns when all checks pass
+- Calls `process.exit(1)` when `claude` CLI is not found
+- Calls `process.exit(1)` when one or more project directories are missing or not directories
 - All missing directories are reported (not just the first one)
