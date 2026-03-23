@@ -15,7 +15,7 @@ import { runHealthChecks } from '../src/health.js';
 
 function makeConfig(projects: Record<string, { name: string; directory: string }>): GatewayConfig {
   return {
-    defaults: { idleTimeoutMs: 1800000, maxConcurrentSessions: 4, claudeArgs: [] },
+    defaults: { idleTimeoutMinutes: 1440, maxConcurrentSessions: 4, claudeArgs: [] },
     projects,
   };
 }

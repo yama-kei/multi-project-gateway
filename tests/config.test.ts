@@ -5,7 +5,7 @@ describe('loadConfig', () => {
   it('loads a valid config object', () => {
     const raw = {
       defaults: {
-        idleTimeoutMs: 1800000,
+        idleTimeoutMinutes: 1440,
         maxConcurrentSessions: 4,
         claudeArgs: ['--dangerously-skip-permissions', '--output-format', 'json'],
       },
@@ -17,25 +17,25 @@ describe('loadConfig', () => {
       },
     };
     const config = loadConfig(raw);
-    expect(config.defaults.idleTimeoutMs).toBe(1800000);
+    expect(config.defaults.idleTimeoutMinutes).toBe(1440);
     expect(config.defaults.maxConcurrentSessions).toBe(4);
     expect(config.projects['123456789'].name).toBe('TestProject');
     expect(config.projects['123456789'].directory).toBe('/tmp/test-project');
   });
 
   it('throws on missing projects field', () => {
-    expect(() => loadConfig({ defaults: { idleTimeoutMs: 1000, maxConcurrentSessions: 4, claudeArgs: [] } } as any)).toThrow();
+    expect(() => loadConfig({ defaults: { idleTimeoutMinutes: 1000, maxConcurrentSessions: 4, claudeArgs: [] } } as any)).toThrow();
   });
 
   it('throws on missing directory in a project', () => {
     const raw = {
-      defaults: { idleTimeoutMs: 1000, maxConcurrentSessions: 4, claudeArgs: [] },
+      defaults: { idleTimeoutMinutes: 1000, maxConcurrentSessions: 4, claudeArgs: [] },
       projects: { '123': { name: 'Test' } },
     };
     expect(() => loadConfig(raw as any)).toThrow();
   });
 
-  it('applies default idleTimeoutMs when not specified', () => {
+  it('applies default idleTimeoutMinutes when not specified', () => {
     const raw = {
       defaults: { maxConcurrentSessions: 4, claudeArgs: [] },
       projects: {
@@ -43,6 +43,6 @@ describe('loadConfig', () => {
       },
     };
     const config = loadConfig(raw as any);
-    expect(config.defaults.idleTimeoutMs).toBe(1800000);
+    expect(config.defaults.idleTimeoutMinutes).toBe(1440);
   });
 });

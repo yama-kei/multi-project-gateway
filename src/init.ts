@@ -102,7 +102,7 @@ export async function runInit() {
   // Build config
   const config = {
     defaults: {
-      idleTimeoutMs: 1800000,
+      idleTimeoutMinutes: 1440,
       maxConcurrentSessions: 4,
       claudeArgs: ['--permission-mode', 'acceptEdits', '--output-format', 'json'],
     },

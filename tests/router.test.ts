@@ -3,7 +3,7 @@ import { createRouter } from '../src/router.js';
 import type { GatewayConfig } from '../src/config.js';
 
 const config: GatewayConfig = {
-  defaults: { idleTimeoutMs: 1800000, maxConcurrentSessions: 4, claudeArgs: [] },
+  defaults: { idleTimeoutMinutes: 1440, maxConcurrentSessions: 4, claudeArgs: [] },
   projects: {
     '111': { name: 'ProjectA', directory: '/tmp/a' },
     '222': { name: 'ProjectB', directory: '/tmp/b' },

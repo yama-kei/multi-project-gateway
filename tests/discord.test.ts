@@ -4,7 +4,7 @@ import type { GatewayConfig } from '../src/config.js';
 import type { SessionManager } from '../src/session-manager.js';
 
 const testConfig: GatewayConfig = {
-  defaults: { idleTimeoutMs: 1800000, maxConcurrentSessions: 4, claudeArgs: [] },
+  defaults: { idleTimeoutMinutes: 1440, maxConcurrentSessions: 4, claudeArgs: [] },
   projects: {
     'ch-1': { name: 'Alpha', directory: '/tmp/alpha' },
     'ch-2': { name: 'Beta', directory: '/tmp/beta' },

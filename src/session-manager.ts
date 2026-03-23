@@ -34,7 +34,7 @@ interface InternalSession {
 }
 
 export function createSessionManager(defaults: {
-  idleTimeoutMs: number;
+  idleTimeoutMinutes: number;
   maxConcurrentSessions: number;
   claudeArgs: string[];
 }, store?: SessionStore): SessionManager {
@@ -88,7 +88,7 @@ export function createSessionManager(defaults: {
       // Remove from memory only; session ID and worktree stay on disk for later resume.
       // Worktrees persist on idle intentionally — cleaned up on !kill or startup reconciliation.
       sessions.delete(session.projectKey);
-    }, defaults.idleTimeoutMs);
+    }, defaults.idleTimeoutMinutes * 60_000);
   }
 
   async function processQueue(session: InternalSession): Promise<void> {

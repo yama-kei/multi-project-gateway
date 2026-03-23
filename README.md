@@ -87,7 +87,7 @@ Create `config.json`:
 ```json
 {
   "defaults": {
-    "idleTimeoutMs": 1800000,
+    "idleTimeoutMinutes": 1440,
     "maxConcurrentSessions": 4,
     "claudeArgs": [
       "--permission-mode", "acceptEdits",
@@ -142,12 +142,12 @@ Commands:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `defaults.idleTimeoutMs` | number | `1800000` (30 min) | Session idle timeout before cleanup |
+| `defaults.idleTimeoutMinutes` | number | `1440` (24 hours) | Session idle timeout before cleanup |
 | `defaults.maxConcurrentSessions` | number | `4` | Max concurrent Claude processes |
 | `defaults.claudeArgs` | string[] | `["--permission-mode", "acceptEdits", "--output-format", "json"]` | Args passed to every `claude` invocation |
 | `projects.<channelId>.name` | string | channel ID | Display name for the project |
 | `projects.<channelId>.directory` | string | **required** | Absolute path to the project directory |
-| `projects.<channelId>.idleTimeoutMs` | number | inherits default | Per-project idle timeout override |
+| `projects.<channelId>.idleTimeoutMinutes` | number | inherits default | Per-project idle timeout override |
 | `projects.<channelId>.claudeArgs` | string[] | inherits default | Per-project Claude args override |
 
 ### Environment variables

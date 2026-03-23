@@ -20,7 +20,7 @@ vi.mock('../src/worktree.js', () => ({
 }));
 
 const defaults = {
-  idleTimeoutMs: 500,
+  idleTimeoutMinutes: 500 / 60_000, // ~500ms for testing
   maxConcurrentSessions: 2,
   claudeArgs: ['--permission-mode', 'acceptEdits', '--output-format', 'json'],
 };

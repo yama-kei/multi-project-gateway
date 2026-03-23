@@ -1,12 +1,12 @@
 export interface ProjectConfig {
   name: string;
   directory: string;
-  idleTimeoutMs?: number;
+  idleTimeoutMinutes?: number;
   claudeArgs?: string[];
 }
 
 export interface GatewayDefaults {
-  idleTimeoutMs: number;
+  idleTimeoutMinutes: number;
   maxConcurrentSessions: number;
   claudeArgs: string[];
 }
@@ -41,7 +41,7 @@ export function loadConfig(raw: unknown): GatewayConfig {
     validated[channelId] = {
       name: typeof p.name === 'string' ? p.name : channelId,
       directory: p.directory,
-      ...(p.idleTimeoutMs !== undefined && { idleTimeoutMs: Number(p.idleTimeoutMs) }),
+      ...(p.idleTimeoutMinutes !== undefined && { idleTimeoutMinutes: Number(p.idleTimeoutMinutes) }),
       ...(Array.isArray(p.claudeArgs) && { claudeArgs: p.claudeArgs as string[] }),
     };
   }
@@ -50,7 +50,7 @@ export function loadConfig(raw: unknown): GatewayConfig {
 
   return {
     defaults: {
-      idleTimeoutMs: typeof defaults.idleTimeoutMs === 'number' ? defaults.idleTimeoutMs : 1800000,
+      idleTimeoutMinutes: typeof defaults.idleTimeoutMinutes === 'number' ? defaults.idleTimeoutMinutes : 1440,
       maxConcurrentSessions: typeof defaults.maxConcurrentSessions === 'number' ? defaults.maxConcurrentSessions : 4,
       claudeArgs: Array.isArray(defaults.claudeArgs) ? (defaults.claudeArgs as string[]) : ['--permission-mode', 'acceptEdits', '--output-format', 'json'],
     },
