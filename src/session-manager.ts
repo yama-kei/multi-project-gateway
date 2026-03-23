@@ -1,5 +1,6 @@
 import { runClaude, type ClaudeResult } from './claude-cli.js';
 import type { SessionStore, PersistedSession } from './session-store.js';
+import { createWorktree as gitCreateWorktree, removeWorktree as gitRemoveWorktree } from './worktree.js';
 
 export interface SessionInfo {
   sessionId: string;
@@ -9,7 +10,7 @@ export interface SessionInfo {
 }
 
 export interface SessionManager {
-  send(projectKey: string, cwd: string, prompt: string): Promise<ClaudeResult>;
+  send(projectKey: string, cwd: string, prompt: string, opts?: { worktree?: boolean }): Promise<ClaudeResult>;
   getSession(projectKey: string): SessionInfo | undefined;
   listSessions(): SessionInfo[];
   clearSession(projectKey: string): boolean;
@@ -20,6 +21,8 @@ interface InternalSession {
   sessionId: string | undefined;
   projectKey: string;
   cwd: string;
+  projectDir: string | undefined;
+  worktreePath: string | undefined;
   lastActivity: number;
   processing: boolean;
   queue: Array<{
@@ -52,6 +55,8 @@ export function createSessionManager(defaults: {
           projectKey: s.projectKey,
           cwd: s.cwd,
           lastActivity: s.lastActivity,
+          worktreePath: s.worktreePath,
+          projectDir: s.projectDir,
         });
       }
     }
@@ -128,23 +133,39 @@ export function createSessionManager(defaults: {
     session.processing = false;
   }
 
-  function getOrCreateSession(projectKey: string, cwd: string): InternalSession {
+  function getOrCreateSession(projectKey: string, cwd: string, useWorktree?: boolean): InternalSession {
     let session = sessions.get(projectKey);
     if (!session) {
       // Check store for a previously persisted session ID
       let restoredSessionId: string | undefined;
+      let restoredWorktreePath: string | undefined;
       if (store) {
         const persisted = store.load();
         const entry = persisted.get(projectKey);
         if (entry?.sessionId) {
           restoredSessionId = entry.sessionId;
+          restoredWorktreePath = entry.worktreePath;
         }
+      }
+
+      let effectiveCwd = cwd;
+      let worktreePath: string | undefined = restoredWorktreePath;
+      let projectDir: string | undefined;
+
+      if (useWorktree && !worktreePath) {
+        worktreePath = gitCreateWorktree(cwd, projectKey);
+      }
+      if (worktreePath) {
+        projectDir = cwd;
+        effectiveCwd = worktreePath;
       }
 
       session = {
         sessionId: restoredSessionId,
         projectKey,
-        cwd,
+        cwd: effectiveCwd,
+        projectDir,
+        worktreePath,
         lastActivity: Date.now(),
         processing: false,
         queue: [],
@@ -164,6 +185,8 @@ export function createSessionManager(defaults: {
         sessionId: entry.sessionId,
         projectKey: entry.projectKey,
         cwd: entry.cwd,
+        projectDir: entry.projectDir,
+        worktreePath: entry.worktreePath,
         lastActivity: entry.lastActivity,
         processing: false,
         queue: [],
@@ -179,8 +202,8 @@ export function createSessionManager(defaults: {
   }
 
   return {
-    send(projectKey: string, cwd: string, prompt: string): Promise<ClaudeResult> {
-      const session = getOrCreateSession(projectKey, cwd);
+    send(projectKey: string, cwd: string, prompt: string, opts?: { worktree?: boolean }): Promise<ClaudeResult> {
+      const session = getOrCreateSession(projectKey, cwd, opts?.worktree);
       return new Promise<ClaudeResult>((resolve, reject) => {
         session.queue.push({ prompt, resolve, reject });
         processQueue(session);
@@ -211,6 +234,9 @@ export function createSessionManager(defaults: {
       const session = sessions.get(projectKey);
       if (!session) return false;
       if (session.idleTimer) clearTimeout(session.idleTimer);
+      if (session.worktreePath && session.projectDir) {
+        gitRemoveWorktree(session.projectDir, session.projectKey);
+      }
       sessions.delete(projectKey);
       persistSessions();
       return true;
