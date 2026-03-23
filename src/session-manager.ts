@@ -85,6 +85,8 @@ export function createSessionManager(defaults: {
 
   function resetIdleTimer(session: InternalSession) {
     if (session.idleTimer) clearTimeout(session.idleTimer);
+    // Don't start idle timer while session has queued work waiting.
+    if (session.queue.length > 0) return;
     session.idleTimer = setTimeout(() => {
       // Remove from memory only; session ID and worktree stay on disk for later resume.
       // Worktrees persist on idle intentionally — cleaned up on !kill or startup reconciliation.
@@ -106,11 +108,20 @@ export function createSessionManager(defaults: {
           item.prompt,
           session.sessionId,
         );
+        const sessionChanged = !!(
+          session.sessionId &&
+          result.sessionId &&
+          result.sessionId !== session.sessionId
+        );
         session.sessionId = result.sessionId || session.sessionId;
         session.lastActivity = Date.now();
         resetIdleTimer(session);
         persistSessions();
-        item.resolve(result);
+        if (sessionChanged) {
+          item.resolve({ ...result, sessionChanged: true });
+        } else {
+          item.resolve(result);
+        }
       } catch (err) {
         if (session.sessionId) {
           session.sessionId = undefined;

@@ -150,6 +150,48 @@ describe('SessionManager', () => {
     expect(r3.text).toBe('C done');
   });
 
+  it('detects silent session ID change', async () => {
+    const { runClaude } = await import('../src/claude-cli.js');
+    const mockRun = vi.mocked(runClaude);
+
+    mockRun.mockResolvedValueOnce({ text: 'First', sessionId: 'sid-1', isError: false });
+    await manager.send('project-a', '/tmp/a', 'Hello');
+    expect(manager.getSession('project-a')?.sessionId).toBe('sid-1');
+
+    // Claude returns a different session ID without erroring
+    mockRun.mockResolvedValueOnce({ text: 'Different context', sessionId: 'sid-2', isError: false });
+    const result = await manager.send('project-a', '/tmp/a', 'Continue');
+    expect(result.sessionChanged).toBe(true);
+    expect(result.text).toBe('Different context');
+    expect(manager.getSession('project-a')?.sessionId).toBe('sid-2');
+  });
+
+  it('does not flag sessionChanged when session ID stays the same', async () => {
+    const { runClaude } = await import('../src/claude-cli.js');
+    const mockRun = vi.mocked(runClaude);
+
+    mockRun.mockResolvedValueOnce({ text: 'First', sessionId: 'sid-1', isError: false });
+    await manager.send('project-a', '/tmp/a', 'Hello');
+
+    mockRun.mockResolvedValueOnce({ text: 'Second', sessionId: 'sid-1', isError: false });
+    const result = await manager.send('project-a', '/tmp/a', 'Continue');
+    expect(result.sessionChanged).toBeUndefined();
+  });
+
+  it('restarts a session (clears session ID, keeps session)', async () => {
+    await manager.send('project-a', '/tmp/a', 'Hello');
+    expect(manager.getSession('project-a')?.sessionId).toBe('mock-session-id');
+
+    expect(manager.restartSession('project-a')).toBe(true);
+    const session = manager.getSession('project-a');
+    expect(session).toBeDefined();
+    expect(session!.sessionId).toBe('');
+  });
+
+  it('returns false when restarting a non-existent session', () => {
+    expect(manager.restartSession('no-such-project')).toBe(false);
+  });
+
   it('clears a specific session', async () => {
     await manager.send('project-a', '/tmp/a', 'Hello');
     expect(manager.getSession('project-a')).toBeDefined();

@@ -230,6 +230,8 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
 
       if (result.sessionReset) {
         await replyChannel.send('⚠️ Previous session expired — starting fresh.');
+      } else if (result.sessionChanged) {
+        await replyChannel.send('⚠️ Claude started a new session — previous conversation context may be lost.');
       }
 
       const chunks = chunkMessage(result.text, 2000);
