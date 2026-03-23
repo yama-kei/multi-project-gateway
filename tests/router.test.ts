@@ -15,7 +15,7 @@ describe('createRouter', () => {
 
   it('returns project config for a mapped channel', () => {
     const result = router.resolve('111');
-    expect(result).toEqual({ channelId: '111', name: 'ProjectA', directory: '/tmp/a' });
+    expect(result).toEqual({ channelId: '111', name: 'ProjectA', directory: '/tmp/a', isThread: false });
   });
 
   it('returns null for an unmapped channel', () => {
@@ -24,7 +24,7 @@ describe('createRouter', () => {
 
   it('resolves a thread to its own session using parent project config', () => {
     const result = router.resolve('thread-123', '111');
-    expect(result).toEqual({ channelId: 'thread-123', name: 'ProjectA', directory: '/tmp/a' });
+    expect(result).toEqual({ channelId: 'thread-123', name: 'ProjectA', directory: '/tmp/a', isThread: true });
   });
 
   it('returns null when thread parent is also unmapped', () => {

@@ -4,6 +4,7 @@ export interface ResolvedProject {
   channelId: string;
   name: string;
   directory: string;
+  isThread: boolean;
 }
 
 export interface Router {
@@ -15,13 +16,13 @@ export function createRouter(config: GatewayConfig): Router {
     resolve(channelId: string, parentChannelId?: string): ResolvedProject | null {
       const project = config.projects[channelId];
       if (project) {
-        return { channelId, name: project.name, directory: project.directory };
+        return { channelId, name: project.name, directory: project.directory, isThread: false };
       }
 
       if (parentChannelId) {
         const parentProject = config.projects[parentChannelId];
         if (parentProject) {
-          return { channelId, name: parentProject.name, directory: parentProject.directory };
+          return { channelId, name: parentProject.name, directory: parentProject.directory, isThread: true };
         }
       }
 
