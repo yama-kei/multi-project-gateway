@@ -160,10 +160,11 @@ Commands:
 Each Claude session started by the gateway can be resumed interactively. Use `!session <name>` in Discord to get the session ID, then:
 
 ```bash
+cd /path/to/project          # must match the project directory in config.json
 claude --resume <session-id>
 ```
 
-This opens a full interactive Claude session with the conversation history from Discord.
+**Important:** You must run `claude --resume` from the same directory the session was started in (i.e., the project's `directory` in `config.json`). Claude will not find the session if you run it from a different working directory.
 
 ## Discord commands
 
