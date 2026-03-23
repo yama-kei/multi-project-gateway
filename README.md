@@ -13,9 +13,10 @@ Discord reply    <--  Chunker  <----------------------  JSON response  <------'
 
 1. User posts a message in a mapped Discord channel
 2. Router resolves the channel to a project config
-3. Session manager spawns `claude --print` in the project directory (or resumes an existing session)
-4. Response is chunked to fit Discord's 2000-char limit and sent back
-5. Sessions persist to disk and resume across gateway restarts
+3. If the message is in a main channel, the bot creates a thread for the response; if already in a thread, replies there directly
+4. Session manager spawns `claude --print` in the project directory (or resumes an existing session)
+5. Response is chunked to fit Discord's 2000-char limit and sent back in the thread
+6. Sessions persist to disk and resume across gateway restarts
 
 ## Security model
 
@@ -166,6 +167,19 @@ claude --resume <session-id>
 
 **Important:** You must run `claude --resume` from the same directory the session was started in (i.e., the project's `directory` in `config.json`). Claude will not find the session if you run it from a different working directory.
 
+## Threading and per-thread sessions
+
+When a user posts a message in a mapped channel, the bot automatically creates a Discord thread and replies there instead of cluttering the main channel. Follow-up messages within the thread continue the same conversation.
+
+Each thread gets its **own Claude session**, isolated from the main channel and other threads. This means:
+
+- Multiple users can work in the same project channel without their conversations interleaving
+- Each thread maintains its own context and history
+- The thread inherits the project config (directory, Claude args) from the parent channel
+- Threads auto-archive after 60 minutes of inactivity
+
+If thread creation fails (e.g., due to permissions), the bot falls back to replying in the main channel.
+
 ## Discord commands
 
 The gateway responds to commands in any mapped Discord channel:
@@ -184,8 +198,8 @@ The gateway responds to commands in any mapped Discord channel:
 | `src/cli.ts` | CLI entry point — `mpg start`, `mpg init`, `mpg status` |
 | `src/init.ts` | Interactive setup wizard |
 | `src/config.ts` | Validates and merges `config.json` with defaults |
-| `src/router.ts` | Maps channel IDs to project configs (supports threads via parent lookup) |
-| `src/session-manager.ts` | One session per project, queues concurrent messages, manages idle timeouts |
+| `src/router.ts` | Maps channel IDs to project configs; threads resolve to their own session using the parent channel's project config |
+| `src/session-manager.ts` | One session per channel/thread, queues concurrent messages, manages idle timeouts |
 | `src/session-store.ts` | Persists session IDs to `.sessions.json` for resume across restarts |
 | `src/claude-cli.ts` | Spawns `claude --print` subprocess, parses JSON output |
 | `src/discord.ts` | Discord.js client, message routing, response chunking |
@@ -204,7 +218,7 @@ The gateway responds to commands in any mapped Discord channel:
 
 - **Text only** — attachments and embeds are not forwarded to Claude
 - **One message at a time per project** — concurrent messages to the same project are queued
-- **Threads share parent session** — no per-thread isolation
+- **Per-thread sessions** — each thread gets its own Claude session scoped to the parent channel's project; threads auto-archive after 60 minutes of inactivity
 - **Local only** — the gateway runs on the same machine as the project directories
 - **No Discord access control** — any user in a mapped channel can send prompts; restrict channel access in Discord server settings
 

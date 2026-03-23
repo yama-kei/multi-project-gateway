@@ -22,9 +22,9 @@ describe('createRouter', () => {
     expect(router.resolve('999')).toBeNull();
   });
 
-  it('resolves a thread to its parent channel', () => {
+  it('resolves a thread to its own session using parent project config', () => {
     const result = router.resolve('thread-123', '111');
-    expect(result).toEqual({ channelId: '111', name: 'ProjectA', directory: '/tmp/a' });
+    expect(result).toEqual({ channelId: 'thread-123', name: 'ProjectA', directory: '/tmp/a' });
   });
 
   it('returns null when thread parent is also unmapped', () => {

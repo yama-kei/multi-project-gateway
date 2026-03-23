@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, Events, type Message } from 'discord.js';
+import { Client, GatewayIntentBits, Events, ChannelType, type Message, type TextChannel, type ThreadChannel } from 'discord.js';
 import type { Router } from './router.js';
 import type { SessionManager } from './session-manager.js';
 import type { GatewayConfig } from './config.js';
@@ -166,6 +166,23 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
       // Reaction may fail if permissions are missing — non-critical
     }
 
+    // If the message is in a main channel, create a thread for the response.
+    // If already in a thread, reply there directly.
+    let replyChannel: TextChannel | ThreadChannel;
+    if (message.channel.isThread()) {
+      replyChannel = message.channel;
+    } else {
+      try {
+        replyChannel = await message.startThread({
+          name: message.content.slice(0, 100) || 'Claude response',
+          autoArchiveDuration: 60,
+        });
+      } catch {
+        // Thread creation may fail (permissions, channel type) — fall back to channel
+        replyChannel = message.channel as TextChannel;
+      }
+    }
+
     try {
       const result = await sessionManager.send(
         resolved.channelId,
@@ -175,11 +192,11 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
 
       const chunks = chunkMessage(result.text, 2000);
       for (const chunk of chunks) {
-        await message.channel.send(chunk);
+        await replyChannel.send(chunk);
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      await message.channel.send(
+      await replyChannel.send(
         `**Error** (${resolved.name}): ${errorMsg.slice(0, 1800)}`,
       );
     }

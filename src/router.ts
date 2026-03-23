@@ -21,7 +21,7 @@ export function createRouter(config: GatewayConfig): Router {
       if (parentChannelId) {
         const parentProject = config.projects[parentChannelId];
         if (parentProject) {
-          return { channelId: parentChannelId, name: parentProject.name, directory: parentProject.directory };
+          return { channelId, name: parentProject.name, directory: parentProject.directory };
         }
       }
 
