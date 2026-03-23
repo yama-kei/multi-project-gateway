@@ -188,6 +188,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
         resolved.channelId,
         resolved.directory,
         message.content,
+        resolved.isThread ? { worktree: true } : undefined,
       );
 
       const chunks = chunkMessage(result.text, 2000);
