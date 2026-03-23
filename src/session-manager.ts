@@ -37,12 +37,42 @@ interface InternalSession {
 export function createSessionManager(defaults: {
   idleTimeoutMs: number;
   maxConcurrentSessions: number;
+  sessionTtlMs?: number;
+  maxPersistedSessions?: number;
   claudeArgs: string[];
 }, store?: SessionStore): SessionManager {
   const sessions = new Map<string, InternalSession>();
+  const sessionTtlMs = defaults.sessionTtlMs ?? 7 * 24 * 60 * 60 * 1000;
+  const maxPersistedSessions = defaults.maxPersistedSessions ?? 50;
 
   let activeProcesses = 0;
   const waiters: Array<() => void> = [];
+
+  function pruneSessions(persisted: Map<string, PersistedSession>): number {
+    const now = Date.now();
+    let pruned = 0;
+
+    // Remove sessions older than TTL
+    for (const [key, entry] of persisted) {
+      if (now - entry.lastActivity > sessionTtlMs) {
+        persisted.delete(key);
+        pruned++;
+      }
+    }
+
+    // Enforce cap: evict oldest if over limit
+    if (persisted.size > maxPersistedSessions) {
+      const sorted = Array.from(persisted.entries())
+        .sort((a, b) => a[1].lastActivity - b[1].lastActivity);
+      const toRemove = sorted.slice(0, persisted.size - maxPersistedSessions);
+      for (const [key] of toRemove) {
+        persisted.delete(key);
+        pruned++;
+      }
+    }
+
+    return pruned;
+  }
 
   function persistSessions(): void {
     if (!store) return;
@@ -61,6 +91,7 @@ export function createSessionManager(defaults: {
         });
       }
     }
+    pruneSessions(persisted);
     store.save(persisted);
   }
 
@@ -190,9 +221,14 @@ export function createSessionManager(defaults: {
     return session;
   }
 
-  // Restore persisted sessions into memory at startup
+  // Restore persisted sessions into memory at startup, pruning stale entries
   if (store) {
     const persisted = store.load();
+    const pruned = pruneSessions(persisted);
+    if (pruned > 0) {
+      console.log(`Pruned ${pruned} expired session(s)`);
+      store.save(persisted);
+    }
     for (const [key, entry] of persisted) {
       sessions.set(key, {
         sessionId: entry.sessionId,

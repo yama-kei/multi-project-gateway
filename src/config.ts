@@ -8,6 +8,8 @@ export interface ProjectConfig {
 export interface GatewayDefaults {
   idleTimeoutMs: number;
   maxConcurrentSessions: number;
+  sessionTtlMs: number;
+  maxPersistedSessions: number;
   claudeArgs: string[];
 }
 
@@ -52,6 +54,8 @@ export function loadConfig(raw: unknown): GatewayConfig {
     defaults: {
       idleTimeoutMs: typeof defaults.idleTimeoutMs === 'number' ? defaults.idleTimeoutMs : 1800000,
       maxConcurrentSessions: typeof defaults.maxConcurrentSessions === 'number' ? defaults.maxConcurrentSessions : 4,
+      sessionTtlMs: typeof defaults.sessionTtlMs === 'number' ? defaults.sessionTtlMs : 7 * 24 * 60 * 60 * 1000,
+      maxPersistedSessions: typeof defaults.maxPersistedSessions === 'number' ? defaults.maxPersistedSessions : 50,
       claudeArgs: Array.isArray(defaults.claudeArgs) ? (defaults.claudeArgs as string[]) : ['--permission-mode', 'acceptEdits', '--output-format', 'json'],
     },
     projects: validated,

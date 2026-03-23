@@ -215,7 +215,7 @@ describe('SessionManager', () => {
   describe('session persistence', () => {
     it('restores sessions from store on creation', () => {
       const store = createMockStore([
-        { sessionId: 'restored-sid', projectKey: 'proj-x', cwd: '/tmp/x', lastActivity: 1000 },
+        { sessionId: 'restored-sid', projectKey: 'proj-x', cwd: '/tmp/x', lastActivity: Date.now() - 1000 },
       ]);
       const m = createSessionManager(defaults, store);
       const session = m.getSession('proj-x');
@@ -247,7 +247,7 @@ describe('SessionManager', () => {
       const mockRun = vi.mocked(runClaude);
 
       const store = createMockStore([
-        { sessionId: 'old-sid', projectKey: 'proj-a', cwd: '/tmp/a', lastActivity: 1000 },
+        { sessionId: 'old-sid', projectKey: 'proj-a', cwd: '/tmp/a', lastActivity: Date.now() - 1000 },
       ]);
       const m = createSessionManager(defaults, store);
 
@@ -361,6 +361,53 @@ describe('SessionManager', () => {
       await m.send('thread-1', '/tmp/a', 'Hello', { worktree: true });
 
       expect(store.saved!.get('thread-1')?.worktreePath).toBe('/tmp/a/.worktrees/thread-1');
+      m.shutdown();
+    });
+  });
+
+  describe('session pruning', () => {
+    it('prunes sessions older than TTL on startup', () => {
+      const now = Date.now();
+      const store = createMockStore([
+        { sessionId: 'fresh', projectKey: 'fresh', cwd: '/tmp/a', lastActivity: now - 1000 },
+        { sessionId: 'stale', projectKey: 'stale', cwd: '/tmp/b', lastActivity: now - 8 * 24 * 60 * 60 * 1000 },
+      ]);
+      const m = createSessionManager({ ...defaults, sessionTtlMs: 7 * 24 * 60 * 60 * 1000 }, store);
+      expect(m.getSession('fresh')).toBeDefined();
+      expect(m.getSession('stale')).toBeUndefined();
+      expect(store.saved!.has('stale')).toBe(false);
+      m.shutdown();
+    });
+
+    it('enforces max persisted sessions cap on startup', () => {
+      const now = Date.now();
+      const entries = Array.from({ length: 5 }, (_, i) => ({
+        sessionId: `sid-${i}`,
+        projectKey: `proj-${i}`,
+        cwd: `/tmp/${i}`,
+        lastActivity: now - (5 - i) * 1000, // proj-0 oldest, proj-4 newest
+      }));
+      const store = createMockStore(entries);
+      const m = createSessionManager({ ...defaults, maxPersistedSessions: 3 }, store);
+      // Should keep the 3 newest: proj-2, proj-3, proj-4
+      expect(m.getSession('proj-0')).toBeUndefined();
+      expect(m.getSession('proj-1')).toBeUndefined();
+      expect(m.getSession('proj-2')).toBeDefined();
+      expect(m.getSession('proj-3')).toBeDefined();
+      expect(m.getSession('proj-4')).toBeDefined();
+      m.shutdown();
+    });
+
+    it('prunes during persistSessions', async () => {
+      const now = Date.now();
+      const store = createMockStore([
+        { sessionId: 'old', projectKey: 'old-proj', cwd: '/tmp/old', lastActivity: now - 8 * 24 * 60 * 60 * 1000 },
+      ]);
+      const m = createSessionManager({ ...defaults, sessionTtlMs: 7 * 24 * 60 * 60 * 1000 }, store);
+      // The stale entry was pruned on startup; now send a message to trigger persistSessions
+      await m.send('new-proj', '/tmp/new', 'Hello');
+      expect(store.saved!.has('old-proj')).toBe(false);
+      expect(store.saved!.has('new-proj')).toBe(true);
       m.shutdown();
     });
   });
