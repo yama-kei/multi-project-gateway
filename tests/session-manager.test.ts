@@ -15,7 +15,7 @@ vi.mock('../src/claude-cli.js', () => ({
 const defaults = {
   idleTimeoutMs: 500,
   maxConcurrentSessions: 2,
-  claudeArgs: ['--dangerously-skip-permissions', '--output-format', 'json'],
+  claudeArgs: ['--permission-mode', 'acceptEdits', '--output-format', 'json'],
 };
 
 function createMockStore(initial: PersistedSession[] = []): SessionStore & { saved: Map<string, PersistedSession> | null } {

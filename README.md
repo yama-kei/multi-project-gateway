@@ -17,17 +17,19 @@ Discord reply    <--  Chunker  <----------------------  JSON response  <------'
 4. Response is chunked to fit Discord's 2000-char limit and sent back
 5. Sessions persist to disk and resume across gateway restarts
 
-## Security warning
+## Security model
 
-**The default configuration uses `--dangerously-skip-permissions`, which gives Claude full access to the host machine with the permissions of the user running the gateway.** Anyone who can post in a mapped Discord channel can instruct Claude to read, write, or execute anything the host user can.
+By default, each Claude session is restricted to its project directory using `--permission-mode acceptEdits`. This means:
 
-**Before running in a shared Discord server:**
-- Replace `--dangerously-skip-permissions` with `--permission-mode acceptEdits` in your `claudeArgs`
-- Use `--allowed-tools` to restrict which tools Claude can use
+- Claude can **read and edit files** within the project directory
+- Claude **cannot access files** outside the project directory
+- Claude **cannot run arbitrary shell commands** without approval (which is auto-denied in `--print` mode)
+
+**Important considerations:**
+- Anyone who can post in a mapped Discord channel can instruct Claude to read and modify files in that project's directory
 - Only map channels that trusted users have access to
-- Consider running the gateway under a restricted OS user account
-
-See [#9](https://github.com/yama-kei/multi-project-gateway/issues/9) for the full security hardening plan.
+- For stricter control, use `--allowed-tools` in `claudeArgs` to whitelist specific tools
+- For maximum access (e.g., in a sandboxed environment), you can set `claudeArgs` to use `--dangerously-skip-permissions`, but this gives Claude full OS-level access
 
 ## Prerequisites
 
@@ -87,7 +89,7 @@ Create `config.json`:
     "idleTimeoutMs": 1800000,
     "maxConcurrentSessions": 4,
     "claudeArgs": [
-      "--dangerously-skip-permissions",
+      "--permission-mode", "acceptEdits",
       "--output-format", "json"
     ]
   },
@@ -141,7 +143,7 @@ Commands:
 |-------|------|---------|-------------|
 | `defaults.idleTimeoutMs` | number | `1800000` (30 min) | Session idle timeout before cleanup |
 | `defaults.maxConcurrentSessions` | number | `4` | Max concurrent Claude processes |
-| `defaults.claudeArgs` | string[] | `["--dangerously-skip-permissions", "--output-format", "json"]` | Args passed to every `claude` invocation |
+| `defaults.claudeArgs` | string[] | `["--permission-mode", "acceptEdits", "--output-format", "json"]` | Args passed to every `claude` invocation |
 | `projects.<channelId>.name` | string | channel ID | Display name for the project |
 | `projects.<channelId>.directory` | string | **required** | Absolute path to the project directory |
 | `projects.<channelId>.idleTimeoutMs` | number | inherits default | Per-project idle timeout override |
@@ -203,7 +205,7 @@ The gateway responds to commands in any mapped Discord channel:
 - **One message at a time per project** — concurrent messages to the same project are queued
 - **Threads share parent session** — no per-thread isolation
 - **Local only** — the gateway runs on the same machine as the project directories
-- **No access control** — any user in a mapped channel can send prompts (see [#9](https://github.com/yama-kei/multi-project-gateway/issues/9))
+- **No Discord access control** — any user in a mapped channel can send prompts; restrict channel access in Discord server settings
 
 ## License
 

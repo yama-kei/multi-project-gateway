@@ -104,7 +104,7 @@ export async function runInit() {
     defaults: {
       idleTimeoutMs: 1800000,
       maxConcurrentSessions: 4,
-      claudeArgs: ['--dangerously-skip-permissions', '--output-format', 'json'],
+      claudeArgs: ['--permission-mode', 'acceptEdits', '--output-format', 'json'],
     },
     projects: Object.fromEntries(
       projects.map((p) => [p.channelId, { name: p.name, directory: p.directory }]),
