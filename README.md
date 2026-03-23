@@ -5,10 +5,10 @@ A Discord bot that routes channel messages to per-project [Claude Code](https://
 ## How it works
 
 ```
-Discord channel  ──▶  Router  ──▶  Session Manager  ──▶  claude --print
-  (per project)        (channel → project)   (queue, resume, persist)     (in project dir)
-                                                                              │
-Discord reply    ◀──  Chunker  ◀──────────────────────  JSON response  ◀──────┘
+Discord channel  -->  Router  -->  Session Manager  -->  claude --print
+  (per project)        (channel -> project)   (queue, resume, persist)     (in project dir)
+                                                                              |
+Discord reply    <--  Chunker  <----------------------  JSON response  <------'
 ```
 
 1. User posts a message in a mapped Discord channel
@@ -17,13 +17,55 @@ Discord reply    ◀──  Chunker  ◀─────────────�
 4. Response is chunked to fit Discord's 2000-char limit and sent back
 5. Sessions persist to disk and resume across gateway restarts
 
+## Security warning
+
+**The default configuration uses `--dangerously-skip-permissions`, which gives Claude full access to the host machine with the permissions of the user running the gateway.** Anyone who can post in a mapped Discord channel can instruct Claude to read, write, or execute anything the host user can.
+
+**Before running in a shared Discord server:**
+- Replace `--dangerously-skip-permissions` with `--permission-mode acceptEdits` in your `claudeArgs`
+- Use `--allowed-tools` to restrict which tools Claude can use
+- Only map channels that trusted users have access to
+- Consider running the gateway under a restricted OS user account
+
+See [#9](https://github.com/yama-kei/multi-project-gateway/issues/9) for the full security hardening plan.
+
 ## Prerequisites
 
 - **Node.js** 20+
 - **Claude Code CLI** installed and authenticated (`claude` on PATH)
-- **Discord bot** token ([create one here](https://discord.com/developers/applications))
+- **Discord bot** token
 
-## Quick start
+## Setup guide
+
+### 1. Create a Discord bot
+
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications)
+2. Click **New Application**, give it a name
+3. Go to **Bot** in the sidebar
+4. Click **Reset Token** and copy the token (you'll need it in step 3)
+5. Enable **Message Content Intent** under Privileged Gateway Intents
+6. Go to **OAuth2 > URL Generator**, select the `bot` scope
+7. Under Bot Permissions, select: **Send Messages**, **Read Message History**, **Add Reactions**
+8. Copy the generated URL and open it in your browser to invite the bot to your server
+
+### 2. Create Discord channels for your projects
+
+Create a text channel for each project you want to manage (e.g., `#my-app`, `#my-api`). You'll need the channel IDs — enable Developer Mode in Discord settings (App Settings > Advanced > Developer Mode), then right-click a channel and select **Copy Channel ID**.
+
+### 3. Install and configure the gateway
+
+```bash
+npm install -g multi-project-gateway
+mpg init
+```
+
+The init wizard will:
+- Check that `claude` CLI is available
+- Ask for your Discord bot token
+- Walk you through adding projects (name, directory path, channel ID)
+- Generate `config.json` and `.env`
+
+Or set up manually by cloning:
 
 ```bash
 git clone https://github.com/yama-kei/multi-project-gateway.git
@@ -31,13 +73,13 @@ cd multi-project-gateway
 npm install
 ```
 
-Create a `.env` file:
+Create `.env`:
 
 ```
 DISCORD_BOT_TOKEN=your-bot-token-here
 ```
 
-Create or edit `config.json`:
+Create `config.json`:
 
 ```json
 {
@@ -58,12 +100,37 @@ Create or edit `config.json`:
 }
 ```
 
-Start the gateway:
+### 4. Start the gateway
 
 ```bash
-npm run dev       # development (no build step)
+mpg start             # if installed globally
+# or
+npm run dev           # development (no build step)
 # or
 npm run build && npm start   # production
+```
+
+You should see:
+
+```
+Loaded N project(s) from config
+Gateway connected as YourBot#1234
+```
+
+### 5. Use it
+
+Post a message in any mapped Discord channel. The bot reacts with an eye emoji, forwards your message to Claude Code running in the project directory, and sends back the response.
+
+## CLI
+
+```
+mpg <command>
+
+Commands:
+  start     Start the gateway (default)
+  init      Interactive setup wizard
+  status    Show session status from disk
+  help      Show help
 ```
 
 ## Configuration
@@ -86,11 +153,33 @@ npm run build && npm start   # production
 |----------|----------|-------------|
 | `DISCORD_BOT_TOKEN` | Yes | Discord bot token |
 
+### Resuming sessions from terminal
+
+Each Claude session started by the gateway can be resumed interactively. Use `!session <name>` in Discord to get the session ID, then:
+
+```bash
+claude --resume <session-id>
+```
+
+This opens a full interactive Claude session with the conversation history from Discord.
+
+## Discord commands
+
+The gateway responds to commands in any mapped Discord channel:
+
+| Command | Description |
+|---------|-------------|
+| `!sessions` | List all active sessions with idle time and queue depth |
+| `!session <name>` | Inspect a specific project's session (ID, idle time, queue) |
+| `!kill <name>` | Force-close a project's session |
+| `!help` | Show available commands |
+
 ## Architecture
 
 | Module | Responsibility |
 |--------|---------------|
-| `src/index.ts` | Entry point — loads config, wires modules, handles graceful shutdown |
+| `src/cli.ts` | CLI entry point — `mpg start`, `mpg init`, `mpg status` |
+| `src/init.ts` | Interactive setup wizard |
 | `src/config.ts` | Validates and merges `config.json` with defaults |
 | `src/router.ts` | Maps channel IDs to project configs (supports threads via parent lookup) |
 | `src/session-manager.ts` | One session per project, queues concurrent messages, manages idle timeouts |
@@ -103,21 +192,10 @@ npm run build && npm start   # production
 | Command | Description |
 |---------|-------------|
 | `npm run dev` | Run with tsx (no build step) |
-| `npm run build` | Compile TypeScript to `dist/` |
-| `npm start` | Run compiled output |
+| `npm run build` | Bundle with tsup to `dist/` |
+| `npm start` | Run bundled CLI |
 | `npm test` | Run tests once |
 | `npm run test:watch` | Run tests in watch mode |
-
-## Commands
-
-The gateway responds to commands in any mapped Discord channel:
-
-| Command | Description |
-|---------|-------------|
-| `!sessions` | List all active sessions with idle time and queue depth |
-| `!session <name>` | Inspect a specific project's session (ID, idle time, queue) |
-| `!kill <name>` | Force-close a project's session |
-| `!help` | Show available commands |
 
 ## Limitations
 
@@ -125,6 +203,7 @@ The gateway responds to commands in any mapped Discord channel:
 - **One message at a time per project** — concurrent messages to the same project are queued
 - **Threads share parent session** — no per-thread isolation
 - **Local only** — the gateway runs on the same machine as the project directories
+- **No access control** — any user in a mapped channel can send prompts (see [#9](https://github.com/yama-kei/multi-project-gateway/issues/9))
 
 ## License
 
