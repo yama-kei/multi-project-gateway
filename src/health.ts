@@ -17,7 +17,7 @@ export function runHealthChecks(config: GatewayConfig): void {
 
   // 2. Check all project directories exist and are directories
   const missing: string[] = [];
-  for (const [, project] of Object.entries(config.projects)) {
+  for (const project of Object.values(config.projects)) {
     try {
       if (!statSync(project.directory).isDirectory()) {
         missing.push(`  ✗ Project "${project.name}" path is not a directory: ${project.directory}`);

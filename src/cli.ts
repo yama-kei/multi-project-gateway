@@ -7,6 +7,7 @@ import { createSessionManager } from './session-manager.js';
 import { createFileSessionStore } from './session-store.js';
 import { createDiscordBot } from './discord.js';
 import { runInit } from './init.js';
+import { runHealthChecks } from './health.js';
 
 const args = process.argv.slice(2);
 const command = args[0] ?? 'start';
@@ -84,12 +85,7 @@ function start() {
     process.exit(1);
   }
 
-  // Validate project directories exist
-  for (const [channelId, project] of Object.entries(config.projects)) {
-    if (!existsSync(project.directory)) {
-      console.warn(`Warning: directory not found for ${project.name}: ${project.directory}`);
-    }
-  }
+  runHealthChecks(config);
 
   console.log(`Loaded ${projectCount} project(s) from config`);
 
