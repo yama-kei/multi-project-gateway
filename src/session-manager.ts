@@ -85,7 +85,8 @@ export function createSessionManager(defaults: {
   function resetIdleTimer(session: InternalSession) {
     if (session.idleTimer) clearTimeout(session.idleTimer);
     session.idleTimer = setTimeout(() => {
-      // Remove from memory only; session ID stays on disk for later resume
+      // Remove from memory only; session ID and worktree stay on disk for later resume.
+      // Worktrees persist on idle intentionally — cleaned up on !kill or startup reconciliation.
       sessions.delete(session.projectKey);
     }, defaults.idleTimeoutMs);
   }

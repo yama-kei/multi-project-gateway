@@ -26,9 +26,23 @@ describe('createWorktree', () => {
       .mockImplementationOnce(() => { throw new Error('already exists'); })
       .mockReturnValueOnce(Buffer.from(''));
     const result = createWorktree('/repo', 'thread-abc');
-    // Falls back to git worktree add without -b (reuse existing branch)
     expect(mockExecFileSync).toHaveBeenCalledTimes(2);
+    expect(mockExecFileSync).toHaveBeenLastCalledWith(
+      'git',
+      ['worktree', 'add', '/repo/.worktrees/thread-abc', 'mpg/thread-abc'],
+      { cwd: '/repo', timeout: 10000 },
+    );
     expect(result).toBe('/repo/.worktrees/thread-abc');
+  });
+
+  it('re-throws non-"already exists" errors', () => {
+    mockExecFileSync.mockImplementationOnce(() => { throw new Error('permission denied'); });
+    expect(() => createWorktree('/repo', 'thread-abc')).toThrow('permission denied');
+  });
+
+  it('rejects invalid projectKey characters', () => {
+    expect(() => createWorktree('/repo', '../escape')).toThrow('Invalid projectKey');
+    expect(() => createWorktree('/repo', 'foo/bar')).toThrow('Invalid projectKey');
   });
 });
 

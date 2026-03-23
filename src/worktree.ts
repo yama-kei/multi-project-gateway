@@ -10,6 +10,9 @@ export function worktreePath(projectDir: string, projectKey: string): string {
 }
 
 export function createWorktree(projectDir: string, projectKey: string): string {
+  if (!/^[\w-]+$/.test(projectKey)) {
+    throw new Error(`Invalid projectKey for worktree: ${projectKey}`);
+  }
   const wtPath = worktreePath(projectDir, projectKey);
   const branch = `${BRANCH_PREFIX}${projectKey}`;
   try {
@@ -17,8 +20,10 @@ export function createWorktree(projectDir: string, projectKey: string): string {
       cwd: projectDir,
       timeout: TIMEOUT,
     });
-  } catch {
-    // Branch may already exist (previous session) — attach without creating branch
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes('already exists')) throw err;
+    // Branch already exists (previous session) — attach without creating branch
     execFileSync('git', ['worktree', 'add', wtPath, branch], {
       cwd: projectDir,
       timeout: TIMEOUT,
@@ -76,11 +81,16 @@ export function listWorktrees(projectDir: string): WorktreeInfo[] {
 
 export function reconcileWorktrees(projectDir: string, knownKeys: Set<string>): void {
   const worktrees = listWorktrees(projectDir);
+  let removed = 0;
   for (const wt of worktrees) {
     if (!wt.branch.startsWith(`refs/heads/${BRANCH_PREFIX}`)) continue;
     const key = wt.branch.slice(`refs/heads/${BRANCH_PREFIX}`.length);
     if (!knownKeys.has(key)) {
       removeWorktree(projectDir, key);
+      removed++;
     }
+  }
+  if (removed > 0) {
+    console.log(`Reconciled ${removed} orphaned worktree(s) in ${projectDir}`);
   }
 }
