@@ -119,7 +119,7 @@ export function createSessionManager(defaults: {
             session.lastActivity = Date.now();
             resetIdleTimer(session);
             persistSessions();
-            item.resolve(result);
+            item.resolve({ ...result, sessionReset: true });
           } catch (retryErr) {
             item.reject(retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
           }

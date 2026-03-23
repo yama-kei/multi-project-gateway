@@ -118,6 +118,7 @@ describe('SessionManager', () => {
 
     const result = await manager.send('project-a', '/tmp/a', 'Try again');
     expect(result.text).toBe('Recovered');
+    expect(result.sessionReset).toBe(true);
     expect(manager.getSession('project-a')?.sessionId).toBe('sid-2');
   });
 
