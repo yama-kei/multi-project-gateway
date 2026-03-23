@@ -4,6 +4,7 @@ export interface ClaudeResult {
   text: string;
   sessionId: string;
   isError: boolean;
+  sessionReset?: boolean;
 }
 
 export function parseClaudeJsonOutput(raw: string): ClaudeResult {

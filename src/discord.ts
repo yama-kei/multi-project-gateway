@@ -197,6 +197,10 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
         resolved.isThread ? { worktree: true } : undefined,
       );
 
+      if (result.sessionReset) {
+        await replyChannel.send('⚠️ Previous session expired — starting fresh.');
+      }
+
       const chunks = chunkMessage(result.text, 2000);
       for (const chunk of chunks) {
         await replyChannel.send(chunk);
