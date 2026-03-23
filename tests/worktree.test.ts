@@ -5,7 +5,7 @@ vi.mock('node:child_process');
 
 const mockExecFileSync = vi.mocked(cp.execFileSync);
 
-import { createWorktree, removeWorktree, listWorktrees } from '../src/worktree.js';
+import { createWorktree, removeWorktree, listWorktrees, reconcileWorktrees } from '../src/worktree.js';
 
 describe('createWorktree', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -69,5 +69,42 @@ describe('listWorktrees', () => {
   it('returns empty array on error', () => {
     mockExecFileSync.mockImplementation(() => { throw new Error('not a git repo'); });
     expect(listWorktrees('/repo')).toEqual([]);
+  });
+});
+
+describe('reconcileWorktrees', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('removes worktrees with mpg/ prefix not in known sessions', () => {
+    mockExecFileSync
+      // listWorktrees call
+      .mockReturnValueOnce(Buffer.from(
+        'worktree /repo\nHEAD abc\nbranch refs/heads/main\n\n' +
+        'worktree /repo/.worktrees/thread-1\nHEAD def\nbranch refs/heads/mpg/thread-1\n\n' +
+        'worktree /repo/.worktrees/thread-2\nHEAD ghi\nbranch refs/heads/mpg/thread-2\n\n'
+      ))
+      // removeWorktree call for thread-2
+      .mockReturnValue(Buffer.from(''));
+
+    reconcileWorktrees('/repo', new Set(['thread-1']));
+
+    // Should only remove thread-2 (thread-1 is known)
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['worktree', 'remove', '--force', '/repo/.worktrees/thread-2'],
+      expect.any(Object),
+    );
+    expect(mockExecFileSync).toHaveBeenCalledTimes(2); // list + 1 remove
+  });
+
+  it('does nothing when all worktrees are known', () => {
+    mockExecFileSync.mockReturnValueOnce(Buffer.from(
+      'worktree /repo\nHEAD abc\nbranch refs/heads/main\n\n' +
+      'worktree /repo/.worktrees/thread-1\nHEAD def\nbranch refs/heads/mpg/thread-1\n\n'
+    ));
+
+    reconcileWorktrees('/repo', new Set(['thread-1']));
+
+    expect(mockExecFileSync).toHaveBeenCalledTimes(1); // list only
   });
 });

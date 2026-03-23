@@ -73,3 +73,14 @@ export function listWorktrees(projectDir: string): WorktreeInfo[] {
     return [];
   }
 }
+
+export function reconcileWorktrees(projectDir: string, knownKeys: Set<string>): void {
+  const worktrees = listWorktrees(projectDir);
+  for (const wt of worktrees) {
+    if (!wt.branch.startsWith(`refs/heads/${BRANCH_PREFIX}`)) continue;
+    const key = wt.branch.slice(`refs/heads/${BRANCH_PREFIX}`.length);
+    if (!knownKeys.has(key)) {
+      removeWorktree(projectDir, key);
+    }
+  }
+}
