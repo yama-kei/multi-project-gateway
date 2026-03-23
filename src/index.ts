@@ -4,6 +4,7 @@ import { config as loadEnv } from 'dotenv';
 import { loadConfig } from './config.js';
 import { createRouter } from './router.js';
 import { createSessionManager } from './session-manager.js';
+import { createFileSessionStore } from './session-store.js';
 import { createDiscordBot } from './discord.js';
 
 loadEnv();
@@ -26,7 +27,8 @@ if (projectCount === 0) {
 console.log(`Loaded ${projectCount} project(s) from config`);
 
 const router = createRouter(config);
-const sessionManager = createSessionManager(config.defaults);
+const sessionStore = createFileSessionStore(resolve(process.cwd(), '.sessions.json'));
+const sessionManager = createSessionManager(config.defaults, sessionStore);
 const bot = createDiscordBot(router, sessionManager);
 
 // Graceful shutdown

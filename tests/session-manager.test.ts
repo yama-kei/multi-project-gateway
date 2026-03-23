@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createSessionManager, type SessionManager } from '../src/session-manager.js';
+import type { SessionStore, PersistedSession } from '../src/session-store.js';
 
 vi.mock('../src/claude-cli.js', () => ({
   runClaude: vi.fn().mockResolvedValue({
@@ -16,6 +17,21 @@ const defaults = {
   maxConcurrentSessions: 2,
   claudeArgs: ['--dangerously-skip-permissions', '--output-format', 'json'],
 };
+
+function createMockStore(initial: PersistedSession[] = []): SessionStore & { saved: Map<string, PersistedSession> | null } {
+  let data = new Map<string, PersistedSession>();
+  for (const entry of initial) {
+    data.set(entry.projectKey, entry);
+  }
+  return {
+    saved: null,
+    load() { return new Map(data); },
+    save(sessions) {
+      this.saved = new Map(sessions);
+      data = new Map(sessions);
+    },
+  };
+}
 
 describe('SessionManager', () => {
   let manager: SessionManager;
@@ -129,5 +145,89 @@ describe('SessionManager', () => {
     expect(sessions).toHaveLength(2);
     expect(sessions.map(s => s.projectKey)).toContain('project-a');
     expect(sessions.map(s => s.projectKey)).toContain('project-b');
+  });
+
+  describe('session persistence', () => {
+    it('restores sessions from store on creation', () => {
+      const store = createMockStore([
+        { sessionId: 'restored-sid', projectKey: 'proj-x', cwd: '/tmp/x', lastActivity: 1000 },
+      ]);
+      const m = createSessionManager(defaults, store);
+      const session = m.getSession('proj-x');
+      expect(session).toBeDefined();
+      expect(session!.sessionId).toBe('restored-sid');
+      m.shutdown();
+    });
+
+    it('persists sessions to store after send', async () => {
+      const store = createMockStore();
+      const m = createSessionManager(defaults, store);
+      await m.send('proj-a', '/tmp/a', 'Hello');
+      expect(store.saved).not.toBeNull();
+      expect(store.saved!.get('proj-a')?.sessionId).toBe('mock-session-id');
+      m.shutdown();
+    });
+
+    it('persists sessions on shutdown', async () => {
+      const store = createMockStore();
+      const m = createSessionManager(defaults, store);
+      await m.send('proj-a', '/tmp/a', 'Hello');
+      store.saved = null;
+      m.shutdown();
+      expect(store.saved).not.toBeNull();
+    });
+
+    it('resumes Claude with restored session ID', async () => {
+      const { runClaude } = await import('../src/claude-cli.js');
+      const mockRun = vi.mocked(runClaude);
+
+      const store = createMockStore([
+        { sessionId: 'old-sid', projectKey: 'proj-a', cwd: '/tmp/a', lastActivity: 1000 },
+      ]);
+      const m = createSessionManager(defaults, store);
+
+      await m.send('proj-a', '/tmp/a', 'Continue');
+      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Continue', 'old-sid');
+      m.shutdown();
+    });
+
+    it('keeps session on disk after idle cleanup', async () => {
+      const store = createMockStore();
+      const m = createSessionManager(defaults, store);
+      await m.send('proj-a', '/tmp/a', 'Hello');
+
+      // Session is in memory and on disk
+      expect(m.getSession('proj-a')).toBeDefined();
+      expect(store.saved!.get('proj-a')?.sessionId).toBe('mock-session-id');
+
+      // After idle timeout, removed from memory but still on disk
+      await new Promise(r => setTimeout(r, 600));
+      expect(m.getSession('proj-a')).toBeUndefined();
+      expect(store.saved!.get('proj-a')?.sessionId).toBe('mock-session-id');
+      m.shutdown();
+    });
+
+    it('resumes session from disk after idle cleanup', async () => {
+      const { runClaude } = await import('../src/claude-cli.js');
+      const mockRun = vi.mocked(runClaude);
+
+      const store = createMockStore();
+      const m = createSessionManager(defaults, store);
+
+      // First message creates session
+      mockRun.mockResolvedValueOnce({ text: 'First', sessionId: 'sid-1', isError: false });
+      await m.send('proj-a', '/tmp/a', 'Hello');
+
+      // Wait for idle cleanup
+      await new Promise(r => setTimeout(r, 600));
+      expect(m.getSession('proj-a')).toBeUndefined();
+
+      // New message should resume with the persisted session ID
+      mockRun.mockResolvedValueOnce({ text: 'Resumed', sessionId: 'sid-1', isError: false });
+      const result = await m.send('proj-a', '/tmp/a', 'Back again');
+      expect(result.text).toBe('Resumed');
+      expect(mockRun).toHaveBeenLastCalledWith('/tmp/a', defaults.claudeArgs, 'Back again', 'sid-1');
+      m.shutdown();
+    });
   });
 });

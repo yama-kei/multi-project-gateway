@@ -1,4 +1,5 @@
 import { runClaude, type ClaudeResult } from './claude-cli.js';
+import type { SessionStore, PersistedSession } from './session-store.js';
 
 export interface SessionInfo {
   sessionId: string;
@@ -32,11 +33,29 @@ export function createSessionManager(defaults: {
   idleTimeoutMs: number;
   maxConcurrentSessions: number;
   claudeArgs: string[];
-}): SessionManager {
+}, store?: SessionStore): SessionManager {
   const sessions = new Map<string, InternalSession>();
 
   let activeProcesses = 0;
   const waiters: Array<() => void> = [];
+
+  function persistSessions(): void {
+    if (!store) return;
+    // Merge in-memory sessions with existing persisted data.
+    // In-memory sessions take precedence; persisted-only entries are preserved.
+    const persisted = store.load();
+    for (const [key, s] of sessions) {
+      if (s.sessionId) {
+        persisted.set(key, {
+          sessionId: s.sessionId,
+          projectKey: s.projectKey,
+          cwd: s.cwd,
+          lastActivity: s.lastActivity,
+        });
+      }
+    }
+    store.save(persisted);
+  }
 
   async function acquireSlot(): Promise<void> {
     if (activeProcesses < defaults.maxConcurrentSessions) {
@@ -60,6 +79,7 @@ export function createSessionManager(defaults: {
   function resetIdleTimer(session: InternalSession) {
     if (session.idleTimer) clearTimeout(session.idleTimer);
     session.idleTimer = setTimeout(() => {
+      // Remove from memory only; session ID stays on disk for later resume
       sessions.delete(session.projectKey);
     }, defaults.idleTimeoutMs);
   }
@@ -81,6 +101,7 @@ export function createSessionManager(defaults: {
         session.sessionId = result.sessionId || session.sessionId;
         session.lastActivity = Date.now();
         resetIdleTimer(session);
+        persistSessions();
         item.resolve(result);
       } catch (err) {
         if (session.sessionId) {
@@ -90,6 +111,7 @@ export function createSessionManager(defaults: {
             session.sessionId = result.sessionId || undefined;
             session.lastActivity = Date.now();
             resetIdleTimer(session);
+            persistSessions();
             item.resolve(result);
           } catch (retryErr) {
             item.reject(retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
@@ -108,8 +130,18 @@ export function createSessionManager(defaults: {
   function getOrCreateSession(projectKey: string, cwd: string): InternalSession {
     let session = sessions.get(projectKey);
     if (!session) {
+      // Check store for a previously persisted session ID
+      let restoredSessionId: string | undefined;
+      if (store) {
+        const persisted = store.load();
+        const entry = persisted.get(projectKey);
+        if (entry?.sessionId) {
+          restoredSessionId = entry.sessionId;
+        }
+      }
+
       session = {
-        sessionId: undefined,
+        sessionId: restoredSessionId,
         projectKey,
         cwd,
         lastActivity: Date.now(),
@@ -121,6 +153,28 @@ export function createSessionManager(defaults: {
       resetIdleTimer(session);
     }
     return session;
+  }
+
+  // Restore persisted sessions into memory at startup
+  if (store) {
+    const persisted = store.load();
+    for (const [key, entry] of persisted) {
+      sessions.set(key, {
+        sessionId: entry.sessionId,
+        projectKey: entry.projectKey,
+        cwd: entry.cwd,
+        lastActivity: entry.lastActivity,
+        processing: false,
+        queue: [],
+        idleTimer: null,
+      });
+    }
+    for (const session of sessions.values()) {
+      resetIdleTimer(session);
+    }
+    if (persisted.size > 0) {
+      console.log(`Restored ${persisted.size} session(s) from disk`);
+    }
   }
 
   return {
@@ -153,6 +207,7 @@ export function createSessionManager(defaults: {
     },
 
     shutdown() {
+      persistSessions();
       for (const session of sessions.values()) {
         if (session.idleTimer) clearTimeout(session.idleTimer);
       }
