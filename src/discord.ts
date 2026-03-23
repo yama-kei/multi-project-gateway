@@ -132,11 +132,22 @@ export function handleCommand(
     return `**${project.name}** — no active session to clear.`;
   }
 
+  if (cmd === '!restart') {
+    const name = parts.slice(1).join(' ');
+    if (!name) return 'Usage: `!restart <project name>`';
+    const project = findProjectByName(config, name);
+    if (!project) return `No project found matching "${name}".`;
+    const restarted = sessionManager.restartSession(project.channelId);
+    if (restarted) return `Session for **${project.name}** restarted — next message will start fresh context.`;
+    return `**${project.name}** — no active session to restart.`;
+  }
+
   if (cmd === '!help') {
     return [
       '**Gateway commands**',
       '`!sessions` — list all active sessions',
       '`!session` — show session for the current thread (or use `!session <name>`)',
+      '`!restart <name>` — reset a session (fresh context, keeps worktree)',
       '`!kill <name>` — force-close a project session',
       '`!help` — show this message',
     ].join('\n');

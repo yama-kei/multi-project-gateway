@@ -18,6 +18,12 @@ function mockSessionManager(sessions: ReturnType<SessionManager['listSessions']>
     getSession: (key) => sessionMap.get(key),
     listSessions: () => sessions,
     clearSession: (key) => sessionMap.delete(key),
+    restartSession: (key) => {
+      const s = sessionMap.get(key);
+      if (!s) return false;
+      s.sessionId = '';
+      return true;
+    },
     shutdown: () => {},
   };
 }
@@ -97,11 +103,33 @@ describe('handleCommand', () => {
     expect(result).toContain('cleared');
   });
 
+  it('restarts a session with !restart', () => {
+    const sm = mockSessionManager([
+      { sessionId: 'sid-1', projectKey: 'ch-1', lastActivity: Date.now(), queueLength: 0 },
+    ]);
+    const result = handleCommand('!restart Alpha', testConfig, sm);
+    expect(result).toContain('restarted');
+    expect(result).toContain('fresh context');
+  });
+
+  it('returns error for unknown project in !restart', () => {
+    const sm = mockSessionManager();
+    const result = handleCommand('!restart NoSuch', testConfig, sm);
+    expect(result).toContain('No project found');
+  });
+
+  it('returns no session message for !restart with no active session', () => {
+    const sm = mockSessionManager();
+    const result = handleCommand('!restart Alpha', testConfig, sm);
+    expect(result).toContain('no active session to restart');
+  });
+
   it('shows help with !help', () => {
     const sm = mockSessionManager();
     const result = handleCommand('!help', testConfig, sm);
     expect(result).toContain('!sessions');
     expect(result).toContain('!kill');
+    expect(result).toContain('!restart');
   });
 
   it('shows current thread session with !session (no args) in a thread', () => {

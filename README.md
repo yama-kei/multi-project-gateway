@@ -188,6 +188,7 @@ The gateway responds to commands in any mapped Discord channel:
 |---------|-------------|
 | `!sessions` | List all active sessions with idle time and queue depth |
 | `!session <name>` | Inspect a specific project's session (ID, idle time, queue) |
+| `!restart <name>` | Reset a session (fresh context, keeps worktree) |
 | `!kill <name>` | Force-close a project's session |
 | `!help` | Show available commands |
 

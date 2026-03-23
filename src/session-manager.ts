@@ -14,6 +14,7 @@ export interface SessionManager {
   getSession(projectKey: string): SessionInfo | undefined;
   listSessions(): SessionInfo[];
   clearSession(projectKey: string): boolean;
+  restartSession(projectKey: string): boolean;
   shutdown(): void;
 }
 
@@ -239,6 +240,16 @@ export function createSessionManager(defaults: {
         gitRemoveWorktree(session.projectDir, session.projectKey);
       }
       sessions.delete(projectKey);
+      persistSessions();
+      return true;
+    },
+
+    restartSession(projectKey: string): boolean {
+      const session = sessions.get(projectKey);
+      if (!session) return false;
+      session.sessionId = undefined;
+      session.lastActivity = Date.now();
+      resetIdleTimer(session);
       persistSessions();
       return true;
     },
