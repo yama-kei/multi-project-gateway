@@ -3,3 +3,4 @@ dist/
 .env
 .worktrees/
 .sessions.json
+config.json

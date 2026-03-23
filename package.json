@@ -37,5 +37,9 @@
     "gateway",
     "multi-project"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yama-kei/multi-project-gateway.git"
+  },
   "license": "MIT"
 }
