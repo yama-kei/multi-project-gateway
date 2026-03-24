@@ -35,14 +35,19 @@ A governance framework that answers the question: **when and whether agents shou
 Phase 1 identified several gaps. The credential-plumbing P0 items (token storage, OAuth flows, cross-system identity) are now explicitly delegated to proven third-party solutions and are out of scope here.
 
 This framework addresses:
-- **Gap 2.1** — No unified policy enforcement point across MPG and HouseholdOS
-- **Gap 2.5** — HouseholdOS governance gate is not generalized or configurable
-- **Gap 2.6** — Pending actions / human confirmation has no shared protocol
-- **Gap 2.7** — Knowledge trust lifecycle is implicit and system-specific
+- **Gap 2.1** (Delegation chains) → Delegation gate type (Section 1)
+- **Gap 2.5** (Unified audit format) → Unified audit trail (Section 4)
+- **Gap 2.6** (Channel-native consent) → Confirmation protocol (Section 2)
 
-It also adds two new contributions not surfaced in Phase 1:
-- **Governance gates** as a first-class, composable, declarative primitive
-- **Knowledge governance lifecycle** as a named concern with defined states and transitions
+Out of scope (delegated or deferred):
+- **Gap 2.2** (Capability tokens) → Out of scope; use Agentic JWT
+- **Gap 2.3** (Cascade revocation) → Out of scope; use Grantex
+- **Gap 2.4** (Cross-system credential broker) → Out of scope; use Nango/Arcade.dev
+- **Gap 2.7** (Agent identity) → Deferred to Phase 3
+
+New contributions not surfaced in Phase 1:
+- **Governance gates** as a first-class, composable, declarative primitive (Section 1)
+- **Knowledge governance lifecycle** as a named concern with defined states and transitions (Section 3)
 
 ## Target audience
 
@@ -166,7 +171,7 @@ If auth fails, the request is rejected before gates are evaluated. Gates never r
 ```typescript
 // A resource that is blocking a gate from passing
 interface BlockingResource {
-  type: 'confirmation_request' | 'knowledge_item';
+  type: 'confirmation_request' | 'knowledge_item' | 'policy_violation' | 'delegation_requirement';
   id: string;
   display: string;            // human-readable description of what's blocking
 }
@@ -205,9 +210,9 @@ This generalizes HouseholdOS's `pending_actions` queue into a channel-agnostic c
 
 ```
 pending → confirmed → executed
+                    → failed (execution failed after confirmation)
        → cancelled
        → expired
-       → failed (execution failed after confirmation)
 ```
 
 Allowed transitions:
