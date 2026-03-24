@@ -507,6 +507,135 @@ The audit store interface is pluggable. Provided implementations:
 
 ---
 
-<!-- Section 5: Tenant and Multi-System Deployment — to be added -->
+## Section 5: Integration Model
 
-<!-- Section 6: Open Questions and Deferred Decisions — to be added -->
+### 5.1 Architecture overview
+
+```
+┌─────────────────────────────────────────────────────┐
+│                   Agent Runtime                      │
+│  (Claude CLI, OpenAI SDK, custom agent)              │
+│                                                      │
+│  Agent requests capability ──┐                       │
+└──────────────────────────────┼───────────────────────┘
+                               ▼
+┌──────────────────────────────────────────────────────┐
+│              Governance Framework                     │
+│                                                      │
+│  ┌─────────────┐  ┌──────────────┐  ┌─────────────┐ │
+│  │ Gate Engine  │  │ Confirmation │  │  Knowledge   │ │
+│  │             │  │   Protocol   │  │  Governance  │ │
+│  └──────┬──────┘  └──────┬───────┘  └──────┬──────┘ │
+│         │                │                  │        │
+│         └────────────────┼──────────────────┘        │
+│                          ▼                           │
+│                   ┌─────────────┐                    │
+│                   │  Audit Log  │                    │
+│                   └─────────────┘                    │
+└──────────────────────────┬───────────────────────────┘
+                           ▼
+┌──────────────────────────────────────────────────────┐
+│            Credential Infrastructure                  │
+│  (Nango / Arcade.dev / MCP Auth / direct OAuth)      │
+│                                                      │
+│  Token resolution, refresh, execute-on-behalf         │
+└──────────────────────────────────────────────────────┘
+```
+
+The governance framework sits between the agent runtime and the credential infrastructure. The agent runtime calls gates before exercising any capability. If all gates pass, the credential layer executes the action. The framework never touches credentials directly.
+
+### 5.2 Integration with mpg
+
+mpg currently has no governance layer. Integration path:
+
+1. The gate engine evaluates before Claude CLI invocation — for example, a confirmation gate fires for `!push` commands before `runClaude()` is called.
+2. The confirmation protocol renders as Discord button interactions via the Discord channel adapter.
+3. The audit log replaces `console.log` calls with structured `AuditEvent` records.
+4. Knowledge governance is optional for mpg's use case — code-level actions (git push, file edits) do not typically involve contested knowledge, so the knowledge gate is not needed.
+
+Specific integration points:
+- `session-manager.ts` calls the gate engine before `runClaude()`. If any gate returns `{ pass: false }`, the invocation is aborted and the reason is surfaced to the user.
+- `discord.ts` implements the `ChannelAdapter` interface for confirmation rendering — Confirm/Cancel buttons are Discord Button components; resolution callbacks call the framework's confirmation protocol.
+- Lightweight audit storage: SQLite or JSON Lines append (no PostgreSQL requirement for mpg). The `AuditStore` interface is satisfied by the SQLite or JSON Lines backend from Section 4.5.
+
+### 5.3 Integration with HouseholdOS
+
+HouseholdOS already has most governance patterns as application-specific code. Integration path:
+
+1. Extract `pending_actions` into the framework's confirmation protocol. HouseholdOS's existing `pending_actions` table maps directly to `ConfirmationRequest`; the schema migration is additive.
+2. Extract `governance-gate.ts` + `governance-types.ts` into the framework's gate engine and knowledge lifecycle. HouseholdOS becomes a consumer of the framework rather than a reimplementation of it.
+3. Extend `audit_log` to emit framework-standard `AuditEvent` records, enabling cross-system queries alongside mpg.
+
+What does NOT change:
+- HouseholdOS keeps its PostgreSQL backend. The framework provides the protocol; HouseholdOS provides the storage.
+- Existing Row Level Security (RLS) policies remain in place. The framework does not replace or wrap them.
+- LINE and Web channel adapters continue to be HouseholdOS-specific implementations of the `ChannelAdapter` interface.
+
+### 5.4 Integration with credential infrastructure
+
+The framework does NOT manage credentials. Its responsibility ends when all gates pass. The credential layer (Nango, Arcade.dev, direct OAuth) executes the action using whichever tokens it holds.
+
+Integration point: the framework provides a `CredentialProvider` interface that adapters implement:
+
+```typescript
+interface CredentialProvider {
+  execute(capability: string, params: Record<string, unknown>, context: GovernanceContext): Promise<Result>;
+}
+```
+
+The `GovernanceContext` carries the governance decision — which gates passed, the audit event ID, and the confirmation ID if a confirmation gate was involved. The credential provider includes this context in its own audit trail, enabling end-to-end tracing from the governance decision to the credential execution.
+
+The flow for a credential-dependent capability (e.g., `calendar:write`):
+1. Governance framework evaluates all configured gates.
+2. All gates pass → framework calls `CredentialProvider.execute(...)` with the `GovernanceContext`.
+3. Credential provider resolves the token (via Nango, Arcade, or direct OAuth) and executes the action.
+4. Result is returned to the framework, which emits a `confirmation.executed` audit event.
+
+### 5.5 Deployment models
+
+| Model | When to use | Storage | Credential provider |
+|---|---|---|---|
+| **Embedded library** | Single-app (like HouseholdOS) | App's own DB | Direct OAuth / Nango SDK |
+| **Sidecar service** | Multi-app on same host (like mpg + HouseholdOS) | Shared SQLite/PostgreSQL | Shared Nango instance |
+| **MCP server** | Any MCP-compatible agent | Framework-managed | Arcade.dev / MCP Auth |
+
+The embedded library model is the lowest-friction adoption path. The sidecar model enables shared audit trails and shared confirmation state across multiple apps on the same host. The MCP server model is the fully decoupled path for agents that communicate over the Model Context Protocol.
+
+---
+
+## Section 6: What This Enables (Scenarios)
+
+Concrete scenarios showing how the framework solves real problems across the two existing systems.
+
+### Scenario A: mpg user pushes to production
+
+1. Discord user asks Claude to `git push origin main`.
+2. mpg's gate engine evaluates the `git:push` capability against its registered gates.
+3. A `confirmation` gate fires → Discord message with Confirm/Cancel buttons is rendered in the originating channel. Gate returns `{ pass: false, reason: "awaiting_confirmation" }` and suspends.
+4. User clicks Confirm → confirmation protocol transitions to `confirmed` → gate re-evaluates → passes.
+5. Claude executes the push.
+6. Audit events recorded: `gate.evaluated` (pass), `confirmation.resolved` (confirmed), `confirmation.executed`.
+
+Without the framework: push happens immediately with no human check. A mistaken or malicious prompt could push directly to `main`.
+
+### Scenario B: HouseholdOS agent schedules on contested knowledge
+
+1. Agent attempts to evaluate a weekly schedule for a household participant.
+2. A `knowledge` gate fires → queries for unresolved HIGH-impact knowledge items in the participant's scope.
+3. Gate finds an unresolved item: "dad travels for work on Tuesdays" — status `needs_confirmation`.
+4. Gate blocks → returns `{ pass: false, reason: "unresolved_knowledge", blocking: [knowledgeItem] }`.
+5. Agent tells the user: "I can't evaluate your schedule until you confirm or reject the pending proposal about dad's Tuesday travel."
+6. User confirms → knowledge item transitions from `needs_confirmation` to `confirmed`.
+7. Agent re-evaluates → `knowledge` gate queries again → no unresolved HIGH-impact items → gate passes.
+8. Schedule evaluation proceeds.
+
+This pattern already works in HouseholdOS. The framework makes it reusable: any agent system with schedule-like capabilities can adopt the same knowledge gate without reimplementing the governance FSM.
+
+### Scenario C: Cross-system audit query
+
+1. Operator asks: "What did all my agents do yesterday?"
+2. Audit query issued with `after_timestamp` and `before_timestamp` set to yesterday's bounds, no `source_system` filter.
+3. Returns unified timeline across `source_system = "mpg"` and `source_system = "householdos"`: mpg sessions started and ended, HouseholdOS `calendar:write` capabilities confirmed and executed, knowledge items proposed and confirmed.
+4. Operator drills into a specific confirmation: queries by `resource_type = "confirmation_request"` and `resource_id` to retrieve the full event chain from `confirmation.created` through `confirmation.executed`.
+
+Without the framework: the operator checks two separate log systems — mpg's `console.log` output and HouseholdOS's `audit_log` table — with incompatible formats and no shared correlation identifiers. Cross-referencing an action across systems requires manual reconstruction.
