@@ -11,8 +11,9 @@ const testConfig: GatewayConfig = {
   },
 };
 
-function mockSessionManager(sessions: ReturnType<SessionManager['listSessions']> = []): SessionManager {
+function mockSessionManager(sessions: ReturnType<SessionManager['listSessions']> = [], opts?: { processing?: Set<string> }): SessionManager {
   const sessionMap = new Map(sessions.map(s => [s.projectKey, s]));
+  const processing = opts?.processing ?? new Set<string>();
   return {
     send: async () => ({ text: '', sessionId: '', isError: false }),
     getSession: (key) => sessionMap.get(key),
@@ -22,6 +23,14 @@ function mockSessionManager(sessions: ReturnType<SessionManager['listSessions']>
       const s = sessionMap.get(key);
       if (!s) return false;
       s.sessionId = '';
+      return true;
+    },
+    stopSession: (key) => {
+      const s = sessionMap.get(key);
+      if (!s) return false;
+      if (!processing.has(key) && s.queueLength === 0) return false;
+      processing.delete(key);
+      s.queueLength = 0;
       return true;
     },
     shutdown: () => {},
@@ -128,8 +137,47 @@ describe('handleCommand', () => {
     const sm = mockSessionManager();
     const result = handleCommand('!help', testConfig, sm);
     expect(result).toContain('!sessions');
+    expect(result).toContain('!stop');
     expect(result).toContain('!kill');
     expect(result).toContain('!restart');
+  });
+
+  it('stops a running session with !stop', () => {
+    const sm = mockSessionManager(
+      [{ sessionId: 'sid-1', projectKey: 'ch-1', lastActivity: Date.now(), queueLength: 0 }],
+      { processing: new Set(['ch-1']) },
+    );
+    const result = handleCommand('!stop Alpha', testConfig, sm);
+    expect(result).toContain('Stopped');
+    expect(result).toContain('Alpha');
+  });
+
+  it('returns nothing-running for !stop when idle', () => {
+    const sm = mockSessionManager([
+      { sessionId: 'sid-1', projectKey: 'ch-1', lastActivity: Date.now(), queueLength: 0 },
+    ]);
+    const result = handleCommand('!stop Alpha', testConfig, sm);
+    expect(result).toContain('nothing running to stop');
+  });
+
+  it('stops current thread session with !stop (no args)', () => {
+    const sm = mockSessionManager(
+      [{ sessionId: 'sid-1', projectKey: 'thread-99', lastActivity: Date.now(), queueLength: 1 }],
+      { processing: new Set(['thread-99']) },
+    );
+    const result = handleCommand('!stop', testConfig, sm, {
+      channelId: 'thread-99',
+      projectName: 'Alpha',
+      isThread: true,
+    });
+    expect(result).toContain('Stopped');
+    expect(result).toContain('Alpha');
+  });
+
+  it('returns usage hint for !stop (no args) without context', () => {
+    const sm = mockSessionManager();
+    const result = handleCommand('!stop', testConfig, sm);
+    expect(result).toContain('!stop <project name>');
   });
 
   it('shows current thread session with !session (no args) in a thread', () => {

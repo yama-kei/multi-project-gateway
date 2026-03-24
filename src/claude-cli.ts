@@ -52,13 +52,24 @@ export function runClaude(
   baseArgs: string[],
   prompt: string,
   sessionId: string | undefined,
+  signal?: AbortSignal,
 ): Promise<ClaudeResult> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('Aborted'));
+      return;
+    }
+
     const args = buildClaudeArgs(baseArgs, prompt, sessionId);
     const proc = spawn('claude', args, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+
+    const onAbort = () => {
+      proc.kill('SIGTERM');
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
 
     let stdout = '';
     let stderr = '';
@@ -72,6 +83,11 @@ export function runClaude(
     });
 
     proc.on('close', (code) => {
+      signal?.removeEventListener('abort', onAbort);
+      if (signal?.aborted) {
+        reject(new Error('Aborted'));
+        return;
+      }
       if (code !== 0) {
         reject(new Error(friendlyError(stderr)));
         return;
@@ -85,6 +101,7 @@ export function runClaude(
     });
 
     proc.on('error', (err) => {
+      signal?.removeEventListener('abort', onAbort);
       reject(new Error(`Failed to spawn claude: ${err.message}`));
     });
   });

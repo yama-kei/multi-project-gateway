@@ -192,6 +192,55 @@ describe('SessionManager', () => {
     expect(manager.restartSession('no-such-project')).toBe(false);
   });
 
+  it('stops a running session and aborts the process', async () => {
+    const { runClaude } = await import('../src/claude-cli.js');
+    const mockRun = vi.mocked(runClaude);
+
+    mockRun.mockImplementationOnce((_cwd, _args, _prompt, _sid, signal) => {
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new Error('Aborted')), { once: true });
+      });
+    });
+
+    const sendPromise = manager.send('project-a', '/tmp/a', 'Long task');
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(manager.stopSession('project-a')).toBe(true);
+
+    // The send promise should reject with an abort error
+    await expect(sendPromise).rejects.toThrow('Aborted');
+  });
+
+  it('stops a session and drains the queue', async () => {
+    const { runClaude } = await import('../src/claude-cli.js');
+    const mockRun = vi.mocked(runClaude);
+
+    mockRun.mockImplementation((_cwd, _args, _prompt, _sid, signal) => {
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new Error('Aborted')), { once: true });
+      });
+    });
+
+    const p1 = manager.send('project-a', '/tmp/a', 'First');
+    const p2 = manager.send('project-a', '/tmp/a', 'Second');
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(manager.stopSession('project-a')).toBe(true);
+
+    await expect(p1).rejects.toThrow('Aborted');
+    await expect(p2).rejects.toThrow('Aborted');
+  });
+
+  it('returns false when stopping a session with nothing running', async () => {
+    await manager.send('project-a', '/tmp/a', 'Hello');
+    // Session exists but nothing is processing
+    expect(manager.stopSession('project-a')).toBe(false);
+  });
+
+  it('returns false when stopping a non-existent session', () => {
+    expect(manager.stopSession('no-such-project')).toBe(false);
+  });
+
   it('clears a specific session', async () => {
     await manager.send('project-a', '/tmp/a', 'Hello');
     expect(manager.getSession('project-a')).toBeDefined();
@@ -252,7 +301,7 @@ describe('SessionManager', () => {
       const m = createSessionManager(defaults, store);
 
       await m.send('proj-a', '/tmp/a', 'Continue');
-      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Continue', 'old-sid');
+      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Continue', 'old-sid', expect.any(AbortSignal));
       m.shutdown();
     });
 
@@ -291,7 +340,7 @@ describe('SessionManager', () => {
       mockRun.mockResolvedValueOnce({ text: 'Resumed', sessionId: 'sid-1', isError: false });
       const result = await m.send('proj-a', '/tmp/a', 'Back again');
       expect(result.text).toBe('Resumed');
-      expect(mockRun).toHaveBeenLastCalledWith('/tmp/a', defaults.claudeArgs, 'Back again', 'sid-1');
+      expect(mockRun).toHaveBeenLastCalledWith('/tmp/a', defaults.claudeArgs, 'Back again', 'sid-1', expect.any(AbortSignal));
       m.shutdown();
     });
   });
@@ -313,6 +362,7 @@ describe('SessionManager', () => {
         defaults.claudeArgs,
         'Hello',
         undefined,
+        expect.any(AbortSignal),
       );
     });
 
@@ -337,7 +387,7 @@ describe('SessionManager', () => {
       await manager.send('project-a', '/tmp/a', 'Hello');
 
       expect(mockCreate).not.toHaveBeenCalled();
-      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Hello', undefined);
+      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Hello', undefined, expect.any(AbortSignal));
     });
 
     it('removes worktree on clearSession', async () => {

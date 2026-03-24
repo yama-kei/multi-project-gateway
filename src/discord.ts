@@ -142,11 +142,30 @@ export function handleCommand(
     return `**${project.name}** — no active session to restart.`;
   }
 
+  if (cmd === '!stop') {
+    const name = parts.slice(1).join(' ');
+
+    // No arguments: stop the current thread/channel session
+    if (!name && context) {
+      const stopped = sessionManager.stopSession(context.channelId);
+      if (stopped) return `Stopped **${context.projectName}** — in-flight request aborted.`;
+      return `**${context.projectName}** — nothing running to stop.`;
+    }
+
+    if (!name) return 'Usage: `!stop <project name>` or run `!stop` in a thread';
+    const project = findProjectByName(config, name);
+    if (!project) return `No project found matching "${name}".`;
+    const stopped = sessionManager.stopSession(project.channelId);
+    if (stopped) return `Stopped **${project.name}** — in-flight request aborted.`;
+    return `**${project.name}** — nothing running to stop.`;
+  }
+
   if (cmd === '!help') {
     return [
       '**Gateway commands**',
       '`!sessions` — list all active sessions',
       '`!session` — show session for the current thread (or use `!session <name>`)',
+      '`!stop` — abort the running request (and queued messages)',
       '`!restart <name>` — reset a session (fresh context, keeps worktree)',
       '`!kill <name>` — force-close a project session',
       '`!help` — show this message',

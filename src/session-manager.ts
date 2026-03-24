@@ -15,6 +15,7 @@ export interface SessionManager {
   listSessions(): SessionInfo[];
   clearSession(projectKey: string): boolean;
   restartSession(projectKey: string): boolean;
+  stopSession(projectKey: string): boolean;
   shutdown(): void;
 }
 
@@ -32,6 +33,7 @@ interface InternalSession {
     reject: (error: Error) => void;
   }>;
   idleTimer: ReturnType<typeof setTimeout> | null;
+  abortController: AbortController | null;
 }
 
 export function createSessionManager(defaults: {
@@ -132,12 +134,15 @@ export function createSessionManager(defaults: {
     while (session.queue.length > 0) {
       const item = session.queue.shift()!;
       await acquireSlot();
+      const ac = new AbortController();
+      session.abortController = ac;
       try {
         const result = await runClaude(
           session.cwd,
           defaults.claudeArgs,
           item.prompt,
           session.sessionId,
+          ac.signal,
         );
         const sessionChanged = !!(
           session.sessionId &&
@@ -154,10 +159,12 @@ export function createSessionManager(defaults: {
           item.resolve(result);
         }
       } catch (err) {
-        if (session.sessionId) {
+        if (ac.signal.aborted) {
+          item.reject(new Error('Aborted'));
+        } else if (session.sessionId) {
           session.sessionId = undefined;
           try {
-            const result = await runClaude(session.cwd, defaults.claudeArgs, item.prompt, undefined);
+            const result = await runClaude(session.cwd, defaults.claudeArgs, item.prompt, undefined, ac.signal);
             session.sessionId = result.sessionId || undefined;
             session.lastActivity = Date.now();
             resetIdleTimer(session);
@@ -170,6 +177,7 @@ export function createSessionManager(defaults: {
           item.reject(err instanceof Error ? err : new Error(String(err)));
         }
       } finally {
+        session.abortController = null;
         releaseSlot();
       }
     }
@@ -214,6 +222,7 @@ export function createSessionManager(defaults: {
         processing: false,
         queue: [],
         idleTimer: null,
+        abortController: null,
       };
       sessions.set(projectKey, session);
       resetIdleTimer(session);
@@ -240,6 +249,7 @@ export function createSessionManager(defaults: {
         processing: false,
         queue: [],
         idleTimer: null,
+        abortController: null,
       });
     }
     for (const session of sessions.values()) {
@@ -298,6 +308,22 @@ export function createSessionManager(defaults: {
       session.lastActivity = Date.now();
       resetIdleTimer(session);
       persistSessions();
+      return true;
+    },
+
+    stopSession(projectKey: string): boolean {
+      const session = sessions.get(projectKey);
+      if (!session) return false;
+      if (!session.processing && session.queue.length === 0) return false;
+      // Abort the running process
+      if (session.abortController) {
+        session.abortController.abort();
+      }
+      // Drain the queue
+      const pending = session.queue.splice(0);
+      for (const item of pending) {
+        item.reject(new Error('Aborted'));
+      }
       return true;
     },
 
