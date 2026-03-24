@@ -1,7 +1,7 @@
 import { Client, GatewayIntentBits, Events, ChannelType, type Message, type TextChannel, type ThreadChannel } from 'discord.js';
 import type { Router } from './router.js';
 import type { SessionManager } from './session-manager.js';
-import type { GatewayConfig } from './config.js';
+import { findChannelByName, type GatewayConfig } from './config.js';
 
 export function chunkMessage(text: string, limit: number): string[] {
   if (text.length <= limit) return [text];
@@ -48,13 +48,7 @@ function resolveProjectName(config: GatewayConfig, channelId: string): string {
 }
 
 function findProjectByName(config: GatewayConfig, name: string): { channelId: string; name: string } | null {
-  const lower = name.toLowerCase();
-  for (const [channelId, project] of Object.entries(config.projects)) {
-    if (project.name.toLowerCase() === lower) {
-      return { channelId, name: project.name };
-    }
-  }
-  return null;
+  return findChannelByName(config, name);
 }
 
 function formatTimeSince(timestamp: number): string {

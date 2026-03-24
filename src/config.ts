@@ -1,8 +1,15 @@
+export interface PersonaConfig {
+  systemPrompt: string;
+  canMessageChannels: string[];
+  maxDirectivesPerTurn: number;
+}
+
 export interface ProjectConfig {
   name: string;
   directory: string;
   idleTimeoutMs?: number;
   claudeArgs?: string[];
+  persona?: PersonaConfig;
 }
 
 export interface GatewayDefaults {
@@ -11,6 +18,7 @@ export interface GatewayDefaults {
   sessionTtlMs: number;
   maxPersistedSessions: number;
   claudeArgs: string[];
+  maxTurnsPerLink: number;
 }
 
 export interface GatewayConfig {
@@ -60,4 +68,17 @@ export function loadConfig(raw: unknown): GatewayConfig {
     },
     projects: validated,
   };
+}
+
+export function findChannelByName(
+  config: GatewayConfig,
+  name: string,
+): { channelId: string; name: string; directory: string } | null {
+  const lower = name.toLowerCase();
+  for (const [channelId, project] of Object.entries(config.projects)) {
+    if (project.name.toLowerCase() === lower) {
+      return { channelId, name: project.name, directory: project.directory };
+    }
+  }
+  return null;
 }
