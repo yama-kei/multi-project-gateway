@@ -310,7 +310,8 @@ export function createDiscordBot(
             try {
               const targetChannel = await message.client.channels.fetch(botResult.targetChannelId);
               if (!targetChannel || !('threads' in targetChannel)) return;
-              const threadName = `From #${botResult.sourceChannelName}: ${botResult.content.slice(0, 80)}`;
+              const prefix = `From #${botResult.sourceChannelName}: `;
+              const threadName = `${prefix}${botResult.content.slice(0, 100 - prefix.length)}`;
               targetThread = await (targetChannel as TextChannel).threads.create({
                 name: threadName,
                 autoArchiveDuration: 1440,
@@ -324,8 +325,14 @@ export function createDiscordBot(
           threadLinks.recordTurn(sourceThread, targetThread.id);
 
           const attributedMessage = `**From #${botResult.sourceChannelName}:**\n${botResult.content}`;
-          const sent = await targetThread.send(attributedMessage);
-          agentTracker.trackCrossPost(sent.id);
+          try {
+            const sent = await targetThread.send(attributedMessage);
+            agentTracker.trackCrossPost(sent.id);
+          } catch {
+            await (message.channel as TextChannel | ThreadChannel).send(
+              `⚠️ Failed to post to #${botResult.sourceChannelName} target thread.`,
+            ).catch(() => {});
+          }
         } else if (botResult.action === 'blocked') {
           await (message.channel as TextChannel | ThreadChannel).send(`⚠️ ${botResult.reason}`);
         }
