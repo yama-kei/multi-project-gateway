@@ -188,11 +188,324 @@ interface GovernanceContext {
 
 ---
 
-<!-- Section 2: Knowledge Governance Lifecycle — to be added -->
+## Section 2: Confirmation Protocol
 
-<!-- Section 3: Confirmation Protocol — to be added -->
+This generalizes HouseholdOS's `pending_actions` queue into a channel-agnostic confirmation protocol.
 
-<!-- Section 4: Unified Audit Trail — to be added -->
+### 2.1 Confirmation lifecycle (state machine)
+
+```
+pending → confirmed → executed
+       → cancelled
+       → expired
+       → failed (execution failed after confirmation)
+```
+
+Allowed transitions:
+- `pending → confirmed` — human confirms
+- `pending → cancelled` — human cancels or new confirmation auto-cancels existing one
+- `pending → expired` — TTL elapsed (enforced atomically at confirmation time via `AND expires_at > now()`)
+- `confirmed → executed` — framework executes the action successfully
+- `confirmed → failed` — execution fails after confirmation
+
+Terminal states: `executed`, `cancelled`, `expired`, `failed`.
+
+### 2.2 Confirmation request schema
+
+```typescript
+interface ConfirmationRequest {
+  id: string;
+  tenant_id: string;
+  session_id: string;
+  capability: string;            // e.g., "calendar:write"
+  action: {
+    type: string;                // e.g., "create_event"
+    params: Record<string, unknown>;
+    display: {
+      title: string;
+      description: string;
+      details?: Record<string, string>;
+    };
+  };
+  ttl_seconds: number;           // e.g., 900 (15 minutes)
+  created_at: string;            // ISO 8601
+  expires_at: string;            // ISO 8601
+  status: ConfirmationStatus;
+  channel: {
+    type: 'discord' | 'line' | 'web' | 'origin';
+    id?: string;
+  };
+  resolved_at?: string;
+  resolved_by?: string;          // actor_id
+}
+
+type ConfirmationStatus = 'pending' | 'confirmed' | 'cancelled' | 'expired' | 'executed' | 'failed';
+```
+
+### 2.3 Channel adapters
+
+Each channel implements a `ChannelAdapter` interface:
+
+```typescript
+interface ChannelAdapter {
+  renderConfirmation(request: ConfirmationRequest): Promise<void>;
+  onResolution(handler: (requestId: string, resolution: 'confirmed' | 'cancelled') => void): void;
+  updateStatus(requestId: string, status: ConfirmationStatus): Promise<void>;
+}
+```
+
+Channel-specific rendering:
+- **Discord**: Interactive message with Button components (Confirm / Cancel). Button `custom_id` encodes the confirmation request ID. On timeout, edit message to show "Expired" and remove buttons.
+- **LINE**: Flex Message with Quick Reply buttons. Postback action carries the confirmation ID.
+- **Web**: Form with structured proposal display and Confirm/Cancel buttons. WebSocket or SSE for real-time status updates.
+- **`origin`**: Render in whichever channel originated the agent's request. Resolved at request time by looking up the session's originating channel.
+
+### 2.4 Constraints
+- One pending confirmation per session (enforced via partial unique index `WHERE status = 'pending'`).
+- Creating a new confirmation auto-cancels any existing pending confirmation for that session.
+- TTL enforcement is atomic at confirmation time — no background expiry job needed. The confirmation query includes `AND expires_at > now()`.
+- The agent sees only `{ created: true }` when proposing — never the action payload or confirmation ID.
+
+### 2.5 Absent-user handling
+- Default: confirmation expires after TTL. Agent is notified that the action was not approved.
+- Optional escalation: configurable per capability. If primary actor doesn't respond within `escalation_after` (e.g., 10 minutes), the confirmation is re-rendered to a secondary authorized actor.
+- Optional deferred queue: action is saved with status `deferred` for when the user next interacts. Maximum deferred queue depth per session is configurable (default: 1).
+
+### 2.6 Integration point
+
+The confirmation protocol is invoked by the `confirmation` gate type from Section 1. Flow:
+1. Gate engine evaluates `confirmation` gate for a capability.
+2. Gate creates a `ConfirmationRequest` via the confirmation protocol.
+3. Channel adapter renders the confirmation in the user's channel.
+4. Gate suspends (returns `{ pass: false, reason: "awaiting_confirmation", blocking: [confirmationRequest] }`).
+5. Human confirms → protocol transitions to `confirmed` → gate re-evaluates → passes.
+6. Framework executes the action → protocol transitions to `executed`.
+7. Audit events emitted at each transition.
+
+---
+
+## Section 3: Knowledge Governance Lifecycle
+
+This generalizes HouseholdOS's memory governance FSM into a framework primitive.
+
+### 3.1 Core concept
+
+In agent systems, knowledge is not just data — it's a governed resource. The agent's authority to act depends on the governance state of the knowledge it uses. This section defines a lifecycle for knowledge items that governs when information is trusted enough to influence agent decisions.
+
+This is NOT a general-purpose knowledge base or RAG system. It is NOT a memory store (that's application-level — HouseholdOS has its own). It IS a governance layer over knowledge that agents rely on for decision-making.
+
+### 3.2 Knowledge item model
+
+```typescript
+interface KnowledgeItem {
+  id: string;
+  tenant_id: string;
+  source: {
+    type: 'agent_inferred' | 'human_provided' | 'external_import';
+    agent_id?: string;
+    session_id?: string;
+  };
+  content: {
+    type: string;                // domain-specific (e.g., "schedule_rule", "preference", "fact")
+    value: Record<string, unknown>;
+    display: string;             // human-readable summary
+  };
+  impact_level: 'low' | 'medium' | 'high';
+  governance_state: GovernanceState;
+  created_at: string;
+  updated_at: string;
+  confirmed_by?: string;
+  superseded_by?: string;
+}
+
+type GovernanceState =
+  | 'candidate'
+  | 'needs_confirmation'
+  | 'confirmed'
+  | 'rejected'
+  | 'superseded'
+  | 'revoked'
+  | 'expired';
+```
+
+### 3.3 State transitions
+
+```
+candidate → needs_confirmation | confirmed | rejected | expired
+needs_confirmation → confirmed | rejected
+confirmed → superseded | revoked
+rejected → (terminal)
+superseded → (terminal)
+revoked → (terminal)
+expired → (terminal)
+```
+
+Transition guards enforced by the framework:
+
+```typescript
+const ALLOWED_TRANSITIONS: Record<GovernanceState, GovernanceState[]> = {
+  candidate: ['needs_confirmation', 'confirmed', 'rejected', 'expired'],
+  needs_confirmation: ['confirmed', 'rejected'],
+  confirmed: ['superseded', 'revoked'],
+  rejected: [],
+  superseded: [],
+  revoked: [],
+  expired: [],
+};
+
+function assertValidTransition(from: GovernanceState, to: GovernanceState): void {
+  if (!ALLOWED_TRANSITIONS[from].includes(to)) {
+    throw new Error(`Invalid governance transition: ${from} → ${to}`);
+  }
+}
+```
+
+DB-level integrity invariant (must be enforced regardless of application code):
+```sql
+CHECK (NOT (status = 'active' AND governance_state <> 'confirmed'))
+```
+This ensures an operationally effective knowledge item must have been through the governance confirmation process.
+
+### 3.4 Impact levels and governance gates
+
+| Level | Behavior | Gate interaction |
+|---|---|---|
+| `low` | Immediately usable by agents | No gate. Knowledge is trusted on creation. |
+| `medium` | Usable but flagged for eventual review | No gate blocks, but a `knowledge.proposed` audit event is emitted with `review_requested: true`. |
+| `high` | Blocks downstream capabilities | Knowledge gate blocks any capability in scope until the item is `confirmed` or `rejected`. |
+
+Impact level is assigned at creation time by the agent or by policy rules. Operators can configure default impact levels per knowledge content type:
+
+```yaml
+knowledge:
+  default_impact:
+    schedule_rule: high
+    preference: medium
+    fact: low
+```
+
+### 3.5 Knowledge operations
+
+The framework exposes these operations:
+
+```typescript
+interface KnowledgeGovernance {
+  propose(item: Omit<KnowledgeItem, 'id' | 'governance_state' | 'created_at' | 'updated_at'>): Promise<KnowledgeItem>;
+  confirm(id: string, actor_id: string): Promise<KnowledgeItem>;
+  reject(id: string, actor_id: string): Promise<KnowledgeItem>;
+  supersede(id: string, replacement: KnowledgeItem): Promise<KnowledgeItem>;
+  revoke(id: string, actor_id: string): Promise<KnowledgeItem>;
+  query(filter: KnowledgeFilter): Promise<KnowledgeItem[]>;
+  checkGate(tenant_id: string, scope: string[], impact_threshold: ImpactLevel): Promise<GateResult>;
+}
+```
+
+### 3.6 Integration point
+
+The knowledge governance lifecycle powers the `knowledge` gate type from Section 1. When the gate evaluates:
+1. Query for unresolved items matching the capability's scope and impact threshold.
+2. If any exist, return `{ pass: false, reason: "unresolved_knowledge", blocking: [...items] }`.
+3. The agent receives the blocking items and can inform the user which knowledge needs to be resolved.
+4. Once the user confirms or rejects all blocking items, the gate passes on re-evaluation.
+
+---
+
+## Section 4: Unified Audit Trail
+
+This extends HouseholdOS's `audit_log` schema into a cross-system audit format.
+
+### 4.1 Audit event schema
+
+```typescript
+interface AuditEvent {
+  id: string;
+  timestamp: string;             // ISO 8601 with timezone
+  tenant_id: string;
+  principal: {
+    actor_id: string;            // human who initiated the chain
+    agent_id?: string;           // agent that performed the action
+    session_id?: string;
+    delegation_chain?: string[]; // [actor_id, agent_a_id, agent_b_id] for multi-hop
+  };
+  event_type: string;
+  resource: {
+    type: string;                // e.g., "confirmation_request", "knowledge_item", "capability"
+    id: string;
+  };
+  outcome: 'success' | 'denied' | 'failed' | 'expired';
+  payload: Record<string, unknown>;
+  source_system: string;         // e.g., "mpg", "householdos", "governance-framework"
+}
+```
+
+### 4.2 Event types
+
+| Event type | Emitted when | Key payload fields |
+|---|---|---|
+| `gate.evaluated` | A governance gate is checked | `gate_type`, `capability`, `result`, `blocking_resources` |
+| `gate.bypassed` | An operator bypasses a gate | `gate_type`, `capability`, `reason` |
+| `confirmation.created` | A confirmation request is created | `capability`, `action_type`, `ttl`, `channel` |
+| `confirmation.resolved` | A confirmation is confirmed/cancelled/expired | `resolution`, `resolved_by`, `latency_ms` |
+| `confirmation.executed` | The confirmed action is executed | `capability`, `action_result` |
+| `confirmation.failed` | Execution fails after confirmation | `capability`, `error` |
+| `knowledge.proposed` | A knowledge item is created | `content_type`, `impact_level`, `source` |
+| `knowledge.transitioned` | A knowledge item changes state | `from_state`, `to_state`, `transitioned_by` |
+| `session.started` | An agent session begins | `agent_id`, `capabilities_granted`, `delegation_parent` |
+| `session.ended` | An agent session ends | `reason` |
+
+### 4.3 Storage interface
+
+```typescript
+interface AuditStore {
+  append(event: Omit<AuditEvent, 'id'>): Promise<AuditEvent>;
+  query(filter: AuditFilter): Promise<AuditPage>;
+}
+
+interface AuditFilter {
+  tenant_id: string;
+  event_types?: string[];
+  resource_type?: string;
+  resource_id?: string;
+  actor_id?: string;
+  agent_id?: string;
+  source_system?: string;
+  outcome?: string;
+  after?: string;                // cursor for pagination
+  before_timestamp?: string;     // ISO 8601
+  after_timestamp?: string;      // ISO 8601
+  limit?: number;                // default 50, max 200
+}
+
+interface AuditPage {
+  events: AuditEvent[];
+  cursor?: string;               // for next page
+  has_more: boolean;
+}
+```
+
+### 4.4 Storage requirements
+- **Append-only**: INSERT only, no UPDATE or DELETE. Enforced at the storage layer (RLS policy or file append mode).
+- **Tenant-scoped**: Each event is bound to a tenant_id. Storage layer enforces isolation.
+- **Indexed**: timestamp + tenant_id + event_type for efficient temporal queries.
+- **Retention**: Configurable per tenant. Default: 90 days. Expired events are archived, not deleted.
+
+### 4.5 Storage backends
+
+The audit store interface is pluggable. Provided implementations:
+
+| Backend | Use case | Notes |
+|---|---|---|
+| **PostgreSQL** | Production (HouseholdOS) | Full RLS, cursor pagination, partial indexes |
+| **SQLite** | Lightweight (mpg) | Single-file, WAL mode for concurrent reads |
+| **JSON Lines** | Minimal (development, testing) | Append-only `.jsonl` file, grep-friendly |
+
+### 4.6 Cross-system correlation
+- `source_system` identifies which system emitted the event.
+- `delegation_chain` in the principal enables tracing actions across system boundaries.
+- Optional: OpenTelemetry trace context (`trace_id`, `span_id`) in the payload for distributed tracing integration.
+- Cross-system queries: the audit store interface supports filtering by `source_system`, enabling unified timelines across mpg and HouseholdOS.
+
+---
 
 <!-- Section 5: Tenant and Multi-System Deployment — to be added -->
 
