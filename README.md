@@ -134,7 +134,75 @@ Commands:
   init      Interactive setup wizard
   status    Show session status from disk
   help      Show help
+
+Options:
+  --profile <name>  Use a named profile (default: "default")
+  --config <path>   Use a specific config.json path
+  --migrate         Copy CWD config files into ~/.mpg/profiles/default/
 ```
+
+## Config home (`~/.mpg/`)
+
+By default, mpg resolves configuration from the current working directory. For multi-worktree setups or dev/prod separation, you can use a centralized config home at `~/.mpg/` (overridable via the `MPG_HOME` environment variable).
+
+### Directory layout
+
+```
+~/.mpg/
+├── .env                 # shared secrets (bot token)
+├── profiles/
+│   ├── default/
+│   │   ├── config.json       # project/channel config
+│   │   └── sessions.json     # runtime session state
+│   └── dev/
+│       ├── config.json
+│       └── sessions.json
+```
+
+### Resolution order
+
+**`.env` / secrets:**
+1. Environment variables (already set) — highest priority
+2. `$MPG_HOME/.env`
+3. `$CWD/.env` — lowest priority, backward compat
+
+**`config.json`:**
+1. `--config <path>` CLI flag
+2. `--profile <name>` resolves to `$MPG_HOME/profiles/<name>/config.json`
+3. `$MPG_HOME/profiles/default/config.json`
+4. `$CWD/config.json` — backward compat fallback
+
+**`sessions.json`:** Always co-located with the resolved `config.json` (same directory).
+
+### Setting up profiles
+
+```bash
+# Create a profile using the init wizard
+mpg init --profile default
+
+# Create a dev profile
+mpg init --profile dev
+
+# Start with a specific profile
+mpg start --profile dev
+
+# Or point to an explicit config file
+mpg start --config /path/to/config.json
+```
+
+### Migrating from CWD-based setup
+
+If you already have `.env`, `config.json`, and `.sessions.json` in your current directory:
+
+```bash
+mpg init --migrate
+```
+
+This copies your CWD files into `~/.mpg/profiles/default/` and prints what it did. The original files are left in place, so nothing breaks. No automatic migration is performed.
+
+### Backward compatibility
+
+If `~/.mpg/` does not exist and CWD files do, everything works exactly as before — zero breaking change.
 
 ## Configuration
 
@@ -155,6 +223,7 @@ Commands:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DISCORD_BOT_TOKEN` | Yes | Discord bot token |
+| `MPG_HOME` | No | Override config home directory (default: `~/.mpg`) |
 
 ### Resuming sessions from terminal
 
@@ -197,7 +266,8 @@ The gateway responds to commands in any mapped Discord channel:
 | Module | Responsibility |
 |--------|---------------|
 | `src/cli.ts` | CLI entry point — `mpg start`, `mpg init`, `mpg status` |
-| `src/init.ts` | Interactive setup wizard |
+| `src/resolve-home.ts` | Resolves `~/.mpg/` config home, profiles, and file resolution order |
+| `src/init.ts` | Interactive setup wizard (supports `--profile`) |
 | `src/config.ts` | Validates and merges `config.json` with defaults |
 | `src/router.ts` | Maps channel IDs to project configs; threads resolve to their own session using the parent channel's project config |
 | `src/session-manager.ts` | One session per channel/thread, queues concurrent messages, manages idle timeouts |

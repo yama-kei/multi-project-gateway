@@ -1,7 +1,8 @@
 import { createInterface } from 'node:readline';
-import { writeFileSync, existsSync } from 'node:fs';
+import { writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { execSync } from 'node:child_process';
+import { resolveMpgHome, resolveProfileDir } from './resolve-home.js';
 
 function createPrompt(): (question: string) => Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -9,11 +10,26 @@ function createPrompt(): (question: string) => Promise<string> {
     new Promise((resolve) => rl.question(question, (answer) => resolve(answer.trim())));
 }
 
-export async function runInit() {
+export async function runInit(profile?: string) {
   const ask = createPrompt();
-  const configDir = process.cwd();
 
-  console.log('\nmpg init — set up multi-project gateway\n');
+  // Determine output directory: if --profile is given, use MPG_HOME/profiles/<name>;
+  // otherwise, use CWD for backward compat (quick single-instance setup).
+  let configDir: string;
+  let envDir: string;
+  if (profile) {
+    configDir = resolveProfileDir(profile);
+    envDir = resolveMpgHome();
+    mkdirSync(configDir, { recursive: true });
+    mkdirSync(envDir, { recursive: true });
+    console.log(`\nmpg init — set up profile "${profile}"\n`);
+    console.log(`Profile directory: ${configDir}`);
+    console.log(`Secrets directory: ${envDir}\n`);
+  } else {
+    configDir = process.cwd();
+    envDir = process.cwd();
+    console.log('\nmpg init — set up multi-project gateway\n');
+  }
 
   // Check for claude CLI
   try {
@@ -33,7 +49,7 @@ export async function runInit() {
   }
 
   // Write .env
-  const envPath = resolve(configDir, '.env');
+  const envPath = resolve(envDir, '.env');
   writeFileSync(envPath, `DISCORD_BOT_TOKEN=${token}\n`);
   console.log(`Wrote ${envPath}`);
 
