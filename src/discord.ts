@@ -206,7 +206,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
       try {
         replyChannel = await message.startThread({
           name: message.content.slice(0, 100) || 'Claude response',
-          autoArchiveDuration: 60,
+          autoArchiveDuration: 1440,
         });
       } catch {
         // Thread creation may fail (permissions, channel type) — fall back to channel
