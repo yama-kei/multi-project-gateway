@@ -1,6 +1,6 @@
 {
   "name": "multi-project-gateway",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Route Discord messages to per-project Claude Code CLI sessions",
   "bin": {
