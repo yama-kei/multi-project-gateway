@@ -164,10 +164,17 @@ If auth fails, the request is rejected before gates are evaluated. Gates never r
 ### 1.6 Gate interface
 
 ```typescript
+// A resource that is blocking a gate from passing
+interface BlockingResource {
+  type: 'confirmation_request' | 'knowledge_item';
+  id: string;
+  display: string;            // human-readable description of what's blocking
+}
+
 interface GateResult {
   pass: boolean;
   reason?: string;
-  blocking?: Resource[];
+  blocking?: BlockingResource[];
 }
 
 interface Gate {
@@ -182,6 +189,8 @@ interface GovernanceContext {
   agent_id?: string;
   delegation_chain?: string[];
 }
+
+type ImpactLevel = 'low' | 'medium' | 'high';
 ```
 
 `GovernanceContext` is constructed by the caller (agent runtime or API gateway) from the validated auth token and passed through to every gate in the composition chain. Gates must not mutate the context. The `delegation_chain` field is optional; it is populated only when the actor is operating under a delegated credential.
@@ -269,7 +278,7 @@ Channel-specific rendering:
 ### 2.5 Absent-user handling
 - Default: confirmation expires after TTL. Agent is notified that the action was not approved.
 - Optional escalation: configurable per capability. If primary actor doesn't respond within `escalation_after` (e.g., 10 minutes), the confirmation is re-rendered to a secondary authorized actor.
-- Optional deferred queue: action is saved with status `deferred` for when the user next interacts. Maximum deferred queue depth per session is configurable (default: 1).
+- Optional deferred queue: the expired action is moved to a separate deferred queue (outside the confirmation state machine) for when the user next interacts. The confirmation itself remains in `expired` status. Maximum deferred queue depth per session is configurable (default: 1).
 
 ### 2.6 Integration point
 
