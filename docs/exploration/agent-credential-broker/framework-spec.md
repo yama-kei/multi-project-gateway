@@ -578,16 +578,29 @@ The framework does NOT manage credentials. Its responsibility ends when all gate
 Integration point: the framework provides a `CredentialProvider` interface that adapters implement:
 
 ```typescript
+interface GovernanceDecision {
+  context: GovernanceContext;           // the original governance context (tenant, actor, session)
+  gates_passed: string[];              // gate types that were evaluated and passed
+  audit_event_id: string;              // ID of the gate.evaluated audit event
+  confirmation_id?: string;            // ID of the ConfirmationRequest, if a confirmation gate was involved
+}
+
+interface CredentialProviderResult {
+  success: boolean;
+  data?: unknown;                      // action-specific result (e.g., created event ID)
+  error?: string;                      // error message if success is false
+}
+
 interface CredentialProvider {
-  execute(capability: string, params: Record<string, unknown>, context: GovernanceContext): Promise<Result>;
+  execute(capability: string, params: Record<string, unknown>, decision: GovernanceDecision): Promise<CredentialProviderResult>;
 }
 ```
 
-The `GovernanceContext` carries the governance decision — which gates passed, the audit event ID, and the confirmation ID if a confirmation gate was involved. The credential provider includes this context in its own audit trail, enabling end-to-end tracing from the governance decision to the credential execution.
+The `GovernanceDecision` wraps the original `GovernanceContext` (Section 1.6) and adds the governance outcome — which gates passed, the audit event ID for traceability, and the confirmation ID if applicable. The credential provider includes this decision in its own audit trail, enabling end-to-end tracing from the governance evaluation to the credential execution.
 
 The flow for a credential-dependent capability (e.g., `calendar:write`):
 1. Governance framework evaluates all configured gates.
-2. All gates pass → framework calls `CredentialProvider.execute(...)` with the `GovernanceContext`.
+2. All gates pass → framework constructs a `GovernanceDecision` and calls `CredentialProvider.execute(...)` with it.
 3. Credential provider resolves the token (via Nango, Arcade, or direct OAuth) and executes the action.
 4. Result is returned to the framework, which emits a `confirmation.executed` audit event.
 
@@ -611,10 +624,10 @@ Concrete scenarios showing how the framework solves real problems across the two
 
 1. Discord user asks Claude to `git push origin main`.
 2. mpg's gate engine evaluates the `git:push` capability against its registered gates.
-3. A `confirmation` gate fires → Discord message with Confirm/Cancel buttons is rendered in the originating channel. Gate returns `{ pass: false, reason: "awaiting_confirmation" }` and suspends.
+3. A `confirmation` gate fires → `confirmation.created` audit event emitted → Discord message with Confirm/Cancel buttons is rendered in the originating channel. Gate returns `{ pass: false, reason: "awaiting_confirmation", blocking: [confirmationRequest] }` and suspends.
 4. User clicks Confirm → confirmation protocol transitions to `confirmed` → gate re-evaluates → passes.
 5. Claude executes the push.
-6. Audit events recorded: `gate.evaluated` (pass), `confirmation.resolved` (confirmed), `confirmation.executed`.
+6. Audit events recorded: `confirmation.created`, `gate.evaluated` (pass after confirmation), `confirmation.resolved` (confirmed), `confirmation.executed`.
 
 Without the framework: push happens immediately with no human check. A mistaken or malicious prompt could push directly to `main`.
 
