@@ -2,6 +2,9 @@ import { Client, GatewayIntentBits, Events, ChannelType, type Message, type Text
 import type { Router } from './router.js';
 import type { SessionManager } from './session-manager.js';
 import { findChannelByName, type GatewayConfig } from './config.js';
+import { parseDirective } from './directive-parser.js';
+import type { AgentTracker } from './agent-tracker.js';
+import type { ThreadLinkRegistry } from './thread-links.js';
 
 export function chunkMessage(text: string, limit: number): string[] {
   if (text.length <= limit) return [text];
@@ -58,6 +61,59 @@ function formatTimeSince(timestamp: number): string {
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
   return `${hours}h ${minutes % 60}m ago`;
+}
+
+export type BotMessageResult =
+  | { action: 'ignore' }
+  | { action: 'route-to-session' }
+  | { action: 'cross-post'; targetChannelId: string; content: string; sourceChannelName: string }
+  | { action: 'blocked'; reason: string };
+
+export function handleBotMessage(ctx: {
+  messageId: string;
+  messageContent: string;
+  isAgentMessage: boolean;
+  isCrossPost: boolean;
+  sourceChannelId: string;
+  config: GatewayConfig;
+}): BotMessageResult {
+  if (ctx.isCrossPost) {
+    return { action: 'route-to-session' };
+  }
+
+  if (!ctx.isAgentMessage) {
+    return { action: 'ignore' };
+  }
+
+  const { directive } = parseDirective(ctx.messageContent);
+  if (!directive) {
+    return { action: 'ignore' };
+  }
+
+  // Resolve source channel persona
+  const sourceProject = ctx.config.projects[ctx.sourceChannelId];
+  if (!sourceProject?.persona) {
+    return { action: 'blocked', reason: 'Source channel has no persona configured.' };
+  }
+
+  // Check canMessageChannels (strip # for comparison)
+  const allowed = sourceProject.persona.canMessageChannels.map(c => c.replace(/^#/, '').toLowerCase());
+  if (!allowed.includes(directive.targetChannel.toLowerCase())) {
+    return { action: 'blocked', reason: `Posting to #${directive.targetChannel} is not allowed for this channel.` };
+  }
+
+  // Resolve target channel
+  const target = findChannelByName(ctx.config, directive.targetChannel);
+  if (!target) {
+    return { action: 'blocked', reason: `Channel #${directive.targetChannel} not found in config.` };
+  }
+
+  return {
+    action: 'cross-post',
+    targetChannelId: target.channelId,
+    content: directive.content,
+    sourceChannelName: sourceProject.name,
+  };
 }
 
 export function handleCommand(
@@ -150,7 +206,13 @@ export function handleCommand(
   return null;
 }
 
-export function createDiscordBot(router: Router, sessionManager: SessionManager, config: GatewayConfig): DiscordBot {
+export function createDiscordBot(
+  router: Router,
+  sessionManager: SessionManager,
+  config: GatewayConfig,
+  agentTracker?: AgentTracker,
+  threadLinks?: ThreadLinkRegistry,
+): DiscordBot {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -160,7 +222,119 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
   });
 
   client.on(Events.MessageCreate, async (message: Message) => {
-    if (message.author.bot) return;
+    if (message.author.bot) {
+      if (!agentTracker || !threadLinks) return;
+
+      const isCrossPost = agentTracker.isCrossPost(message.id);
+      const isAgent = agentTracker.isAgentMessage(message.id);
+
+      if (isCrossPost) {
+        // Cross-posted directive content — route to session like a human message
+        const parentId = message.channel.isThread() ? message.channel.parentId ?? undefined : undefined;
+        const resolved = router.resolve(message.channelId, parentId);
+        if (!resolved) return;
+
+        const typingInterval = setInterval(() => {
+          if ('send' in message.channel) (message.channel as TextChannel | ThreadChannel).sendTyping().catch(() => {});
+        }, 7_000);
+        if ('send' in message.channel) (message.channel as TextChannel | ThreadChannel).sendTyping().catch(() => {});
+
+        try {
+          const result = await sessionManager.send(
+            resolved.channelId,
+            resolved.directory,
+            message.content,
+            resolved.isThread ? { worktree: true } : undefined,
+          );
+
+          const chunks = chunkMessage(result.text, 2000);
+          for (const chunk of chunks) {
+            const sent = await (message.channel as TextChannel | ThreadChannel).send(chunk);
+            agentTracker.track(sent.id);
+          }
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          await (message.channel as TextChannel | ThreadChannel).send(
+            `**Error** (${resolved.name}): ${errorMsg.slice(0, 1800)}`,
+          );
+        } finally {
+          clearInterval(typingInterval);
+        }
+        return;
+      }
+
+      if (isAgent) {
+        const parentId = message.channel.isThread() ? message.channel.parentId ?? undefined : undefined;
+        const resolved = router.resolve(message.channelId, parentId);
+        if (!resolved) return;
+
+        const botResult = handleBotMessage({
+          messageId: message.id,
+          messageContent: message.content,
+          isAgentMessage: true,
+          isCrossPost: false,
+          sourceChannelId: resolved.channelId,
+          config,
+        });
+
+        if (botResult.action === 'cross-post') {
+          const maxTurns = config.defaults.maxTurnsPerLink;
+          const sourceThread = message.channelId;
+
+          let existingLink = threadLinks.getLinkedThread(sourceThread);
+          let targetThread: ThreadChannel;
+
+          if (existingLink) {
+            const linkedThreadId = existingLink.sourceThread === sourceThread
+              ? existingLink.targetThread
+              : existingLink.sourceThread;
+
+            if (threadLinks.isOverLimit(sourceThread, linkedThreadId, maxTurns)) {
+              await (message.channel as TextChannel | ThreadChannel).send(
+                `⚠️ Loop limit reached (${maxTurns} turns) — a human message in either thread will reset.`,
+              );
+              return;
+            }
+
+            try {
+              const channel = await message.client.channels.fetch(linkedThreadId);
+              if (channel && 'send' in channel) {
+                targetThread = channel as ThreadChannel;
+              } else {
+                return;
+              }
+            } catch {
+              return;
+            }
+          } else {
+            try {
+              const targetChannel = await message.client.channels.fetch(botResult.targetChannelId);
+              if (!targetChannel || !('threads' in targetChannel)) return;
+              const threadName = `From #${botResult.sourceChannelName}: ${botResult.content.slice(0, 80)}`;
+              targetThread = await (targetChannel as TextChannel).threads.create({
+                name: threadName,
+                autoArchiveDuration: 1440,
+              });
+              threadLinks.link(sourceThread, targetThread.id, botResult.sourceChannelName);
+            } catch {
+              return;
+            }
+          }
+
+          threadLinks.recordTurn(sourceThread, targetThread.id);
+
+          const attributedMessage = `**From #${botResult.sourceChannelName}:**\n${botResult.content}`;
+          const sent = await targetThread.send(attributedMessage);
+          agentTracker.trackCrossPost(sent.id);
+        } else if (botResult.action === 'blocked') {
+          await (message.channel as TextChannel | ThreadChannel).send(`⚠️ ${botResult.reason}`);
+        }
+        return;
+      }
+
+      // Neither agent nor cross-post — gateway status message, ignore
+      return;
+    }
 
     if (!('send' in message.channel)) return;
 
@@ -178,6 +352,14 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
           await message.channel.send(response);
           return;
         }
+      }
+    }
+
+    // Reset loop counter if human message is in a linked thread
+    if (threadLinks && message.channel.isThread()) {
+      const link = threadLinks.getLinkedThread(message.channelId);
+      if (link) {
+        threadLinks.resetPair(link.sourceThread, link.targetThread);
       }
     }
 
@@ -230,7 +412,8 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
 
       const chunks = chunkMessage(result.text, 2000);
       for (const chunk of chunks) {
-        await replyChannel.send(chunk);
+        const sent = await replyChannel.send(chunk);
+        if (agentTracker) agentTracker.track(sent.id);
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);

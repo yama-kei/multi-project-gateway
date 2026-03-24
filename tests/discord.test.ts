@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { chunkMessage, handleCommand } from '../src/discord.js';
+import { chunkMessage, handleCommand, handleBotMessage, type BotMessageResult } from '../src/discord.js';
 import type { GatewayConfig } from '../src/config.js';
 import type { SessionManager } from '../src/session-manager.js';
 
@@ -175,5 +175,107 @@ describe('handleCommand', () => {
     const sm = mockSessionManager();
     const result = handleCommand('!session', testConfig, sm);
     expect(result).toContain('!session <project name>');
+  });
+});
+
+describe('handleBotMessage', () => {
+  const configWithPersonas: GatewayConfig = {
+    defaults: { idleTimeoutMs: 1800000, maxConcurrentSessions: 4, claudeArgs: [], sessionTtlMs: 604800000, maxPersistedSessions: 50, maxTurnsPerLink: 5 },
+    projects: {
+      'ch-pm': { name: 'pm', directory: '/tmp/proj', persona: { systemPrompt: 'PM', canMessageChannels: ['#engineer'], maxDirectivesPerTurn: 1 } },
+      'ch-eng': { name: 'engineer', directory: '/tmp/proj', persona: { systemPrompt: 'Eng', canMessageChannels: ['#pm'], maxDirectivesPerTurn: 1 } },
+    },
+  };
+
+  it('returns "ignore" for messages not in either tracker', () => {
+    const result = handleBotMessage({
+      messageId: 'msg-1',
+      messageContent: 'hello',
+      isAgentMessage: false,
+      isCrossPost: false,
+      sourceChannelId: 'ch-pm',
+      config: configWithPersonas,
+    });
+    expect(result.action).toBe('ignore');
+  });
+
+  it('returns "route-to-session" for cross-post messages', () => {
+    const result = handleBotMessage({
+      messageId: 'msg-1',
+      messageContent: '**From #pm:**\nhello',
+      isAgentMessage: false,
+      isCrossPost: true,
+      sourceChannelId: 'ch-eng',
+      config: configWithPersonas,
+    });
+    expect(result.action).toBe('route-to-session');
+  });
+
+  it('returns "ignore" for agent message with no directive', () => {
+    const result = handleBotMessage({
+      messageId: 'msg-1',
+      messageContent: 'Just a normal response.',
+      isAgentMessage: true,
+      isCrossPost: false,
+      sourceChannelId: 'ch-pm',
+      config: configWithPersonas,
+    });
+    expect(result.action).toBe('ignore');
+  });
+
+  it('returns "cross-post" for agent message with valid directive', () => {
+    const content = 'Analysis done.\n\n---mpg-directive\nPOST_TO: #engineer\nPlease implement this.\n---';
+    const result = handleBotMessage({
+      messageId: 'msg-1',
+      messageContent: content,
+      isAgentMessage: true,
+      isCrossPost: false,
+      sourceChannelId: 'ch-pm',
+      config: configWithPersonas,
+    });
+    expect(result.action).toBe('cross-post');
+    if (result.action === 'cross-post') {
+      expect(result.targetChannelId).toBe('ch-eng');
+      expect(result.content).toBe('Please implement this.');
+      expect(result.sourceChannelName).toBe('pm');
+    }
+  });
+
+  it('returns "blocked" when target not in canMessageChannels', () => {
+    const content = '---mpg-directive\nPOST_TO: #unknown\nhello\n---';
+    const result = handleBotMessage({
+      messageId: 'msg-1',
+      messageContent: content,
+      isAgentMessage: true,
+      isCrossPost: false,
+      sourceChannelId: 'ch-pm',
+      config: configWithPersonas,
+    });
+    expect(result.action).toBe('blocked');
+    if (result.action === 'blocked') {
+      expect(result.reason).toContain('not allowed');
+    }
+  });
+
+  it('returns "blocked" when target channel not found in config', () => {
+    const configOneWay: GatewayConfig = {
+      defaults: { idleTimeoutMs: 1800000, maxConcurrentSessions: 4, claudeArgs: [], sessionTtlMs: 604800000, maxPersistedSessions: 50, maxTurnsPerLink: 5 },
+      projects: {
+        'ch-pm': { name: 'pm', directory: '/tmp/proj', persona: { systemPrompt: 'PM', canMessageChannels: ['#nonexistent'], maxDirectivesPerTurn: 1 } },
+      },
+    };
+    const content = '---mpg-directive\nPOST_TO: #nonexistent\nhello\n---';
+    const result = handleBotMessage({
+      messageId: 'msg-1',
+      messageContent: content,
+      isAgentMessage: true,
+      isCrossPost: false,
+      sourceChannelId: 'ch-pm',
+      config: configOneWay,
+    });
+    expect(result.action).toBe('blocked');
+    if (result.action === 'blocked') {
+      expect(result.reason).toContain('not found');
+    }
   });
 });
