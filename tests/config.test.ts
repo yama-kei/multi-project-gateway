@@ -45,4 +45,70 @@ describe('loadConfig', () => {
     const config = loadConfig(raw as any);
     expect(config.defaults.idleTimeoutMs).toBe(1800000);
   });
+
+  it('loads persona config when present', () => {
+    const raw = {
+      projects: {
+        '123': {
+          name: 'pm',
+          directory: '/tmp/proj',
+          persona: {
+            systemPrompt: 'You are a PM.',
+            canMessageChannels: ['#engineer'],
+            maxDirectivesPerTurn: 2,
+          },
+        },
+      },
+    };
+    const config = loadConfig(raw);
+    expect(config.projects['123'].persona).toEqual({
+      systemPrompt: 'You are a PM.',
+      canMessageChannels: ['#engineer'],
+      maxDirectivesPerTurn: 2,
+    });
+  });
+
+  it('defaults maxDirectivesPerTurn to 1 when persona present but field omitted', () => {
+    const raw = {
+      projects: {
+        '123': {
+          name: 'pm',
+          directory: '/tmp/proj',
+          persona: {
+            systemPrompt: 'You are a PM.',
+            canMessageChannels: ['#engineer'],
+          },
+        },
+      },
+    };
+    const config = loadConfig(raw);
+    expect(config.projects['123'].persona!.maxDirectivesPerTurn).toBe(1);
+  });
+
+  it('leaves persona undefined when not provided', () => {
+    const raw = {
+      projects: {
+        '123': { name: 'Test', directory: '/tmp/test' },
+      },
+    };
+    const config = loadConfig(raw);
+    expect(config.projects['123'].persona).toBeUndefined();
+  });
+
+  it('applies default maxTurnsPerLink', () => {
+    const raw = {
+      projects: { '123': { name: 'Test', directory: '/tmp/test' } },
+    };
+    const config = loadConfig(raw);
+    expect(config.defaults.maxTurnsPerLink).toBe(5);
+  });
+
+  it('reads maxTurnsPerLink from defaults', () => {
+    const raw = {
+      defaults: { maxTurnsPerLink: 10 },
+      projects: { '123': { name: 'Test', directory: '/tmp/test' } },
+    };
+    const config = loadConfig(raw);
+    expect(config.defaults.maxTurnsPerLink).toBe(10);
+  });
 });

@@ -48,11 +48,24 @@ export function loadConfig(raw: unknown): GatewayConfig {
     if (typeof p.directory !== 'string' || !p.directory) {
       throw new Error(`Project for channel ${channelId} must have a "directory" string`);
     }
+    let persona: PersonaConfig | undefined;
+    if (p.persona && typeof p.persona === 'object') {
+      const per = p.persona as Record<string, unknown>;
+      if (typeof per.systemPrompt === 'string' && Array.isArray(per.canMessageChannels)) {
+        persona = {
+          systemPrompt: per.systemPrompt,
+          canMessageChannels: per.canMessageChannels as string[],
+          maxDirectivesPerTurn: typeof per.maxDirectivesPerTurn === 'number' ? per.maxDirectivesPerTurn : 1,
+        };
+      }
+    }
+
     validated[channelId] = {
       name: typeof p.name === 'string' ? p.name : channelId,
       directory: p.directory,
       ...(p.idleTimeoutMs !== undefined && { idleTimeoutMs: Number(p.idleTimeoutMs) }),
       ...(Array.isArray(p.claudeArgs) && { claudeArgs: p.claudeArgs as string[] }),
+      ...(persona && { persona }),
     };
   }
 
@@ -65,6 +78,7 @@ export function loadConfig(raw: unknown): GatewayConfig {
       sessionTtlMs: typeof defaults.sessionTtlMs === 'number' ? defaults.sessionTtlMs : 7 * 24 * 60 * 60 * 1000,
       maxPersistedSessions: typeof defaults.maxPersistedSessions === 'number' ? defaults.maxPersistedSessions : 50,
       claudeArgs: Array.isArray(defaults.claudeArgs) ? (defaults.claudeArgs as string[]) : ['--permission-mode', 'acceptEdits', '--output-format', 'json'],
+      maxTurnsPerLink: typeof defaults.maxTurnsPerLink === 'number' ? defaults.maxTurnsPerLink : 5,
     },
     projects: validated,
   };
