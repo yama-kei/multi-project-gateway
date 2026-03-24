@@ -1,11 +1,13 @@
 import { resolve } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import { config as loadEnv } from 'dotenv';
-import { loadConfig } from './config.js';
+import { loadConfig, type PersonaConfig } from './config.js';
 import { createRouter } from './router.js';
 import { createSessionManager } from './session-manager.js';
 import { createFileSessionStore } from './session-store.js';
 import { createDiscordBot } from './discord.js';
+import { createAgentTracker } from './agent-tracker.js';
+import { createThreadLinkRegistry } from './thread-links.js';
 import { runInit } from './init.js';
 import { runHealthChecks } from './health.js';
 import { reconcileWorktrees } from './worktree.js';
@@ -90,9 +92,18 @@ function start() {
 
   console.log(`Loaded ${projectCount} project(s) from config`);
 
+  const personas = new Map<string, PersonaConfig>();
+  for (const [channelId, project] of Object.entries(config.projects)) {
+    if (project.persona) {
+      personas.set(channelId, project.persona);
+    }
+  }
+
   const router = createRouter(config);
   const sessionStore = createFileSessionStore(resolve(configDir, '.sessions.json'));
-  const sessionManager = createSessionManager(config.defaults, sessionStore);
+  const sessionManager = createSessionManager(config.defaults, sessionStore, personas);
+  const agentTracker = createAgentTracker();
+  const threadLinks = createThreadLinkRegistry();
 
   // Reconcile orphaned worktrees from crashed sessions
   const persistedSessions = sessionStore.load();
@@ -111,7 +122,7 @@ function start() {
     reconcileWorktrees(projectDir, keys);
   }
 
-  const bot = createDiscordBot(router, sessionManager, config);
+  const bot = createDiscordBot(router, sessionManager, config, agentTracker, threadLinks);
 
   function shutdown() {
     console.log('Shutting down...');
