@@ -62,11 +62,17 @@ npm install -g multi-project-gateway
 mpg init
 ```
 
+This creates `.env` and `config.json` in the current directory. To store config centrally in `~/.mpg/` instead (recommended for worktrees and multi-config setups):
+
+```bash
+mpg init --profile default
+```
+
 The init wizard will:
 - Check that `claude` CLI is available
 - Ask for your Discord bot token
 - Walk you through adding projects (name, directory path, channel ID)
-- Generate `config.json` and `.env`
+- Generate `config.json` and `.env` (in CWD or `~/.mpg/profiles/<name>/` when using `--profile`)
 
 Or set up manually by cloning:
 
@@ -106,9 +112,11 @@ Create `config.json`:
 ### 4. Start the gateway
 
 ```bash
-mpg start             # if installed globally
+mpg start                    # if installed globally (uses default profile or CWD)
+mpg start --profile dev      # use a named profile from ~/.mpg/
+mpg start --config /path/to/config.json   # use an explicit config file
 # or
-npm run dev           # development (no build step)
+npm run dev                  # development (no build step)
 # or
 npm run build && npm start   # production
 ```
