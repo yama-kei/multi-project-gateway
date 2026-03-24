@@ -365,6 +365,64 @@ describe('SessionManager', () => {
     });
   });
 
+  describe('persona injection', () => {
+    it('prepends system prompt to user message when persona is provided', async () => {
+      const { runClaude } = await import('../src/claude-cli.js');
+      const mockRun = vi.mocked(runClaude);
+
+      const personas = new Map([
+        ['project-a', {
+          systemPrompt: 'You are a PM.',
+          canMessageChannels: ['#engineer'],
+          maxDirectivesPerTurn: 1,
+        }],
+      ]);
+      const m = createSessionManager(defaults, undefined, personas);
+      await m.send('project-a', '/tmp/a', 'Review the requirements');
+
+      const calledPrompt = mockRun.mock.calls[0][2];
+      expect(calledPrompt).toContain('[SYSTEM]');
+      expect(calledPrompt).toContain('You are a PM.');
+      expect(calledPrompt).toContain('---mpg-directive');
+      expect(calledPrompt).toContain('POST_TO: #channel-name');
+      expect(calledPrompt).toContain('[USER MESSAGE]');
+      expect(calledPrompt).toContain('Review the requirements');
+      m.shutdown();
+    });
+
+    it('includes available channels in directive instructions', async () => {
+      const { runClaude } = await import('../src/claude-cli.js');
+      const mockRun = vi.mocked(runClaude);
+
+      const personas = new Map([
+        ['project-a', {
+          systemPrompt: 'You are a PM.',
+          canMessageChannels: ['#engineer', '#designer'],
+          maxDirectivesPerTurn: 1,
+        }],
+      ]);
+      const m = createSessionManager(defaults, undefined, personas);
+      await m.send('project-a', '/tmp/a', 'Hello');
+
+      const calledPrompt = mockRun.mock.calls[0][2];
+      expect(calledPrompt).toContain('#engineer');
+      expect(calledPrompt).toContain('#designer');
+      m.shutdown();
+    });
+
+    it('does not prepend system prompt when no persona is configured', async () => {
+      const { runClaude } = await import('../src/claude-cli.js');
+      const mockRun = vi.mocked(runClaude);
+
+      const m = createSessionManager(defaults, undefined, new Map());
+      await m.send('project-a', '/tmp/a', 'Hello');
+
+      const calledPrompt = mockRun.mock.calls[0][2];
+      expect(calledPrompt).toBe('Hello');
+      m.shutdown();
+    });
+  });
+
   describe('session pruning', () => {
     it('prunes sessions older than TTL on startup', () => {
       const now = Date.now();

@@ -1,6 +1,7 @@
 import { runClaude, type ClaudeResult } from './claude-cli.js';
 import type { SessionStore, PersistedSession } from './session-store.js';
 import { createWorktree as gitCreateWorktree, removeWorktree as gitRemoveWorktree } from './worktree.js';
+import type { PersonaConfig } from './config.js';
 
 export interface SessionInfo {
   sessionId: string;
@@ -40,7 +41,7 @@ export function createSessionManager(defaults: {
   sessionTtlMs?: number;
   maxPersistedSessions?: number;
   claudeArgs: string[];
-}, store?: SessionStore): SessionManager {
+}, store?: SessionStore, personas?: Map<string, PersonaConfig>): SessionManager {
   const sessions = new Map<string, InternalSession>();
   const sessionTtlMs = defaults.sessionTtlMs ?? 7 * 24 * 60 * 60 * 1000;
   const maxPersistedSessions = defaults.maxPersistedSessions ?? 50;
@@ -125,6 +126,18 @@ export function createSessionManager(defaults: {
     }, defaults.idleTimeoutMs);
   }
 
+  function buildPrompt(projectKey: string, userMessage: string): string {
+    const persona = personas?.get(projectKey);
+    if (!persona) return userMessage;
+
+    const channels = persona.canMessageChannels.join(', ');
+    const directiveInstructions = persona.canMessageChannels.length > 0
+      ? `\n\nTo delegate to another channel (available: ${channels}), end your response with:\n---mpg-directive\nPOST_TO: #channel-name\nyour message here\n---`
+      : '';
+
+    return `[SYSTEM]\n${persona.systemPrompt}${directiveInstructions}\n\n[USER MESSAGE]\n${userMessage}`;
+  }
+
   async function processQueue(session: InternalSession): Promise<void> {
     if (session.processing || session.queue.length === 0) return;
     session.processing = true;
@@ -136,7 +149,7 @@ export function createSessionManager(defaults: {
         const result = await runClaude(
           session.cwd,
           defaults.claudeArgs,
-          item.prompt,
+          buildPrompt(session.projectKey, item.prompt),
           session.sessionId,
         );
         const sessionChanged = !!(
@@ -157,7 +170,7 @@ export function createSessionManager(defaults: {
         if (session.sessionId) {
           session.sessionId = undefined;
           try {
-            const result = await runClaude(session.cwd, defaults.claudeArgs, item.prompt, undefined);
+            const result = await runClaude(session.cwd, defaults.claudeArgs, buildPrompt(session.projectKey, item.prompt), undefined);
             session.sessionId = result.sessionId || undefined;
             session.lastActivity = Date.now();
             resetIdleTimer(session);
