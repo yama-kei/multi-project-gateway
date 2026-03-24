@@ -222,3 +222,9 @@ The core message handler gets a second code path for bot messages.
 | `tests/thread-links.test.ts` | Link creation, turn counting, reset on human message, over-limit |
 | `tests/agent-tracker.test.ts` | Track, check, one-time delete |
 | Updated `tests/discord.test.ts` | Bot message routing paths |
+
+## 8. Implementation Notes
+
+- **Persona config passing:** Persona config is passed to `createSessionManager` at construction time (alongside existing `defaults`). The session manager looks up the persona for a given `projectKey` and prepends the system prompt internally. This avoids changing the `send()` signature.
+- **Channel name reverse lookup:** A helper function (e.g. `findChannelByName` in `config.ts` or `router.ts`) is needed to resolve a project name like "engineer" to its channel ID. The existing `findProjectByName` in `discord.ts` does this already — extract and reuse it.
+- **Message ID tracking ordering:** `track()` is called synchronously on the `Message` object returned by `channel.send()`. The `MessageCreate` event for the bot's own message fires asynchronously after the API response, so `track()` will always execute first. No race condition in practice.
