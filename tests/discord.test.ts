@@ -57,6 +57,20 @@ describe('chunkMessage', () => {
   });
 });
 
+const configWithAgents: GatewayConfig = {
+  defaults: { idleTimeoutMs: 1800000, maxConcurrentSessions: 4, claudeArgs: [], sessionTtlMs: 604800000, maxPersistedSessions: 50, maxTurnsPerAgent: 5 },
+  projects: {
+    'ch-1': {
+      name: 'my-app',
+      directory: '/tmp/app',
+      agents: {
+        pm: { role: 'Product Manager', prompt: 'You manage requirements.' },
+        engineer: { role: 'Engineer', prompt: 'You write code.' },
+      },
+    },
+  },
+};
+
 describe('handleCommand', () => {
   it('returns null for non-command messages', () => {
     const sm = mockSessionManager();
@@ -175,5 +189,53 @@ describe('handleCommand', () => {
     const sm = mockSessionManager();
     const result = handleCommand('!session', testConfig, sm);
     expect(result).toContain('!session <project name>');
+  });
+
+  it('lists agents with !agents in a project with agents', () => {
+    const sm = mockSessionManager();
+    const result = handleCommand('!agents', configWithAgents, sm, {
+      channelId: 'ch-1',
+      projectName: 'my-app',
+      isThread: false,
+    });
+    expect(result).toContain('my-app');
+    expect(result).toContain('@pm');
+    expect(result).toContain('Product Manager');
+    expect(result).toContain('@engineer');
+    expect(result).toContain('Engineer');
+  });
+
+  it('lists agents with !agents from a thread (thread channelId differs from project key)', () => {
+    const sm = mockSessionManager();
+    const result = handleCommand('!agents', configWithAgents, sm, {
+      channelId: 'thread-123',
+      projectName: 'my-app',
+      isThread: true,
+    });
+    expect(result).toContain('my-app');
+    expect(result).toContain('@pm');
+    expect(result).toContain('@engineer');
+  });
+
+  it('returns no agents message for project without agents', () => {
+    const sm = mockSessionManager();
+    const result = handleCommand('!agents', testConfig, sm, {
+      channelId: 'ch-1',
+      projectName: 'Alpha',
+      isThread: false,
+    });
+    expect(result).toContain('No agents configured');
+  });
+
+  it('returns usage hint for !agents without context', () => {
+    const sm = mockSessionManager();
+    const result = handleCommand('!agents', configWithAgents, sm);
+    expect(result).toContain('!agents');
+  });
+
+  it('includes !agents in !help output', () => {
+    const sm = mockSessionManager();
+    const result = handleCommand('!help', testConfig, sm);
+    expect(result).toContain('!agents');
   });
 });

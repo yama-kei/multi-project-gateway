@@ -142,6 +142,20 @@ export function handleCommand(
     return `**${project.name}** — no active session to restart.`;
   }
 
+  if (cmd === '!agents') {
+    if (!context) return 'Run `!agents` in a project channel or thread.';
+    // context.channelId may be a thread ID; look up the project by name
+    const match = findProjectByName(config, context.projectName);
+    const project = match ? config.projects[match.channelId] : undefined;
+    if (!project?.agents || Object.keys(project.agents).length === 0) {
+      return `**${context.projectName}** — No agents configured. Messages go to the default session.`;
+    }
+    const lines = Object.entries(project.agents).map(([name, agent]) =>
+      `- \`@${name}\` — ${agent.role}`
+    );
+    return `**${context.projectName} agents**\n${lines.join('\n')}\n\nMention an agent to dispatch: \`@pm review this\``;
+  }
+
   if (cmd === '!help') {
     return [
       '**Gateway commands**',
@@ -149,6 +163,7 @@ export function handleCommand(
       '`!session` — show session for the current thread (or use `!session <name>`)',
       '`!restart <name>` — reset a session (fresh context, keeps worktree)',
       '`!kill <name>` — force-close a project session',
+      '`!agents` — list available agents for the current project',
       '`!help` — show this message',
     ].join('\n');
   }
