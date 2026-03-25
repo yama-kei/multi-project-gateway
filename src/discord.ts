@@ -225,9 +225,11 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
           name: message.content.slice(0, 100) || 'Claude response',
           autoArchiveDuration: 1440,
         });
-      } catch {
-        // Thread creation may fail (permissions, channel type) — fall back to channel
-        replyChannel = message.channel as TextChannel;
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error(`Failed to create thread in ${resolved.name}: ${errMsg}`);
+        await message.reply('⚠️ Could not create a thread — check bot permissions (Create Public Threads).');
+        return;
       }
     }
 
