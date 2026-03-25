@@ -17,7 +17,8 @@ export function parseAgentMention(
   const agentNames = Object.keys(agents);
   if (agentNames.length === 0) return null;
 
-  const pattern = new RegExp(`@(${agentNames.join('|')})\\b`, 'i');
+  const escaped = agentNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const pattern = new RegExp(`@(${escaped.join('|')})\\b`, 'i');
   const match = text.match(pattern);
   if (!match) return null;
 
