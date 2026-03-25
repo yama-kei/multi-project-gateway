@@ -24,6 +24,7 @@ const defaults = {
   maxConcurrentSessions: 2,
   claudeArgs: ['--permission-mode', 'acceptEdits', '--output-format', 'json'],
   maxTurnsPerAgent: 5,
+  agentTimeoutMs: 180000,
 };
 
 function createMockStore(initial: PersistedSession[] = []): SessionStore & { saved: Map<string, PersistedSession> | null } {
@@ -216,6 +217,7 @@ describe('SessionManager', () => {
       'hello',
       undefined,
       'You are a PM.',
+      undefined,
     );
     sm.shutdown();
   });
@@ -269,7 +271,7 @@ describe('SessionManager', () => {
       const m = createSessionManager(defaults, store);
 
       await m.send('proj-a', '/tmp/a', 'Continue');
-      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Continue', 'old-sid', undefined);
+      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Continue', 'old-sid', undefined, undefined);
       m.shutdown();
     });
 
@@ -308,7 +310,7 @@ describe('SessionManager', () => {
       mockRun.mockResolvedValueOnce({ text: 'Resumed', sessionId: 'sid-1', isError: false });
       const result = await m.send('proj-a', '/tmp/a', 'Back again');
       expect(result.text).toBe('Resumed');
-      expect(mockRun).toHaveBeenLastCalledWith('/tmp/a', defaults.claudeArgs, 'Back again', 'sid-1', undefined);
+      expect(mockRun).toHaveBeenLastCalledWith('/tmp/a', defaults.claudeArgs, 'Back again', 'sid-1', undefined, undefined);
       m.shutdown();
     });
   });
@@ -329,6 +331,7 @@ describe('SessionManager', () => {
         '/tmp/a/.worktrees/thread-1',
         defaults.claudeArgs,
         'Hello',
+        undefined,
         undefined,
         undefined,
       );
@@ -355,7 +358,7 @@ describe('SessionManager', () => {
       await manager.send('project-a', '/tmp/a', 'Hello');
 
       expect(mockCreate).not.toHaveBeenCalled();
-      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Hello', undefined, undefined);
+      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Hello', undefined, undefined, undefined);
     });
 
     it('removes worktree on clearSession', async () => {

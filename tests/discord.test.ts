@@ -6,7 +6,7 @@ import { parseAgentMention } from '../src/agent-dispatch.js';
 import { createTurnCounter } from '../src/turn-counter.js';
 
 const testConfig: GatewayConfig = {
-  defaults: { idleTimeoutMs: 1800000, maxConcurrentSessions: 4, claudeArgs: [], sessionTtlMs: 604800000, maxPersistedSessions: 50, maxTurnsPerAgent: 5 },
+  defaults: { idleTimeoutMs: 1800000, maxConcurrentSessions: 4, claudeArgs: [], sessionTtlMs: 604800000, maxPersistedSessions: 50, maxTurnsPerAgent: 5, agentTimeoutMs: 180000 },
   projects: {
     'ch-1': { name: 'Alpha', directory: '/tmp/alpha' },
     'ch-2': { name: 'Beta', directory: '/tmp/beta' },
@@ -60,7 +60,7 @@ describe('chunkMessage', () => {
 });
 
 const configWithAgents: GatewayConfig = {
-  defaults: { idleTimeoutMs: 1800000, maxConcurrentSessions: 4, claudeArgs: [], sessionTtlMs: 604800000, maxPersistedSessions: 50, maxTurnsPerAgent: 5 },
+  defaults: { idleTimeoutMs: 1800000, maxConcurrentSessions: 4, claudeArgs: [], sessionTtlMs: 604800000, maxPersistedSessions: 50, maxTurnsPerAgent: 5, agentTimeoutMs: 180000 },
   projects: {
     'ch-1': {
       name: 'my-app',

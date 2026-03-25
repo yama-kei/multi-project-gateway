@@ -308,12 +308,22 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
           console.log(`[handoff] thread=${replyChannel.id} sending to ${handoff.agentName} (key=${handoffKey}, prompt length=${responseText.length})`);
           const sendStart = Date.now();
 
-          const handoffResult = await sessionManager.send(
-            handoffKey,
-            resolved.directory,
-            responseText,
-            { worktree: resolved.isThread ? true : undefined, systemPrompt: handoffPrompt },
-          );
+          let handoffResult;
+          try {
+            handoffResult = await sessionManager.send(
+              handoffKey,
+              resolved.directory,
+              responseText,
+              { worktree: resolved.isThread ? true : undefined, systemPrompt: handoffPrompt, timeoutMs: config.defaults.agentTimeoutMs },
+            );
+          } catch (handoffErr) {
+            const msg = handoffErr instanceof Error ? handoffErr.message : String(handoffErr);
+            console.log(`[handoff] thread=${replyChannel.id} ${handoff.agentName} failed: ${msg}`);
+            await replyChannel.send(
+              `⚠️ Agent \`@${handoff.agentName}\` failed: ${msg.slice(0, 1800)}`
+            );
+            break;
+          }
 
           const elapsed = ((Date.now() - sendStart) / 1000).toFixed(1);
           console.log(`[handoff] thread=${replyChannel.id} ${handoff.agentName} responded in ${elapsed}s (${handoffResult.text.length} chars)`);

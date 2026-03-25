@@ -92,6 +92,19 @@ describe('loadConfig', () => {
     expect(agents.PM).toBeUndefined();
   });
 
+  it('loads agentTimeoutMs default (3 minutes)', () => {
+    const config = loadConfig({ projects: { 'ch-1': { directory: '/tmp/a' } } });
+    expect(config.defaults.agentTimeoutMs).toBe(180000);
+  });
+
+  it('overrides agentTimeoutMs from config', () => {
+    const config = loadConfig({
+      defaults: { agentTimeoutMs: 60000 },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.defaults.agentTimeoutMs).toBe(60000);
+  });
+
   it('applies default idleTimeoutMs when not specified', () => {
     const raw = {
       defaults: { maxConcurrentSessions: 4, claudeArgs: [] },
