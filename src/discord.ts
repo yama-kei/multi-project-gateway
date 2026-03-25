@@ -289,7 +289,11 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
           if (!handoff || handoff.agentName === currentAgentName) break;
 
           turnCounter.increment(replyChannel.id);
+          const turn = turnCounter.getTurns(replyChannel.id);
+          console.log(`[handoff] thread=${replyChannel.id} turn=${turn}/${maxTurns} ${currentAgentName ?? 'user'} → ${handoff.agentName}`);
+
           if (turnCounter.isOverLimit(replyChannel.id, maxTurns)) {
+            console.log(`[handoff] thread=${replyChannel.id} turn limit reached, stopping`);
             await replyChannel.send(
               `⚠️ Agent turn limit reached (${maxTurns}) — send a message to reset.`
             );
@@ -301,12 +305,18 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
 
           replyChannel.sendTyping().catch(() => {});
 
+          console.log(`[handoff] thread=${replyChannel.id} sending to ${handoff.agentName} (key=${handoffKey}, prompt length=${responseText.length})`);
+          const sendStart = Date.now();
+
           const handoffResult = await sessionManager.send(
             handoffKey,
             resolved.directory,
             responseText,
             { worktree: resolved.isThread ? true : undefined, systemPrompt: handoffPrompt },
           );
+
+          const elapsed = ((Date.now() - sendStart) / 1000).toFixed(1);
+          console.log(`[handoff] thread=${replyChannel.id} ${handoff.agentName} responded in ${elapsed}s (${handoffResult.text.length} chars)`);
 
           const handoffChunks = chunkMessage(handoffResult.text, 2000);
           for (const chunk of handoffChunks) {
