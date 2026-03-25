@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { parseClaudeJsonOutput, buildClaudeArgs, friendlyError } from '../src/claude-cli.js';
+import { parseClaudeJsonOutput, buildClaudeArgs, friendlyError, runClaude } from '../src/claude-cli.js';
 
 describe('parseClaudeJsonOutput', () => {
   it('extracts result text and session_id from JSON output', () => {
@@ -57,6 +57,17 @@ describe('buildClaudeArgs', () => {
       'Now add tests',
     ]);
   });
+
+  it('includes --append-system-prompt when provided', () => {
+    const args = buildClaudeArgs([], 'hello', undefined, 'You are a PM.');
+    expect(args).toContain('--append-system-prompt');
+    expect(args[args.indexOf('--append-system-prompt') + 1]).toBe('You are a PM.');
+  });
+
+  it('omits --append-system-prompt when not provided', () => {
+    const args = buildClaudeArgs([], 'hello', undefined);
+    expect(args).not.toContain('--append-system-prompt');
+  });
 });
 
 describe('friendlyError', () => {
@@ -89,4 +100,12 @@ describe('friendlyError', () => {
     expect(msg).toContain('Claude error:');
     expect(msg).toContain('something unexpected happened');
   });
+});
+
+describe('runClaude timeout', () => {
+  it('rejects with timeout error when CLI process hangs', async () => {
+    // Use 'sleep' as a stand-in for a hanging claude process
+    const result = runClaude('/tmp', [], 'test', undefined, undefined, 200);
+    await expect(result).rejects.toThrow(/timed out/i);
+  }, 5_000);
 });

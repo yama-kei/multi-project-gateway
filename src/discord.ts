@@ -2,6 +2,8 @@ import { Client, GatewayIntentBits, Events, ChannelType, type Message, type Text
 import type { Router } from './router.js';
 import type { SessionManager } from './session-manager.js';
 import type { GatewayConfig } from './config.js';
+import { parseAgentMention } from './agent-dispatch.js';
+import type { TurnCounter } from './turn-counter.js';
 
 export function chunkMessage(text: string, limit: number): string[] {
   if (text.length <= limit) return [text];
@@ -142,6 +144,20 @@ export function handleCommand(
     return `**${project.name}** — no active session to restart.`;
   }
 
+  if (cmd === '!agents') {
+    if (!context) return 'Run `!agents` in a project channel or thread.';
+    // context.channelId may be a thread ID; look up the project by name
+    const match = findProjectByName(config, context.projectName);
+    const project = match ? config.projects[match.channelId] : undefined;
+    if (!project?.agents || Object.keys(project.agents).length === 0) {
+      return `**${context.projectName}** — No agents configured. Messages go to the default session.`;
+    }
+    const lines = Object.entries(project.agents).map(([name, agent]) =>
+      `- \`@${name}\` — ${agent.role}`
+    );
+    return `**${context.projectName} agents**\n${lines.join('\n')}\n\nMention an agent to dispatch: \`@pm review this\``;
+  }
+
   if (cmd === '!help') {
     return [
       '**Gateway commands**',
@@ -149,6 +165,7 @@ export function handleCommand(
       '`!session` — show session for the current thread (or use `!session <name>`)',
       '`!restart <name>` — reset a session (fresh context, keeps worktree)',
       '`!kill <name>` — force-close a project session',
+      '`!agents` — list available agents for the current project',
       '`!help` — show this message',
     ].join('\n');
   }
@@ -156,7 +173,7 @@ export function handleCommand(
   return null;
 }
 
-export function createDiscordBot(router: Router, sessionManager: SessionManager, config: GatewayConfig): DiscordBot {
+export function createDiscordBot(router: Router, sessionManager: SessionManager, config: GatewayConfig, turnCounter?: TurnCounter): DiscordBot {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -208,9 +225,11 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
           name: message.content.slice(0, 100) || 'Claude response',
           autoArchiveDuration: 1440,
         });
-      } catch {
-        // Thread creation may fail (permissions, channel type) — fall back to channel
-        replyChannel = message.channel as TextChannel;
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error(`Failed to create thread in ${resolved.name}: ${errMsg}`);
+        await message.reply('⚠️ Could not create a thread — check bot permissions (Create Public Threads).');
+        return;
       }
     }
 
@@ -220,12 +239,34 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
     }, 7_000);
     replyChannel.sendTyping().catch(() => {});
 
+    // Look up agents for the project (use parent channel ID for threads)
+    const projectChannelId = parentId || resolved.channelId;
+    const project = config.projects[projectChannelId];
+    const agents = project?.agents;
+
+    // Reset turn counter on human messages
+    if (turnCounter) turnCounter.reset(replyChannel.id);
+
+    // Check for @agent mention
+    const mention = agents ? parseAgentMention(message.content, agents) : null;
+
+    // Build session key and system prompt
+    const sessionKey = mention
+      ? `${resolved.channelId}:${mention.agentName}`
+      : resolved.channelId;
+    const systemPrompt = mention
+      ? `Your role: ${mention.agent.role}\n\n${mention.agent.prompt}`
+      : undefined;
+
     try {
       const result = await sessionManager.send(
-        resolved.channelId,
+        sessionKey,
         resolved.directory,
-        message.content,
-        resolved.isThread ? { worktree: true } : undefined,
+        mention ? mention.prompt : message.content,
+        {
+          worktree: resolved.isThread ? true : undefined,
+          systemPrompt,
+        },
       );
 
       if (result.sessionReset) {
@@ -237,6 +278,66 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
       const chunks = chunkMessage(result.text, 2000);
       for (const chunk of chunks) {
         await replyChannel.send(chunk);
+      }
+
+      // Auto-handoff loop: check if agent response mentions another agent
+      if (agents && turnCounter) {
+        let responseText = result.text;
+        let currentAgentName = mention?.agentName;
+        const maxTurns = config.defaults.maxTurnsPerAgent;
+
+        while (true) {
+          const handoff = parseAgentMention(responseText, agents);
+          if (!handoff || handoff.agentName === currentAgentName) break;
+
+          turnCounter.increment(replyChannel.id);
+          const turn = turnCounter.getTurns(replyChannel.id);
+          console.log(`[handoff] thread=${replyChannel.id} turn=${turn}/${maxTurns} ${currentAgentName ?? 'user'} → ${handoff.agentName}`);
+
+          if (turnCounter.isOverLimit(replyChannel.id, maxTurns)) {
+            console.log(`[handoff] thread=${replyChannel.id} turn limit reached, stopping`);
+            await replyChannel.send(
+              `⚠️ Agent turn limit reached (${maxTurns}) — send a message to reset.`
+            );
+            break;
+          }
+
+          const handoffKey = `${resolved.channelId}:${handoff.agentName}`;
+          const handoffPrompt = `Your role: ${handoff.agent.role}\n\n${handoff.agent.prompt}`;
+
+          replyChannel.sendTyping().catch(() => {});
+
+          console.log(`[handoff] thread=${replyChannel.id} sending to ${handoff.agentName} (key=${handoffKey}, prompt length=${responseText.length})`);
+          const sendStart = Date.now();
+
+          let handoffResult;
+          try {
+            handoffResult = await sessionManager.send(
+              handoffKey,
+              resolved.directory,
+              responseText,
+              { worktree: resolved.isThread ? true : undefined, systemPrompt: handoffPrompt, timeoutMs: config.defaults.agentTimeoutMs },
+            );
+          } catch (handoffErr) {
+            const msg = handoffErr instanceof Error ? handoffErr.message : String(handoffErr);
+            console.log(`[handoff] thread=${replyChannel.id} ${handoff.agentName} failed: ${msg}`);
+            await replyChannel.send(
+              `⚠️ Agent \`@${handoff.agentName}\` failed: ${msg.slice(0, 1800)}`
+            );
+            break;
+          }
+
+          const elapsed = ((Date.now() - sendStart) / 1000).toFixed(1);
+          console.log(`[handoff] thread=${replyChannel.id} ${handoff.agentName} responded in ${elapsed}s (${handoffResult.text.length} chars)`);
+
+          const handoffChunks = chunkMessage(handoffResult.text, 2000);
+          for (const chunk of handoffChunks) {
+            await replyChannel.send(chunk);
+          }
+
+          responseText = handoffResult.text;
+          currentAgentName = handoff.agentName;
+        }
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);

@@ -6,6 +6,7 @@ import { createRouter } from './router.js';
 import { createSessionManager } from './session-manager.js';
 import { createFileSessionStore } from './session-store.js';
 import { createDiscordBot } from './discord.js';
+import { createTurnCounter } from './turn-counter.js';
 import { runInit } from './init.js';
 import { runHealthChecks } from './health.js';
 import { reconcileWorktrees } from './worktree.js';
@@ -133,7 +134,8 @@ function start() {
     reconcileWorktrees(projectDir, keys);
   }
 
-  const bot = createDiscordBot(router, sessionManager, config);
+  const turnCounter = createTurnCounter();
+  const bot = createDiscordBot(router, sessionManager, config, turnCounter);
 
   function shutdown() {
     console.log('Shutting down...');

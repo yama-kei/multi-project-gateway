@@ -1,20 +1,28 @@
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 const WORKTREE_DIR = '.worktrees';
 const BRANCH_PREFIX = 'mpg/';
 const TIMEOUT = 10_000;
 
+/** Sanitize project key for use in filesystem paths and git branch names. */
+function sanitizeKey(key: string): string {
+  return key.replace(/:/g, '-');
+}
+
 export function worktreePath(projectDir: string, projectKey: string): string {
-  return join(projectDir, WORKTREE_DIR, projectKey);
+  return join(projectDir, WORKTREE_DIR, sanitizeKey(projectKey));
 }
 
 export function createWorktree(projectDir: string, projectKey: string): string {
-  if (!/^[\w-]+$/.test(projectKey)) {
+  const safeKey = sanitizeKey(projectKey);
+  if (!/^[\w-]+$/.test(safeKey)) {
     throw new Error(`Invalid projectKey for worktree: ${projectKey}`);
   }
   const wtPath = worktreePath(projectDir, projectKey);
-  const branch = `${BRANCH_PREFIX}${projectKey}`;
+  if (existsSync(wtPath)) return wtPath;
+  const branch = `${BRANCH_PREFIX}${safeKey}`;
   try {
     execFileSync('git', ['worktree', 'add', '-b', branch, wtPath], {
       cwd: projectDir,
@@ -81,11 +89,12 @@ export function listWorktrees(projectDir: string): WorktreeInfo[] {
 
 export function reconcileWorktrees(projectDir: string, knownKeys: Set<string>): void {
   const worktrees = listWorktrees(projectDir);
+  const sanitizedKnown = new Set([...knownKeys].map(sanitizeKey));
   let removed = 0;
   for (const wt of worktrees) {
     if (!wt.branch.startsWith(`refs/heads/${BRANCH_PREFIX}`)) continue;
     const key = wt.branch.slice(`refs/heads/${BRANCH_PREFIX}`.length);
-    if (!knownKeys.has(key)) {
+    if (!sanitizedKnown.has(key)) {
       removeWorktree(projectDir, key);
       removed++;
     }

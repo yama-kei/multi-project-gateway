@@ -1,14 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as cp from 'node:child_process';
+import * as fs from 'node:fs';
 
 vi.mock('node:child_process');
+vi.mock('node:fs');
 
 const mockExecFileSync = vi.mocked(cp.execFileSync);
+const mockExistsSync = vi.mocked(fs.existsSync);
 
 import { createWorktree, removeWorktree, listWorktrees, reconcileWorktrees } from '../src/worktree.js';
 
 describe('createWorktree', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExistsSync.mockReturnValue(false);
+  });
+
+  it('returns early if worktree path already exists', () => {
+    mockExistsSync.mockReturnValue(true);
+    const result = createWorktree('/repo', 'thread-abc');
+    expect(result).toBe('/repo/.worktrees/thread-abc');
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
 
   it('runs git worktree add with branch named after projectKey', () => {
     mockExecFileSync.mockReturnValue(Buffer.from(''));
@@ -43,6 +56,17 @@ describe('createWorktree', () => {
   it('rejects invalid projectKey characters', () => {
     expect(() => createWorktree('/repo', '../escape')).toThrow('Invalid projectKey');
     expect(() => createWorktree('/repo', 'foo/bar')).toThrow('Invalid projectKey');
+  });
+
+  it('sanitizes colon in agent session keys to dash', () => {
+    mockExecFileSync.mockReturnValue(Buffer.from(''));
+    const result = createWorktree('/repo', '1234567890:engineer');
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'git',
+      ['worktree', 'add', '-b', 'mpg/1234567890-engineer', '/repo/.worktrees/1234567890-engineer'],
+      { cwd: '/repo', timeout: 10000 },
+    );
+    expect(result).toBe('/repo/.worktrees/1234567890-engineer');
   });
 });
 
@@ -109,6 +133,22 @@ describe('reconcileWorktrees', () => {
       expect.any(Object),
     );
     expect(mockExecFileSync).toHaveBeenCalledTimes(2); // list + 1 remove
+  });
+
+  it('matches agent session keys with sanitized branch names', () => {
+    mockExecFileSync
+      .mockReturnValueOnce(Buffer.from(
+        'worktree /repo\nHEAD abc\nbranch refs/heads/main\n\n' +
+        'worktree /repo/.worktrees/1234-pm\nHEAD def\nbranch refs/heads/mpg/1234-pm\n\n' +
+        'worktree /repo/.worktrees/1234-engineer\nHEAD ghi\nbranch refs/heads/mpg/1234-engineer\n\n'
+      ))
+      .mockReturnValue(Buffer.from(''));
+
+    // Keys with colons should match branches with dashes
+    reconcileWorktrees('/repo', new Set(['1234:pm', '1234:engineer']));
+
+    // Should not remove either — both are known after sanitization
+    expect(mockExecFileSync).toHaveBeenCalledTimes(1); // list only
   });
 
   it('does nothing when all worktrees are known', () => {

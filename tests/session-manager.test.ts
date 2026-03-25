@@ -23,6 +23,8 @@ const defaults = {
   idleTimeoutMs: 500,
   maxConcurrentSessions: 2,
   claudeArgs: ['--permission-mode', 'acceptEdits', '--output-format', 'json'],
+  maxTurnsPerAgent: 5,
+  agentTimeoutMs: 180000,
 };
 
 function createMockStore(initial: PersistedSession[] = []): SessionStore & { saved: Map<string, PersistedSession> | null } {
@@ -203,6 +205,23 @@ describe('SessionManager', () => {
     expect(manager.clearSession('no-such-project')).toBe(false);
   });
 
+  it('passes system prompt to runClaude', async () => {
+    const { runClaude } = await import('../src/claude-cli.js');
+    const mockRun = vi.mocked(runClaude);
+
+    const sm = createSessionManager(defaults, undefined);
+    await sm.send('proj-1', '/tmp/proj', 'hello', { systemPrompt: 'You are a PM.' });
+    expect(mockRun).toHaveBeenCalledWith(
+      '/tmp/proj',
+      defaults.claudeArgs,
+      'hello',
+      undefined,
+      'You are a PM.',
+      undefined,
+    );
+    sm.shutdown();
+  });
+
   it('lists active sessions', async () => {
     await manager.send('project-a', '/tmp/a', 'Hello');
     await manager.send('project-b', '/tmp/b', 'Hello');
@@ -252,7 +271,7 @@ describe('SessionManager', () => {
       const m = createSessionManager(defaults, store);
 
       await m.send('proj-a', '/tmp/a', 'Continue');
-      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Continue', 'old-sid');
+      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Continue', 'old-sid', undefined, undefined);
       m.shutdown();
     });
 
@@ -291,7 +310,7 @@ describe('SessionManager', () => {
       mockRun.mockResolvedValueOnce({ text: 'Resumed', sessionId: 'sid-1', isError: false });
       const result = await m.send('proj-a', '/tmp/a', 'Back again');
       expect(result.text).toBe('Resumed');
-      expect(mockRun).toHaveBeenLastCalledWith('/tmp/a', defaults.claudeArgs, 'Back again', 'sid-1');
+      expect(mockRun).toHaveBeenLastCalledWith('/tmp/a', defaults.claudeArgs, 'Back again', 'sid-1', undefined, undefined);
       m.shutdown();
     });
   });
@@ -312,6 +331,8 @@ describe('SessionManager', () => {
         '/tmp/a/.worktrees/thread-1',
         defaults.claudeArgs,
         'Hello',
+        undefined,
+        undefined,
         undefined,
       );
     });
@@ -337,7 +358,7 @@ describe('SessionManager', () => {
       await manager.send('project-a', '/tmp/a', 'Hello');
 
       expect(mockCreate).not.toHaveBeenCalled();
-      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Hello', undefined);
+      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Hello', undefined, undefined, undefined);
     });
 
     it('removes worktree on clearSession', async () => {

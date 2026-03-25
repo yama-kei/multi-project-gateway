@@ -21,10 +21,14 @@ export function buildClaudeArgs(
   baseArgs: string[],
   prompt: string,
   sessionId: string | undefined,
+  systemPrompt?: string,
 ): string[] {
   const args = ['--print', ...baseArgs];
   if (sessionId) {
     args.push('--resume', sessionId);
+  }
+  if (systemPrompt) {
+    args.push('--append-system-prompt', systemPrompt);
   }
   args.push(prompt);
   return args;
@@ -47,14 +51,18 @@ export function friendlyError(stderr: string): string {
   return `Claude error: ${stderr.slice(0, 500)}`;
 }
 
+const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
 export function runClaude(
   cwd: string,
   baseArgs: string[],
   prompt: string,
   sessionId: string | undefined,
+  systemPrompt?: string,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<ClaudeResult> {
   return new Promise((resolve, reject) => {
-    const args = buildClaudeArgs(baseArgs, prompt, sessionId);
+    const args = buildClaudeArgs(baseArgs, prompt, sessionId, systemPrompt);
     const proc = spawn('claude', args, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -62,6 +70,15 @@ export function runClaude(
 
     let stdout = '';
     let stderr = '';
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        proc.kill('SIGTERM');
+        reject(new Error(`Claude CLI timed out after ${timeoutMs / 1000}s`));
+      }
+    }, timeoutMs);
 
     proc.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
@@ -72,6 +89,9 @@ export function runClaude(
     });
 
     proc.on('close', (code) => {
+      clearTimeout(timer);
+      if (settled) return;
+      settled = true;
       if (code !== 0) {
         reject(new Error(friendlyError(stderr)));
         return;
@@ -85,6 +105,9 @@ export function runClaude(
     });
 
     proc.on('error', (err) => {
+      clearTimeout(timer);
+      if (settled) return;
+      settled = true;
       reject(new Error(`Failed to spawn claude: ${err.message}`));
     });
   });

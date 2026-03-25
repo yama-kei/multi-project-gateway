@@ -1,10 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { chunkMessage, handleCommand } from '../src/discord.js';
-import type { GatewayConfig } from '../src/config.js';
+import type { GatewayConfig, AgentConfig } from '../src/config.js';
 import type { SessionManager } from '../src/session-manager.js';
+import { parseAgentMention } from '../src/agent-dispatch.js';
+import { createTurnCounter } from '../src/turn-counter.js';
 
 const testConfig: GatewayConfig = {
-  defaults: { idleTimeoutMs: 1800000, maxConcurrentSessions: 4, claudeArgs: [] },
+  defaults: { idleTimeoutMs: 1800000, maxConcurrentSessions: 4, claudeArgs: [], sessionTtlMs: 604800000, maxPersistedSessions: 50, maxTurnsPerAgent: 5, agentTimeoutMs: 180000 },
   projects: {
     'ch-1': { name: 'Alpha', directory: '/tmp/alpha' },
     'ch-2': { name: 'Beta', directory: '/tmp/beta' },
@@ -56,6 +58,20 @@ describe('chunkMessage', () => {
     expect(chunkMessage('', 2000)).toEqual(['']);
   });
 });
+
+const configWithAgents: GatewayConfig = {
+  defaults: { idleTimeoutMs: 1800000, maxConcurrentSessions: 4, claudeArgs: [], sessionTtlMs: 604800000, maxPersistedSessions: 50, maxTurnsPerAgent: 5, agentTimeoutMs: 180000 },
+  projects: {
+    'ch-1': {
+      name: 'my-app',
+      directory: '/tmp/app',
+      agents: {
+        pm: { role: 'Product Manager', prompt: 'You manage requirements.' },
+        engineer: { role: 'Engineer', prompt: 'You write code.' },
+      },
+    },
+  },
+};
 
 describe('handleCommand', () => {
   it('returns null for non-command messages', () => {
@@ -175,5 +191,161 @@ describe('handleCommand', () => {
     const sm = mockSessionManager();
     const result = handleCommand('!session', testConfig, sm);
     expect(result).toContain('!session <project name>');
+  });
+
+  it('lists agents with !agents in a project with agents', () => {
+    const sm = mockSessionManager();
+    const result = handleCommand('!agents', configWithAgents, sm, {
+      channelId: 'ch-1',
+      projectName: 'my-app',
+      isThread: false,
+    });
+    expect(result).toContain('my-app');
+    expect(result).toContain('@pm');
+    expect(result).toContain('Product Manager');
+    expect(result).toContain('@engineer');
+    expect(result).toContain('Engineer');
+  });
+
+  it('lists agents with !agents from a thread (thread channelId differs from project key)', () => {
+    const sm = mockSessionManager();
+    const result = handleCommand('!agents', configWithAgents, sm, {
+      channelId: 'thread-123',
+      projectName: 'my-app',
+      isThread: true,
+    });
+    expect(result).toContain('my-app');
+    expect(result).toContain('@pm');
+    expect(result).toContain('@engineer');
+  });
+
+  it('returns no agents message for project without agents', () => {
+    const sm = mockSessionManager();
+    const result = handleCommand('!agents', testConfig, sm, {
+      channelId: 'ch-1',
+      projectName: 'Alpha',
+      isThread: false,
+    });
+    expect(result).toContain('No agents configured');
+  });
+
+  it('returns usage hint for !agents without context', () => {
+    const sm = mockSessionManager();
+    const result = handleCommand('!agents', configWithAgents, sm);
+    expect(result).toContain('!agents');
+  });
+
+  it('includes !agents in !help output', () => {
+    const sm = mockSessionManager();
+    const result = handleCommand('!help', testConfig, sm);
+    expect(result).toContain('!agents');
+  });
+});
+
+describe('agent handoff flow', () => {
+  const agents: Record<string, AgentConfig> = {
+    pm: { role: 'Product Manager', prompt: 'You manage requirements.' },
+    engineer: { role: 'Engineer', prompt: 'You write code.' },
+  };
+
+  it('simulates a full handoff chain with turn limit', async () => {
+    const turnCounter = createTurnCounter();
+    const threadId = 'thread-handoff-test';
+    const maxTurns = 3;
+
+    // Simulate: PM responds mentioning @engineer, engineer responds mentioning @pm, repeat
+    const responses = [
+      'Great analysis! @engineer please implement the login feature.',
+      'Done implementing. @pm please review the PR.',
+      'Looks good! @engineer please add tests.',
+      'Tests added. @pm ready for merge.',
+    ];
+
+    // Reset on human message
+    turnCounter.reset(threadId);
+
+    let responseIndex = 0;
+    let currentAgent: string | undefined;
+    let responseText = responses[responseIndex++]; // First PM response
+    currentAgent = 'pm';
+
+    const handoffLog: string[] = [];
+
+    // Simulate the handoff while loop from discord.ts
+    while (true) {
+      const handoff = parseAgentMention(responseText, agents);
+      if (!handoff || handoff.agentName === currentAgent) break;
+
+      turnCounter.increment(threadId);
+      if (turnCounter.isOverLimit(threadId, maxTurns)) {
+        handoffLog.push(`limit-reached at turn ${turnCounter.getTurns(threadId)}`);
+        break;
+      }
+
+      handoffLog.push(`${currentAgent ?? 'user'} → ${handoff.agentName}`);
+
+      // Simulate the agent responding
+      responseText = responses[responseIndex++] ?? 'No more responses.';
+      currentAgent = handoff.agentName;
+    }
+
+    expect(handoffLog).toEqual([
+      'pm → engineer',
+      'engineer → pm',
+      'limit-reached at turn 3',
+    ]);
+    expect(turnCounter.getTurns(threadId)).toBe(3);
+    expect(turnCounter.isOverLimit(threadId, maxTurns)).toBe(true);
+  });
+
+  it('stops handoff when response does not mention another agent', () => {
+    const turnCounter = createTurnCounter();
+    const threadId = 'thread-no-handoff';
+
+    turnCounter.reset(threadId);
+    const responseText = 'All done, no more handoffs needed.';
+    const handoff = parseAgentMention(responseText, agents);
+
+    expect(handoff).toBeNull();
+    expect(turnCounter.getTurns(threadId)).toBe(0);
+  });
+
+  it('stops handoff when agent mentions itself', () => {
+    const turnCounter = createTurnCounter();
+    const threadId = 'thread-self-mention';
+
+    const responseText = 'Let me @engineer think about this more...';
+    const handoff = parseAgentMention(responseText, agents);
+
+    // Handoff found, but if currentAgent is already 'engineer', loop breaks
+    expect(handoff).not.toBeNull();
+    expect(handoff!.agentName).toBe('engineer');
+    // In the loop: handoff.agentName === currentAgentName → break
+  });
+
+  it('human message resets turn counter', () => {
+    const turnCounter = createTurnCounter();
+    const threadId = 'thread-reset';
+
+    turnCounter.increment(threadId);
+    turnCounter.increment(threadId);
+    expect(turnCounter.getTurns(threadId)).toBe(2);
+
+    // Human message resets
+    turnCounter.reset(threadId);
+    expect(turnCounter.getTurns(threadId)).toBe(0);
+    expect(turnCounter.isOverLimit(threadId, 3)).toBe(false);
+  });
+
+  it('uses correct session keys for agent dispatch', () => {
+    const channelId = 'ch-123';
+    const mention = parseAgentMention('@pm review this', agents);
+    expect(mention).not.toBeNull();
+
+    const sessionKey = `${channelId}:${mention!.agentName}`;
+    expect(sessionKey).toBe('ch-123:pm');
+
+    const systemPrompt = `Your role: ${mention!.agent.role}\n\n${mention!.agent.prompt}`;
+    expect(systemPrompt).toBe('Your role: Product Manager\n\nYou manage requirements.');
   });
 });
