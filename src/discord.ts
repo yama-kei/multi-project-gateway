@@ -173,6 +173,23 @@ export function handleCommand(
   return null;
 }
 
+const THREAD_HISTORY_LIMIT = 20;
+
+/** Fetch recent thread messages and format as a conversation log. */
+async function fetchThreadHistory(channel: TextChannel | ThreadChannel, beforeMessageId: string): Promise<string | null> {
+  if (!channel.isThread()) return null;
+  try {
+    const messages = await channel.messages.fetch({ limit: THREAD_HISTORY_LIMIT, before: beforeMessageId });
+    if (messages.size === 0) return null;
+    const lines = [...messages.values()]
+      .reverse()
+      .map((m) => `[${m.author.bot ? 'agent' : m.author.username}]: ${m.content}`);
+    return `<thread-history>\n${lines.join('\n')}\n</thread-history>\n\n`;
+  } catch {
+    return null;
+  }
+}
+
 export function createDiscordBot(router: Router, sessionManager: SessionManager, config: GatewayConfig, turnCounter?: TurnCounter): DiscordBot {
   const client = new Client({
     intents: [
@@ -181,6 +198,9 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
       GatewayIntentBits.MessageContent,
     ],
   });
+
+  // Track last active agent per thread for routing plain replies (#48)
+  const lastActiveAgent = new Map<string, { agentName: string; agent: import('./config.js').AgentConfig }>();
 
   client.on(Events.MessageCreate, async (message: Message) => {
     if (message.author.bot) return;
@@ -247,26 +267,34 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
     // Reset turn counter on human messages
     if (turnCounter) turnCounter.reset(replyChannel.id);
 
-    // Check for @agent mention
+    // Check for @agent mention, fall back to last active agent in this thread (#48)
     const mention = agents ? parseAgentMention(message.content, agents) : null;
+    const activeAgent = mention ?? (message.channel.isThread() ? lastActiveAgent.get(replyChannel.id) ?? null : null);
 
     // Use thread ID for session keys so each thread gets its own agent sessions.
     // For main-channel messages, replyChannel is the newly created thread.
     const threadId = replyChannel.id;
 
     // Build session key and system prompt
-    const sessionKey = mention
-      ? `${threadId}:${mention.agentName}`
+    const sessionKey = activeAgent
+      ? `${threadId}:${activeAgent.agentName}`
       : threadId;
-    const systemPrompt = mention
-      ? `Your role: ${mention.agent.role}\n\n${mention.agent.prompt}`
+    const systemPrompt = activeAgent
+      ? `Your role: ${activeAgent.agent.role}\n\n${activeAgent.agent.prompt}`
       : undefined;
 
     try {
+      // Prepend thread history when dispatching to an agent in a thread (#49)
+      let userPrompt = mention ? mention.prompt : message.content;
+      if (activeAgent && message.channel.isThread()) {
+        const history = await fetchThreadHistory(replyChannel, message.id);
+        if (history) userPrompt = `${history}${userPrompt}`;
+      }
+
       const result = await sessionManager.send(
         sessionKey,
         resolved.directory,
-        mention ? mention.prompt : message.content,
+        userPrompt,
         {
           worktree: replyChannel.isThread() ? true : undefined,
           systemPrompt,
@@ -284,10 +312,15 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
         await replyChannel.send(chunk);
       }
 
+      // Track last active agent for plain reply routing (#48)
+      if (activeAgent) {
+        lastActiveAgent.set(threadId, { agentName: activeAgent.agentName, agent: activeAgent.agent });
+      }
+
       // Auto-handoff loop: check if agent response mentions another agent
       if (agents && turnCounter) {
         let responseText = result.text;
-        let currentAgentName = mention?.agentName;
+        let currentAgentName = activeAgent?.agentName;
         const maxTurns = config.defaults.maxTurnsPerAgent;
 
         while (true) {
@@ -341,6 +374,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
 
           responseText = handoffResult.text;
           currentAgentName = handoff.agentName;
+          lastActiveAgent.set(threadId, { agentName: handoff.agentName, agent: handoff.agent });
         }
       }
     } catch (err) {
