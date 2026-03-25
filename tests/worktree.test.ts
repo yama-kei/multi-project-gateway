@@ -1,14 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as cp from 'node:child_process';
+import * as fs from 'node:fs';
 
 vi.mock('node:child_process');
+vi.mock('node:fs');
 
 const mockExecFileSync = vi.mocked(cp.execFileSync);
+const mockExistsSync = vi.mocked(fs.existsSync);
 
 import { createWorktree, removeWorktree, listWorktrees, reconcileWorktrees } from '../src/worktree.js';
 
 describe('createWorktree', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExistsSync.mockReturnValue(false);
+  });
+
+  it('returns early if worktree path already exists', () => {
+    mockExistsSync.mockReturnValue(true);
+    const result = createWorktree('/repo', 'thread-abc');
+    expect(result).toBe('/repo/.worktrees/thread-abc');
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
 
   it('runs git worktree add with branch named after projectKey', () => {
     mockExecFileSync.mockReturnValue(Buffer.from(''));

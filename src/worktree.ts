@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 const WORKTREE_DIR = '.worktrees';
@@ -20,6 +21,7 @@ export function createWorktree(projectDir: string, projectKey: string): string {
     throw new Error(`Invalid projectKey for worktree: ${projectKey}`);
   }
   const wtPath = worktreePath(projectDir, projectKey);
+  if (existsSync(wtPath)) return wtPath;
   const branch = `${BRANCH_PREFIX}${safeKey}`;
   try {
     execFileSync('git', ['worktree', 'add', '-b', branch, wtPath], {
