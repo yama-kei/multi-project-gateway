@@ -50,7 +50,7 @@ function agentColor(agentKey: string): number {
 }
 ```
 
-No config field needed. Optional `color` override on `AgentConfig` is a future enhancement.
+No config field needed.
 
 ## Chunking & Message Sending
 
