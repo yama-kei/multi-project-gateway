@@ -74,6 +74,24 @@ describe('loadConfig', () => {
     expect(config.defaults.maxTurnsPerAgent).toBe(10);
   });
 
+  it('normalizes agent names to lowercase', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          directory: '/tmp/app',
+          agents: {
+            PM: { role: 'Product Manager', prompt: 'You manage.' },
+            Engineer: { role: 'Engineer', prompt: 'You code.' },
+          },
+        },
+      },
+    });
+    const agents = config.projects['ch-1'].agents!;
+    expect(agents.pm).toBeDefined();
+    expect(agents.engineer).toBeDefined();
+    expect(agents.PM).toBeUndefined();
+  });
+
   it('applies default idleTimeoutMs when not specified', () => {
     const raw = {
       defaults: { maxConcurrentSessions: 4, claudeArgs: [] },

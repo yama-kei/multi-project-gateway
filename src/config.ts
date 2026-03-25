@@ -53,7 +53,7 @@ export function loadConfig(raw: unknown): GatewayConfig {
       for (const [agentName, agentCfg] of Object.entries(p.agents as Record<string, unknown>)) {
         const ac = agentCfg as Record<string, unknown>;
         if (typeof ac.role === 'string' && typeof ac.prompt === 'string') {
-          agents[agentName] = { role: ac.role, prompt: ac.prompt };
+          agents[agentName.toLowerCase()] = { role: ac.role, prompt: ac.prompt };
         }
       }
       if (Object.keys(agents).length === 0) agents = undefined;
