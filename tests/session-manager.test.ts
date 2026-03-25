@@ -23,6 +23,7 @@ const defaults = {
   idleTimeoutMs: 500,
   maxConcurrentSessions: 2,
   claudeArgs: ['--permission-mode', 'acceptEdits', '--output-format', 'json'],
+  maxTurnsPerAgent: 5,
 };
 
 function createMockStore(initial: PersistedSession[] = []): SessionStore & { saved: Map<string, PersistedSession> | null } {

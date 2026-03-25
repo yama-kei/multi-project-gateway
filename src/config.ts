@@ -1,8 +1,14 @@
+export interface AgentConfig {
+  role: string;
+  prompt: string;
+}
+
 export interface ProjectConfig {
   name: string;
   directory: string;
   idleTimeoutMs?: number;
   claudeArgs?: string[];
+  agents?: Record<string, AgentConfig>;
 }
 
 export interface GatewayDefaults {
@@ -11,6 +17,7 @@ export interface GatewayDefaults {
   sessionTtlMs: number;
   maxPersistedSessions: number;
   claudeArgs: string[];
+  maxTurnsPerAgent: number;
 }
 
 export interface GatewayConfig {
@@ -40,11 +47,24 @@ export function loadConfig(raw: unknown): GatewayConfig {
     if (typeof p.directory !== 'string' || !p.directory) {
       throw new Error(`Project for channel ${channelId} must have a "directory" string`);
     }
+    let agents: Record<string, AgentConfig> | undefined;
+    if (p.agents && typeof p.agents === 'object') {
+      agents = {};
+      for (const [agentName, agentCfg] of Object.entries(p.agents as Record<string, unknown>)) {
+        const ac = agentCfg as Record<string, unknown>;
+        if (typeof ac.role === 'string' && typeof ac.prompt === 'string') {
+          agents[agentName] = { role: ac.role, prompt: ac.prompt };
+        }
+      }
+      if (Object.keys(agents).length === 0) agents = undefined;
+    }
+
     validated[channelId] = {
       name: typeof p.name === 'string' ? p.name : channelId,
       directory: p.directory,
       ...(p.idleTimeoutMs !== undefined && { idleTimeoutMs: Number(p.idleTimeoutMs) }),
       ...(Array.isArray(p.claudeArgs) && { claudeArgs: p.claudeArgs as string[] }),
+      ...(agents && { agents }),
     };
   }
 
@@ -57,6 +77,7 @@ export function loadConfig(raw: unknown): GatewayConfig {
       sessionTtlMs: typeof defaults.sessionTtlMs === 'number' ? defaults.sessionTtlMs : 7 * 24 * 60 * 60 * 1000,
       maxPersistedSessions: typeof defaults.maxPersistedSessions === 'number' ? defaults.maxPersistedSessions : 50,
       claudeArgs: Array.isArray(defaults.claudeArgs) ? (defaults.claudeArgs as string[]) : ['--permission-mode', 'acceptEdits', '--output-format', 'json'],
+      maxTurnsPerAgent: typeof defaults.maxTurnsPerAgent === 'number' ? defaults.maxTurnsPerAgent : 5,
     },
     projects: validated,
   };
