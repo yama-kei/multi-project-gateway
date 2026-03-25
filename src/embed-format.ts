@@ -22,3 +22,24 @@ export function agentColor(agentKey: string): number {
   for (const ch of agentKey) hash = ((hash << 5) - hash + ch.charCodeAt(0)) | 0;
   return PALETTE[Math.abs(hash) % PALETTE.length];
 }
+
+const EMBED_DESCRIPTION_LIMIT = 4096;
+
+/** Build Discord embeds for an agent response, chunking at 4096 chars. */
+export function buildAgentEmbeds(text: string, agentName: string, agentRole: string): EmbedBuilder[] {
+  const color = agentColor(agentName);
+  const chunks = chunkMessage(text, EMBED_DESCRIPTION_LIMIT);
+
+  return chunks.map((chunk, i) => {
+    const authorName = i === 0 ? agentRole : `${agentRole} (cont.)`;
+    const embed = new EmbedBuilder()
+      .setAuthor({ name: authorName })
+      .setColor(color);
+    if (chunk) {
+      embed.setDescription(chunk);
+    } else {
+      embed.data.description = '';
+    }
+    return embed;
+  });
+}
