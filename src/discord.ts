@@ -2,6 +2,8 @@ import { Client, GatewayIntentBits, Events, ChannelType, type Message, type Text
 import type { Router } from './router.js';
 import type { SessionManager } from './session-manager.js';
 import type { GatewayConfig } from './config.js';
+import { parseAgentMention } from './agent-dispatch.js';
+import type { TurnCounter } from './turn-counter.js';
 
 export function chunkMessage(text: string, limit: number): string[] {
   if (text.length <= limit) return [text];
@@ -171,7 +173,7 @@ export function handleCommand(
   return null;
 }
 
-export function createDiscordBot(router: Router, sessionManager: SessionManager, config: GatewayConfig): DiscordBot {
+export function createDiscordBot(router: Router, sessionManager: SessionManager, config: GatewayConfig, turnCounter?: TurnCounter): DiscordBot {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -235,12 +237,34 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
     }, 7_000);
     replyChannel.sendTyping().catch(() => {});
 
+    // Look up agents for the project (use parent channel ID for threads)
+    const projectChannelId = parentId || resolved.channelId;
+    const project = config.projects[projectChannelId];
+    const agents = project?.agents;
+
+    // Reset turn counter on human messages
+    if (turnCounter) turnCounter.reset(replyChannel.id);
+
+    // Check for @agent mention
+    const mention = agents ? parseAgentMention(message.content, agents) : null;
+
+    // Build session key and system prompt
+    const sessionKey = mention
+      ? `${resolved.channelId}:${mention.agentName}`
+      : resolved.channelId;
+    const systemPrompt = mention
+      ? `Your role: ${mention.agent.role}\n\n${mention.agent.prompt}`
+      : undefined;
+
     try {
       const result = await sessionManager.send(
-        resolved.channelId,
+        sessionKey,
         resolved.directory,
-        message.content,
-        resolved.isThread ? { worktree: true } : undefined,
+        mention ? mention.prompt : message.content,
+        {
+          worktree: resolved.isThread ? true : undefined,
+          systemPrompt,
+        },
       );
 
       if (result.sessionReset) {
@@ -252,6 +276,46 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
       const chunks = chunkMessage(result.text, 2000);
       for (const chunk of chunks) {
         await replyChannel.send(chunk);
+      }
+
+      // Auto-handoff loop: check if agent response mentions another agent
+      if (agents && turnCounter) {
+        let responseText = result.text;
+        let currentAgentName = mention?.agentName;
+        const maxTurns = config.defaults.maxTurnsPerAgent;
+
+        while (true) {
+          const handoff = parseAgentMention(responseText, agents);
+          if (!handoff || handoff.agentName === currentAgentName) break;
+
+          turnCounter.increment(replyChannel.id);
+          if (turnCounter.isOverLimit(replyChannel.id, maxTurns)) {
+            await replyChannel.send(
+              `⚠️ Agent turn limit reached (${maxTurns}) — send a message to reset.`
+            );
+            break;
+          }
+
+          const handoffKey = `${resolved.channelId}:${handoff.agentName}`;
+          const handoffPrompt = `Your role: ${handoff.agent.role}\n\n${handoff.agent.prompt}`;
+
+          replyChannel.sendTyping().catch(() => {});
+
+          const handoffResult = await sessionManager.send(
+            handoffKey,
+            resolved.directory,
+            responseText,
+            { worktree: resolved.isThread ? true : undefined, systemPrompt: handoffPrompt },
+          );
+
+          const handoffChunks = chunkMessage(handoffResult.text, 2000);
+          for (const chunk of handoffChunks) {
+            await replyChannel.send(chunk);
+          }
+
+          responseText = handoffResult.text;
+          currentAgentName = handoff.agentName;
+        }
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
