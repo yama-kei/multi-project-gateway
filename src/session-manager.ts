@@ -39,11 +39,13 @@ export function createSessionManager(defaults: {
   maxConcurrentSessions: number;
   sessionTtlMs?: number;
   maxPersistedSessions?: number;
+  processTimeoutMs?: number;
   claudeArgs: string[];
 }, store?: SessionStore): SessionManager {
   const sessions = new Map<string, InternalSession>();
   const sessionTtlMs = defaults.sessionTtlMs ?? 7 * 24 * 60 * 60 * 1000;
   const maxPersistedSessions = defaults.maxPersistedSessions ?? 50;
+  const processTimeoutMs = defaults.processTimeoutMs;
 
   let activeProcesses = 0;
   const waiters: Array<() => void> = [];
@@ -138,6 +140,7 @@ export function createSessionManager(defaults: {
           defaults.claudeArgs,
           item.prompt,
           session.sessionId,
+          processTimeoutMs ? { timeoutMs: processTimeoutMs } : undefined,
         );
         const sessionChanged = !!(
           session.sessionId &&
@@ -157,7 +160,7 @@ export function createSessionManager(defaults: {
         if (session.sessionId) {
           session.sessionId = undefined;
           try {
-            const result = await runClaude(session.cwd, defaults.claudeArgs, item.prompt, undefined);
+            const result = await runClaude(session.cwd, defaults.claudeArgs, item.prompt, undefined, processTimeoutMs ? { timeoutMs: processTimeoutMs } : undefined);
             session.sessionId = result.sessionId || undefined;
             session.lastActivity = Date.now();
             resetIdleTimer(session);

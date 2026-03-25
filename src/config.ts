@@ -10,6 +10,7 @@ export interface GatewayDefaults {
   maxConcurrentSessions: number;
   sessionTtlMs: number;
   maxPersistedSessions: number;
+  processTimeoutMs: number;
   claudeArgs: string[];
 }
 
@@ -56,6 +57,7 @@ export function loadConfig(raw: unknown): GatewayConfig {
       maxConcurrentSessions: typeof defaults.maxConcurrentSessions === 'number' ? defaults.maxConcurrentSessions : 4,
       sessionTtlMs: typeof defaults.sessionTtlMs === 'number' ? defaults.sessionTtlMs : 7 * 24 * 60 * 60 * 1000,
       maxPersistedSessions: typeof defaults.maxPersistedSessions === 'number' ? defaults.maxPersistedSessions : 50,
+      processTimeoutMs: typeof defaults.processTimeoutMs === 'number' ? defaults.processTimeoutMs : 300000,
       claudeArgs: Array.isArray(defaults.claudeArgs) ? (defaults.claudeArgs as string[]) : ['--permission-mode', 'acceptEdits', '--output-format', 'json'],
     },
     projects: validated,

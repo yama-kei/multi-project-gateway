@@ -1,5 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
-import { parseClaudeJsonOutput, buildClaudeArgs, friendlyError } from '../src/claude-cli.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { parseClaudeJsonOutput, buildClaudeArgs, friendlyError, runClaude } from '../src/claude-cli.js';
+import * as child_process from 'node:child_process';
+
+vi.mock('node:child_process', async () => {
+  const actual = await vi.importActual<typeof child_process>('node:child_process');
+  return { ...actual, spawn: actual.spawn };
+});
 
 describe('parseClaudeJsonOutput', () => {
   it('extracts result text and session_id from JSON output', () => {
@@ -88,5 +94,106 @@ describe('friendlyError', () => {
     const msg = friendlyError('something unexpected happened');
     expect(msg).toContain('Claude error:');
     expect(msg).toContain('something unexpected happened');
+  });
+});
+
+describe('runClaude timeout', () => {
+  it('rejects with a timeout error when process exceeds timeoutMs', async () => {
+    const { EventEmitter } = await import('node:events');
+    const { Readable } = await import('node:stream');
+
+    const mockProc = new EventEmitter() as any;
+    mockProc.stdout = new Readable({ read() {} });
+    mockProc.stderr = new Readable({ read() {} });
+    mockProc.kill = vi.fn(() => {
+      setTimeout(() => mockProc.emit('close', null), 10);
+    });
+
+    const spawnSpy = vi.spyOn(child_process, 'spawn').mockReturnValueOnce(mockProc as any);
+
+    const result = runClaude('/tmp', [], 'hello', undefined, { timeoutMs: 100 });
+    await expect(result).rejects.toThrow(/timed out/i);
+
+    spawnSpy.mockRestore();
+  });
+
+  it('completes normally when process finishes before timeout', async () => {
+    // Spawn a quick echo command — mock spawn to return valid JSON
+    const { EventEmitter } = await import('node:events');
+    const { Readable } = await import('node:stream');
+
+    const jsonOutput = JSON.stringify({
+      result: 'done',
+      session_id: 'sess-1',
+      is_error: false,
+    });
+
+    const mockProc = new EventEmitter() as any;
+    mockProc.stdout = Readable.from([Buffer.from(jsonOutput)]);
+    mockProc.stderr = Readable.from([]);
+    mockProc.kill = vi.fn();
+
+    const spawnSpy = vi.spyOn(child_process, 'spawn').mockReturnValueOnce(mockProc as any);
+
+    const promise = runClaude('/tmp', [], 'hello', undefined, { timeoutMs: 5000 });
+
+    // Simulate process close after stdout is consumed
+    setTimeout(() => mockProc.emit('close', 0), 50);
+
+    const result = await promise;
+    expect(result.text).toBe('done');
+    expect(result.sessionId).toBe('sess-1');
+    expect(mockProc.kill).not.toHaveBeenCalled();
+
+    spawnSpy.mockRestore();
+  });
+
+  it('kills the subprocess when timeout fires', async () => {
+    const { EventEmitter } = await import('node:events');
+    const { Readable } = await import('node:stream');
+
+    const mockProc = new EventEmitter() as any;
+    // stdout that never ends
+    mockProc.stdout = new Readable({ read() {} });
+    mockProc.stderr = new Readable({ read() {} });
+    mockProc.kill = vi.fn(() => {
+      // Simulate the process exiting after being killed
+      setTimeout(() => mockProc.emit('close', null), 10);
+    });
+
+    const spawnSpy = vi.spyOn(child_process, 'spawn').mockReturnValueOnce(mockProc as any);
+
+    const promise = runClaude('/tmp', [], 'hello', undefined, { timeoutMs: 100 });
+    await expect(promise).rejects.toThrow(/timed out/i);
+    expect(mockProc.kill).toHaveBeenCalledWith('SIGTERM');
+
+    spawnSpy.mockRestore();
+  });
+
+  it('uses no timeout by default (timeoutMs not provided)', async () => {
+    const { EventEmitter } = await import('node:events');
+    const { Readable } = await import('node:stream');
+
+    const jsonOutput = JSON.stringify({
+      result: 'ok',
+      session_id: 'sess-2',
+      is_error: false,
+    });
+
+    const mockProc = new EventEmitter() as any;
+    mockProc.stdout = Readable.from([Buffer.from(jsonOutput)]);
+    mockProc.stderr = Readable.from([]);
+    mockProc.kill = vi.fn();
+
+    const spawnSpy = vi.spyOn(child_process, 'spawn').mockReturnValueOnce(mockProc as any);
+
+    const promise = runClaude('/tmp', [], 'hello', undefined);
+    setTimeout(() => mockProc.emit('close', 0), 50);
+
+    const result = await promise;
+    expect(result.text).toBe('ok');
+    expect(mockProc.kill).not.toHaveBeenCalled();
+
+    spawnSpy.mockRestore();
   });
 });

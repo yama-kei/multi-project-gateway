@@ -252,7 +252,7 @@ describe('SessionManager', () => {
       const m = createSessionManager(defaults, store);
 
       await m.send('proj-a', '/tmp/a', 'Continue');
-      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Continue', 'old-sid');
+      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Continue', 'old-sid', undefined);
       m.shutdown();
     });
 
@@ -291,7 +291,7 @@ describe('SessionManager', () => {
       mockRun.mockResolvedValueOnce({ text: 'Resumed', sessionId: 'sid-1', isError: false });
       const result = await m.send('proj-a', '/tmp/a', 'Back again');
       expect(result.text).toBe('Resumed');
-      expect(mockRun).toHaveBeenLastCalledWith('/tmp/a', defaults.claudeArgs, 'Back again', 'sid-1');
+      expect(mockRun).toHaveBeenLastCalledWith('/tmp/a', defaults.claudeArgs, 'Back again', 'sid-1', undefined);
       m.shutdown();
     });
   });
@@ -312,6 +312,7 @@ describe('SessionManager', () => {
         '/tmp/a/.worktrees/thread-1',
         defaults.claudeArgs,
         'Hello',
+        undefined,
         undefined,
       );
     });
@@ -337,7 +338,7 @@ describe('SessionManager', () => {
       await manager.send('project-a', '/tmp/a', 'Hello');
 
       expect(mockCreate).not.toHaveBeenCalled();
-      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Hello', undefined);
+      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Hello', undefined, undefined);
     });
 
     it('removes worktree on clearSession', async () => {

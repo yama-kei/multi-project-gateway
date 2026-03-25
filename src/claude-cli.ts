@@ -47,11 +47,17 @@ export function friendlyError(stderr: string): string {
   return `Claude error: ${stderr.slice(0, 500)}`;
 }
 
+export interface RunClaudeOptions {
+  /** Kill the subprocess after this many milliseconds. No timeout if omitted. */
+  timeoutMs?: number;
+}
+
 export function runClaude(
   cwd: string,
   baseArgs: string[],
   prompt: string,
   sessionId: string | undefined,
+  options?: RunClaudeOptions,
 ): Promise<ClaudeResult> {
   return new Promise((resolve, reject) => {
     const args = buildClaudeArgs(baseArgs, prompt, sessionId);
@@ -62,6 +68,15 @@ export function runClaude(
 
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    if (options?.timeoutMs) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        proc.kill('SIGTERM');
+      }, options.timeoutMs);
+    }
 
     proc.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
@@ -72,6 +87,12 @@ export function runClaude(
     });
 
     proc.on('close', (code) => {
+      if (timer) clearTimeout(timer);
+      if (timedOut) {
+        const seconds = Math.round((options?.timeoutMs ?? 0) / 1000);
+        reject(new Error(`Claude process timed out after ${seconds}s — the request may be too complex or Claude may be stuck.`));
+        return;
+      }
       if (code !== 0) {
         reject(new Error(friendlyError(stderr)));
         return;
@@ -85,6 +106,7 @@ export function runClaude(
     });
 
     proc.on('error', (err) => {
+      if (timer) clearTimeout(timer);
       reject(new Error(`Failed to spawn claude: ${err.message}`));
     });
   });
