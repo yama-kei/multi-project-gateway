@@ -21,10 +21,14 @@ export function buildClaudeArgs(
   baseArgs: string[],
   prompt: string,
   sessionId: string | undefined,
+  systemPrompt?: string,
 ): string[] {
   const args = ['--print', ...baseArgs];
   if (sessionId) {
     args.push('--resume', sessionId);
+  }
+  if (systemPrompt) {
+    args.push('--append-system-prompt', systemPrompt);
   }
   args.push(prompt);
   return args;
@@ -52,9 +56,10 @@ export function runClaude(
   baseArgs: string[],
   prompt: string,
   sessionId: string | undefined,
+  systemPrompt?: string,
 ): Promise<ClaudeResult> {
   return new Promise((resolve, reject) => {
-    const args = buildClaudeArgs(baseArgs, prompt, sessionId);
+    const args = buildClaudeArgs(baseArgs, prompt, sessionId, systemPrompt);
     const proc = spawn('claude', args, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],

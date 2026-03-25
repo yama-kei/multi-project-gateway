@@ -57,6 +57,17 @@ describe('buildClaudeArgs', () => {
       'Now add tests',
     ]);
   });
+
+  it('includes --append-system-prompt when provided', () => {
+    const args = buildClaudeArgs([], 'hello', undefined, 'You are a PM.');
+    expect(args).toContain('--append-system-prompt');
+    expect(args[args.indexOf('--append-system-prompt') + 1]).toBe('You are a PM.');
+  });
+
+  it('omits --append-system-prompt when not provided', () => {
+    const args = buildClaudeArgs([], 'hello', undefined);
+    expect(args).not.toContain('--append-system-prompt');
+  });
 });
 
 describe('friendlyError', () => {
