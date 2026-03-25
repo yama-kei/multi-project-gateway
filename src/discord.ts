@@ -250,10 +250,14 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
     // Check for @agent mention
     const mention = agents ? parseAgentMention(message.content, agents) : null;
 
+    // Use thread ID for session keys so each thread gets its own agent sessions.
+    // For main-channel messages, replyChannel is the newly created thread.
+    const threadId = replyChannel.id;
+
     // Build session key and system prompt
     const sessionKey = mention
-      ? `${resolved.channelId}:${mention.agentName}`
-      : resolved.channelId;
+      ? `${threadId}:${mention.agentName}`
+      : threadId;
     const systemPrompt = mention
       ? `Your role: ${mention.agent.role}\n\n${mention.agent.prompt}`
       : undefined;
@@ -264,7 +268,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
         resolved.directory,
         mention ? mention.prompt : message.content,
         {
-          worktree: resolved.isThread ? true : undefined,
+          worktree: replyChannel.isThread() ? true : undefined,
           systemPrompt,
         },
       );
@@ -302,7 +306,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
             break;
           }
 
-          const handoffKey = `${resolved.channelId}:${handoff.agentName}`;
+          const handoffKey = `${threadId}:${handoff.agentName}`;
           const handoffPrompt = `Your role: ${handoff.agent.role}\n\n${handoff.agent.prompt}`;
 
           replyChannel.sendTyping().catch(() => {});
@@ -316,7 +320,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
               handoffKey,
               resolved.directory,
               responseText,
-              { worktree: resolved.isThread ? true : undefined, systemPrompt: handoffPrompt, timeoutMs: config.defaults.agentTimeoutMs },
+              { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: handoffPrompt, timeoutMs: config.defaults.agentTimeoutMs },
             );
           } catch (handoffErr) {
             const msg = handoffErr instanceof Error ? handoffErr.message : String(handoffErr);
