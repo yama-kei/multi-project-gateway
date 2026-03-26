@@ -6,6 +6,8 @@ import { buildToolArgs } from './claude-cli.js';
 import { parseAgentMention } from './agent-dispatch.js';
 import { sendAgentMessage, buildHandoffEmbed } from './embed-format.js';
 import type { TurnCounter } from './turn-counter.js';
+import { hasAllowedRole } from './role-check.js';
+import { createRateLimiter } from './rate-limiter.js';
 
 export function chunkMessage(text: string, limit: number): string[] {
   if (text.length <= limit) return [text];
@@ -199,8 +201,11 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
+      GatewayIntentBits.GuildMembers,
     ],
   });
+
+  const rateLimiter = createRateLimiter();
 
   // Track last active agent per thread for routing plain replies (#48)
   const lastActiveAgent = new Map<string, { agentName: string; agent: import('./config.js').AgentConfig }>();
@@ -230,6 +235,27 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
     const parentId = message.channel.isThread() ? message.channel.parentId ?? undefined : undefined;
     const resolved = router.resolve(message.channelId, parentId);
     if (!resolved) return;
+
+    // Role-based access control
+    const projectChannelIdForAcl = parentId || resolved.channelId;
+    const projectForAcl = config.projects[projectChannelIdForAcl];
+    if (projectForAcl?.allowedRoles && projectForAcl.allowedRoles.length > 0) {
+      if (!hasAllowedRole(message.member, projectForAcl.allowedRoles)) {
+        await message.reply("You don't have permission to use this bot.");
+        return;
+      }
+    }
+
+    // Per-user rate limiting
+    if (projectForAcl?.rateLimitPerUser) {
+      const result = rateLimiter.check(`${message.author.id}:${projectChannelIdForAcl}`, projectForAcl.rateLimitPerUser);
+      if (!result.allowed) {
+        await message.reply(
+          `You're sending messages too quickly. Please wait ${result.retryAfterSeconds}s before trying again.`,
+        );
+        return;
+      }
+    }
 
     try {
       await message.react('👀');
@@ -424,6 +450,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
       console.log(`Gateway connected as ${client.user?.tag}`);
     },
     stop() {
+      rateLimiter.dispose();
       client.destroy();
     },
     getStatus(): string {

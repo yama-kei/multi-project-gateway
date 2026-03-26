@@ -329,4 +329,69 @@ describe('loadConfig', () => {
     expect(config.projects['ch-1'].allowedTools).toBeUndefined();
     expect(config.projects['ch-1'].disallowedTools).toBeUndefined();
   });
+
+  // --- allowedRoles / rateLimitPerUser ---
+
+  it('loads allowedRoles from project config', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          directory: '/tmp/a',
+          allowedRoles: ['admin', 'developer', '123456789'],
+        },
+      },
+    });
+    expect(config.projects['ch-1'].allowedRoles).toEqual(['admin', 'developer', '123456789']);
+  });
+
+  it('omits allowedRoles when not specified (backward compatible)', () => {
+    const config = loadConfig({
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.projects['ch-1'].allowedRoles).toBeUndefined();
+  });
+
+  it('omits allowedRoles when empty array', () => {
+    const config = loadConfig({
+      projects: { 'ch-1': { directory: '/tmp/a', allowedRoles: [] } },
+    });
+    expect(config.projects['ch-1'].allowedRoles).toBeUndefined();
+  });
+
+  it('filters non-string entries from allowedRoles', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': { directory: '/tmp/a', allowedRoles: ['admin', 123, null, 'dev'] as any },
+      },
+    });
+    expect(config.projects['ch-1'].allowedRoles).toEqual(['admin', 'dev']);
+  });
+
+  it('loads rateLimitPerUser from project config', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': { directory: '/tmp/a', rateLimitPerUser: 5 },
+      },
+    });
+    expect(config.projects['ch-1'].rateLimitPerUser).toBe(5);
+  });
+
+  it('omits rateLimitPerUser when not specified', () => {
+    const config = loadConfig({
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.projects['ch-1'].rateLimitPerUser).toBeUndefined();
+  });
+
+  it('omits rateLimitPerUser when zero or negative', () => {
+    const config = loadConfig({
+      projects: { 'ch-1': { directory: '/tmp/a', rateLimitPerUser: 0 } },
+    });
+    expect(config.projects['ch-1'].rateLimitPerUser).toBeUndefined();
+
+    const config2 = loadConfig({
+      projects: { 'ch-1': { directory: '/tmp/a', rateLimitPerUser: -1 } },
+    });
+    expect(config2.projects['ch-1'].rateLimitPerUser).toBeUndefined();
+  });
 });
