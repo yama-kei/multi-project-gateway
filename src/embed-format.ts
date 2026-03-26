@@ -44,6 +44,14 @@ export function buildAgentEmbeds(text: string, agentName: string, agentRole: str
   });
 }
 
+/** Build a small embed announcing an agent handoff. */
+export function buildHandoffEmbed(agentName: string, agentRole: string): EmbedBuilder {
+  return new EmbedBuilder()
+    .setAuthor({ name: agentRole })
+    .setDescription(`Handing off to **@${agentName}**...`)
+    .setColor(agentColor(agentName));
+}
+
 const PLAIN_TEXT_LIMIT = 2000;
 
 /** Send a message as embeds (if agent) or plain text (if not). */
