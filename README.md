@@ -5,18 +5,23 @@ A Discord bot that routes channel messages to per-project [Claude Code](https://
 ## How it works
 
 ```
-Discord channel  -->  Router  -->  Session Manager  -->  claude --print
-  (per project)        (channel -> project)   (queue, resume, persist)     (in project dir)
-                                                                              |
-Discord reply    <--  Chunker  <----------------------  JSON response  <------'
+Discord channel  -->  Router  -->  Agent Dispatch  -->  Session Manager  -->  claude --print
+  (per project)     (channel ->    (@mention ->         (queue, resume,       (in project dir)
+                      project)       agent)               persist)                  |
+                                       ^                                            |
+                                       |--- auto-handoff if response has @mention <-'
+                                                                                    |
+Discord reply    <--  Chunker  <--------------------------  JSON response  <--------'
 ```
 
 1. User posts a message in a mapped Discord channel
 2. Router resolves the channel to a project config
 3. If the message is in a main channel, the bot creates a thread for the response; if already in a thread, replies there directly
-4. Session manager spawns `claude --print` in the project directory (or resumes an existing session)
-5. Response is chunked to fit Discord's 2000-char limit and sent back in the thread
-6. Sessions persist to disk and resume across gateway restarts
+4. If agents are configured, agent dispatch routes via `@mention` or last active agent
+5. Session manager spawns `claude --print` in the project directory (or resumes an existing session)
+6. If the response contains an `@mention` of another agent, auto-handoff loops until done or turn limit reached
+7. Response is chunked to fit Discord's 2000-char limit and sent back in the thread
+8. Sessions persist to disk and resume across gateway restarts
 
 ## Security model
 
@@ -221,10 +226,85 @@ If `~/.mpg/` does not exist and CWD files do, everything works exactly as before
 | `defaults.idleTimeoutMs` | number | `1800000` (30 min) | Session idle timeout before cleanup |
 | `defaults.maxConcurrentSessions` | number | `4` | Max concurrent Claude processes |
 | `defaults.claudeArgs` | string[] | `["--permission-mode", "acceptEdits", "--output-format", "json"]` | Args passed to every `claude` invocation |
+| `defaults.maxTurnsPerAgent` | number | `5` | Max automatic handoffs in a single agent chain |
+| `defaults.agentTimeoutMs` | number | `180000` (3 min) | Timeout per agent turn during auto-handoff |
 | `projects.<channelId>.name` | string | channel ID | Display name for the project |
 | `projects.<channelId>.directory` | string | **required** | Absolute path to the project directory |
 | `projects.<channelId>.idleTimeoutMs` | number | inherits default | Per-project idle timeout override |
 | `projects.<channelId>.claudeArgs` | string[] | inherits default | Per-project Claude args override |
+| `projects.<channelId>.agents` | object | — | Named agents for this project (see [Multi-agent setup](#multi-agent-setup)) |
+
+## Multi-agent setup
+
+You can define multiple agents per project that collaborate via `@mentions`. Each agent gets its own Claude session with a dedicated system prompt, and agents can hand off work to each other automatically.
+
+### Defining agents
+
+Add an `agents` map to any project in `config.json`. Each key is the agent name (used as `@name` in Discord), with `role` and `prompt` fields:
+
+```json
+{
+  "projects": {
+    "CHANNEL_ID": {
+      "name": "my-app",
+      "directory": "/path/to/my-app",
+      "agents": {
+        "pm": {
+          "role": "Product Manager",
+          "prompt": "You are the PM for my-app. Analyze requirements, create issues, and review work. When you need code implemented, mention @engineer in your response. Never write code directly."
+        },
+        "engineer": {
+          "role": "Software Engineer",
+          "prompt": "You are a senior engineer for my-app. Implement features, write tests, fix bugs, and create PRs. When work is done or you need PM review, mention @pm in your response."
+        }
+      }
+    }
+  }
+}
+```
+
+### How agent routing works
+
+```
+User sends message
+    |
+    v
+Contains @agentName? ── YES ──> Route to that agent
+    |                            (session key: threadId:agentName)
+    NO
+    |
+    v
+In a thread with prior agent activity? ── YES ──> Route to last active agent
+    |
+    NO
+    |
+    v
+Route to default session (no agent)
+```
+
+- **`@mention` routing:** Write `@pm fix the login bug` to target a specific agent. The mention is stripped from the prompt.
+- **Plain reply routing:** Follow-up messages in a thread (without an `@mention`) automatically route to whichever agent last responded in that thread.
+- **Isolated sessions:** Each agent gets its own Claude session per thread (`threadId:agentName`), so `@pm` and `@engineer` maintain separate conversation histories.
+
+### Automatic agent handoffs
+
+When an agent's response contains an `@mention` of another agent in the same project, the gateway automatically forwards that response as the next agent's input. This creates a collaborative loop:
+
+1. User writes `@pm add a search feature to the dashboard`
+2. PM agent analyzes the request, responds with requirements mentioning `@engineer`
+3. Gateway automatically sends PM's response to the engineer agent
+4. Engineer implements and responds mentioning `@pm` for review
+5. Loop continues until no `@mention` is found or the turn limit is reached
+
+The turn counter resets whenever a human posts a new message. The `maxTurnsPerAgent` default (5) prevents runaway loops.
+
+### Listing agents
+
+Use `!agents` in any mapped Discord channel to see the available agents for that project.
+
+### Thread history
+
+When an agent is invoked in a thread, the gateway prepends the last 20 messages as context so the agent understands the conversation so far. This is especially useful when a different agent picks up a thread mid-conversation.
 
 ### Environment variables
 
@@ -267,6 +347,7 @@ The gateway responds to commands in any mapped Discord channel:
 | `!session <name>` | Inspect a specific project's session (ID, idle time, queue) |
 | `!restart <name>` | Reset a session (fresh context, keeps worktree) |
 | `!kill <name>` | Force-close a project's session |
+| `!agents` | List available agents for the current project |
 | `!help` | Show available commands |
 
 ## Architecture
@@ -281,7 +362,9 @@ The gateway responds to commands in any mapped Discord channel:
 | `src/session-manager.ts` | One session per channel/thread, queues concurrent messages, manages idle timeouts |
 | `src/session-store.ts` | Persists session IDs to `.sessions.json` for resume across restarts |
 | `src/claude-cli.ts` | Spawns `claude --print` subprocess, parses JSON output |
-| `src/discord.ts` | Discord.js client, message routing, response chunking |
+| `src/agent-dispatch.ts` | Parses `@mentions`, resolves agent targets |
+| `src/turn-counter.ts` | Tracks handoff turns per thread, enforces `maxTurnsPerAgent` |
+| `src/discord.ts` | Discord.js client, message routing, agent handoff loop, response chunking |
 
 ## Scripts
 
