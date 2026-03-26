@@ -81,7 +81,9 @@ The gateway restricts which tools Claude can use via `--allowed-tools` and `--di
 }
 ```
 
-**Override precedence:** per-project `allowedTools`/`disallowedTools` override gateway defaults. If both `allowedTools` and `disallowedTools` are set at the same level, `allowedTools` takes precedence (a warning is logged). If `claudeArgs` already contains `--allowed-tools` or `--disallowed-tools`, the config-based tool restrictions are skipped to avoid conflicts.
+**Override precedence:** per-project `allowedTools`/`disallowedTools` override gateway defaults. If both `allowedTools` and `disallowedTools` are set at the same level, `allowedTools` takes precedence (a warning is logged). If `claudeArgs` (at either the gateway or project level) already contains `--allowed-tools` or `--disallowed-tools`, the config-based tool restrictions are skipped to avoid conflicts.
+
+> **Disallow-only mode:** When a project sets only `disallowedTools` without setting `allowedTools`, the gateway-level `allowedTools` default still applies (via fallback). This means the project inherits the default allowlist _and_ adds its disallow rules on top — but since `allowedTools` takes precedence over `disallowedTools`, the disallow list is effectively ignored. To use disallow-only mode (block specific tools while allowing everything else), explicitly set `"allowedTools": []` at the project level to clear the inherited allowlist.
 
 ## Prerequisites
 

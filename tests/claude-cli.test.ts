@@ -140,6 +140,19 @@ describe('buildToolArgs', () => {
     expect(args).toEqual([]);
   });
 
+  it('skips tool args when per-project claudeArgs contain --allowed-tools (merged into existingArgs)', () => {
+    // Simulates the caller merging gateway + project claudeArgs before passing to buildToolArgs
+    const gatewayArgs = ['--output-format', 'json'];
+    const projectArgs = ['--allowed-tools', 'Read', 'Bash'];
+    const merged = [...gatewayArgs, ...projectArgs];
+    const args = buildToolArgs(
+      { allowedTools: ['Read', 'Edit', 'Grep'] },
+      undefined,
+      merged,
+    );
+    expect(args).toEqual([]);
+  });
+
   it('handles undefined project overrides gracefully', () => {
     const args = buildToolArgs(
       { allowedTools: ['Read', 'Glob'] },
