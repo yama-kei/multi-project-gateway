@@ -156,7 +156,11 @@ function start() {
   bot.start(token)
     .then(async () => {
       if (config.defaults.httpPort !== false) {
-        healthServer = await createHealthServer(config.defaults.httpPort, sessionManager, bot);
+        try {
+          healthServer = await createHealthServer(config.defaults.httpPort, sessionManager, bot);
+        } catch (err) {
+          console.warn(`Health server failed to start on port ${config.defaults.httpPort}:`, err);
+        }
       }
     })
     .catch((err) => {

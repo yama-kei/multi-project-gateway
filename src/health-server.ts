@@ -14,10 +14,9 @@ export function createHealthServer(
   const startTime = Date.now();
 
   const server: Server = createServer((req, res) => {
-    if (req.method === 'GET' && req.url === '/health') {
+    const { pathname } = new URL(req.url ?? '/', `http://localhost`);
+    if (req.method === 'GET' && pathname === '/health') {
       const sessions = sessionManager.listSessions();
-      const active = sessions.filter((s) => s.queueLength === 0).length;
-      const queued = sessions.filter((s) => s.queueLength > 0).length;
 
       const body = JSON.stringify({
         status: 'ok',
