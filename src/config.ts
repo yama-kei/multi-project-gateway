@@ -1,6 +1,14 @@
+import { resolvePreset } from './persona-presets.js';
+
 export interface AgentConfig {
   role: string;
   prompt: string;
+}
+
+export interface AgentInputConfig {
+  preset?: string;
+  role?: string;
+  prompt?: string;
 }
 
 export interface ProjectConfig {
@@ -49,12 +57,38 @@ export function loadConfig(raw: unknown): GatewayConfig {
       throw new Error(`Project for channel ${channelId} must have a "directory" string`);
     }
     let agents: Record<string, AgentConfig> | undefined;
-    if (p.agents && typeof p.agents === 'object') {
+    if (Array.isArray(p.agents)) {
+      // Shorthand: ["pm", "engineer"] — resolve each as a preset
+      agents = {};
+      for (const entry of p.agents) {
+        if (typeof entry === 'string') {
+          const name = entry.toLowerCase();
+          const preset = resolvePreset(name);
+          if (preset) {
+            agents[name] = { ...preset };
+          }
+        }
+      }
+      if (Object.keys(agents).length === 0) agents = undefined;
+    } else if (p.agents && typeof p.agents === 'object') {
       agents = {};
       for (const [agentName, agentCfg] of Object.entries(p.agents as Record<string, unknown>)) {
         const ac = agentCfg as Record<string, unknown>;
-        if (typeof ac.role === 'string' && typeof ac.prompt === 'string') {
-          agents[agentName.toLowerCase()] = { role: ac.role, prompt: ac.prompt };
+        const name = agentName.toLowerCase();
+
+        if (typeof ac.preset === 'string') {
+          // Preset-based: resolve preset, then merge overrides
+          const preset = resolvePreset(ac.preset);
+          if (preset) {
+            const role = typeof ac.role === 'string' ? ac.role : preset.role;
+            const basePrompt = preset.prompt;
+            const extra = typeof ac.prompt === 'string' ? ac.prompt : '';
+            const prompt = extra ? `${basePrompt}\n\n${extra}` : basePrompt;
+            agents[name] = { role, prompt };
+          }
+        } else if (typeof ac.role === 'string' && typeof ac.prompt === 'string') {
+          // Inline: original behavior
+          agents[name] = { role: ac.role, prompt: ac.prompt };
         }
       }
       if (Object.keys(agents).length === 0) agents = undefined;
