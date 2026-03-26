@@ -6,6 +6,7 @@ import { createRouter } from './router.js';
 import { createSessionManager } from './session-manager.js';
 import { createFileSessionStore } from './session-store.js';
 import { createDiscordBot } from './discord.js';
+import { createHealthServer, type HealthServer } from './health-server.js';
 import { createTurnCounter } from './turn-counter.js';
 import { runInit } from './init.js';
 import { runHealthChecks } from './health.js';
@@ -137,8 +138,13 @@ function start() {
   const turnCounter = createTurnCounter();
   const bot = createDiscordBot(router, sessionManager, config, turnCounter);
 
+  let healthServer: HealthServer | undefined;
+
   function shutdown() {
     console.log('Shutting down...');
+    if (healthServer) {
+      healthServer.close().catch(() => {});
+    }
     sessionManager.shutdown();
     bot.stop();
     process.exit(0);
@@ -147,10 +153,20 @@ function start() {
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
-  bot.start(token).catch((err) => {
-    console.error('Failed to start bot:', err);
-    process.exit(1);
-  });
+  bot.start(token)
+    .then(async () => {
+      if (config.defaults.httpPort !== false) {
+        try {
+          healthServer = await createHealthServer(config.defaults.httpPort, sessionManager, bot);
+        } catch (err) {
+          console.warn(`Health server failed to start on port ${config.defaults.httpPort}:`, err);
+        }
+      }
+    })
+    .catch((err) => {
+      console.error('Failed to start bot:', err);
+      process.exit(1);
+    });
 }
 
 function status() {

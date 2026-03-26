@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, Events, ChannelType, type Message, type TextChannel, type ThreadChannel } from 'discord.js';
+import { Client, GatewayIntentBits, Events, Status, type Message, type TextChannel, type ThreadChannel } from 'discord.js';
 import type { Router } from './router.js';
 import type { SessionManager } from './session-manager.js';
 import type { GatewayConfig } from './config.js';
@@ -44,6 +44,7 @@ export function chunkMessage(text: string, limit: number): string[] {
 export interface DiscordBot {
   start(token: string): Promise<void>;
   stop(): void;
+  getStatus(): string;
 }
 
 function resolveProjectName(config: GatewayConfig, channelId: string): string {
@@ -399,6 +400,21 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
     },
     stop() {
       client.destroy();
+    },
+    getStatus(): string {
+      const ws = client.ws;
+      const statusMap: Record<number, string> = {
+        [Status.Ready]: 'connected',
+        [Status.Connecting]: 'connecting',
+        [Status.Reconnecting]: 'reconnecting',
+        [Status.Idle]: 'idle',
+        [Status.Nearly]: 'nearly',
+        [Status.Disconnected]: 'disconnected',
+        [Status.WaitingForGuilds]: 'waiting_for_guilds',
+        [Status.Identifying]: 'identifying',
+        [Status.Resuming]: 'resuming',
+      };
+      return statusMap[ws.status] ?? 'unknown';
     },
   };
 }

@@ -27,6 +27,7 @@ export interface GatewayDefaults {
   claudeArgs: string[];
   maxTurnsPerAgent: number;
   agentTimeoutMs: number;
+  httpPort: number | false;
 }
 
 export interface GatewayConfig {
@@ -114,6 +115,7 @@ export function loadConfig(raw: unknown): GatewayConfig {
       claudeArgs: Array.isArray(defaults.claudeArgs) ? (defaults.claudeArgs as string[]) : ['--permission-mode', 'acceptEdits', '--output-format', 'json'],
       maxTurnsPerAgent: typeof defaults.maxTurnsPerAgent === 'number' ? defaults.maxTurnsPerAgent : 10,
       agentTimeoutMs: typeof defaults.agentTimeoutMs === 'number' ? defaults.agentTimeoutMs : 3 * 60 * 1000,
+      httpPort: defaults.httpPort === false ? false : (typeof defaults.httpPort === 'number' ? defaults.httpPort : 3100),
     },
     projects: validated,
   };
