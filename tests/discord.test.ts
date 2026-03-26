@@ -202,9 +202,9 @@ describe('handleCommand', () => {
       isThread: false,
     });
     expect(result).toContain('my-app');
-    expect(result).toContain('@pm');
+    expect(result).toContain('`pm`');
     expect(result).toContain('Product Manager');
-    expect(result).toContain('@engineer');
+    expect(result).toContain('`engineer`');
     expect(result).toContain('Engineer');
   });
 
@@ -216,8 +216,8 @@ describe('handleCommand', () => {
       isThread: true,
     });
     expect(result).toContain('my-app');
-    expect(result).toContain('@pm');
-    expect(result).toContain('@engineer');
+    expect(result).toContain('`pm`');
+    expect(result).toContain('`engineer`');
   });
 
   it('returns no agents message for project without agents', () => {
@@ -240,6 +240,25 @@ describe('handleCommand', () => {
     const sm = mockSessionManager();
     const result = handleCommand('!help', testConfig, sm);
     expect(result).toContain('!agents');
+  });
+
+  it('includes !ask in !help output', () => {
+    const sm = mockSessionManager();
+    const result = handleCommand('!help', testConfig, sm);
+    expect(result).toContain('!ask');
+    expect(result).toContain('dispatch a message to a named agent');
+  });
+
+  it('!agents output shows !ask dispatch syntax', () => {
+    const sm = mockSessionManager();
+    const result = handleCommand('!agents', configWithAgents, sm, {
+      channelId: 'ch-1',
+      projectName: 'my-app',
+      isThread: false,
+    });
+    expect(result).toContain('!ask');
+    expect(result).toContain('pm');
+    expect(result).toContain('engineer');
   });
 });
 
