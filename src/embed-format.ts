@@ -43,3 +43,25 @@ export function buildAgentEmbeds(text: string, agentName: string, agentRole: str
     return embed;
   });
 }
+
+const PLAIN_TEXT_LIMIT = 2000;
+
+/** Send a message as embeds (if agent) or plain text (if not). */
+export async function sendAgentMessage(
+  channel: { send(content: unknown): Promise<unknown> },
+  text: string,
+  agentName?: string,
+  agentRole?: string,
+): Promise<void> {
+  if (agentName && agentRole) {
+    const embeds = buildAgentEmbeds(text, agentName, agentRole);
+    for (const embed of embeds) {
+      await channel.send({ embeds: [embed] });
+    }
+  } else {
+    const chunks = chunkMessage(text, PLAIN_TEXT_LIMIT);
+    for (const chunk of chunks) {
+      await channel.send(chunk);
+    }
+  }
+}

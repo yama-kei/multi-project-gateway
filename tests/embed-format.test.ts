@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { agentColor, PALETTE, buildAgentEmbeds } from '../src/embed-format.js';
+import { describe, it, expect, vi } from 'vitest';
+import { agentColor, PALETTE, buildAgentEmbeds, sendAgentMessage } from '../src/embed-format.js';
 
 describe('agentColor', () => {
   it('returns the same color for the same key', () => {
@@ -57,5 +57,48 @@ describe('buildAgentEmbeds', () => {
     expect(embeds).toHaveLength(1);
     expect(embeds[0].data.description).toBe('');
     expect(embeds[0].data.author?.name).toBe('Product Manager');
+  });
+});
+
+function mockChannel() {
+  const sent: unknown[] = [];
+  return {
+    send: vi.fn(async (content: unknown) => { sent.push(content); }),
+    sent,
+  };
+}
+
+describe('sendAgentMessage', () => {
+  it('sends plain text when no agent is provided', async () => {
+    const ch = mockChannel();
+    await sendAgentMessage(ch as any, 'Hello world');
+    expect(ch.sent).toHaveLength(1);
+    expect(ch.sent[0]).toBe('Hello world');
+  });
+
+  it('sends embeds when agent is provided', async () => {
+    const ch = mockChannel();
+    await sendAgentMessage(ch as any, 'Hello world', 'pm', 'Product Manager');
+    expect(ch.sent).toHaveLength(1);
+    const msg = ch.sent[0] as { embeds: any[] };
+    expect(msg.embeds).toHaveLength(1);
+    expect(msg.embeds[0].data.author?.name).toBe('Product Manager');
+  });
+
+  it('sends multiple messages for long plain text (2000 limit)', async () => {
+    const ch = mockChannel();
+    await sendAgentMessage(ch as any, 'A'.repeat(4500));
+    expect(ch.sent).toHaveLength(3); // 2000 + 2000 + 500
+    expect(typeof ch.sent[0]).toBe('string');
+  });
+
+  it('sends multiple embed messages for long agent text (4096 limit)', async () => {
+    const ch = mockChannel();
+    await sendAgentMessage(ch as any, 'A'.repeat(5000), 'pm', 'Product Manager');
+    expect(ch.sent).toHaveLength(2); // 4096 + 904
+    const msg1 = ch.sent[0] as { embeds: any[] };
+    const msg2 = ch.sent[1] as { embeds: any[] };
+    expect(msg1.embeds[0].data.author?.name).toBe('Product Manager');
+    expect(msg2.embeds[0].data.author?.name).toBe('Product Manager (cont.)');
   });
 });
