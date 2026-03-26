@@ -218,4 +218,25 @@ describe('loadConfig', () => {
     });
     expect(config.projects['ch-1'].agents).toBeUndefined();
   });
+
+  it('defaults httpPort to 3100', () => {
+    const config = loadConfig({ projects: { 'ch-1': { directory: '/tmp/a' } } });
+    expect(config.defaults.httpPort).toBe(3100);
+  });
+
+  it('overrides httpPort from config', () => {
+    const config = loadConfig({
+      defaults: { httpPort: 8080 },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.defaults.httpPort).toBe(8080);
+  });
+
+  it('disables httpPort when set to false', () => {
+    const config = loadConfig({
+      defaults: { httpPort: false },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.defaults.httpPort).toBe(false);
+  });
 });
