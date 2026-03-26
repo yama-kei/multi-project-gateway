@@ -3,6 +3,7 @@ import type { Router } from './router.js';
 import type { SessionManager } from './session-manager.js';
 import type { GatewayConfig } from './config.js';
 import { parseAgentMention } from './agent-dispatch.js';
+import { sendAgentMessage } from './embed-format.js';
 import type { TurnCounter } from './turn-counter.js';
 
 export function chunkMessage(text: string, limit: number): string[] {
@@ -307,10 +308,12 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
         await replyChannel.send('⚠️ Claude started a new session — previous conversation context may be lost.');
       }
 
-      const chunks = chunkMessage(result.text, 2000);
-      for (const chunk of chunks) {
-        await replyChannel.send(chunk);
-      }
+      await sendAgentMessage(
+        replyChannel,
+        result.text,
+        activeAgent?.agentName,
+        activeAgent?.agent.role,
+      );
 
       // Track last active agent for plain reply routing (#48)
       if (activeAgent) {
@@ -367,10 +370,12 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
           const elapsed = ((Date.now() - sendStart) / 1000).toFixed(1);
           console.log(`[handoff] thread=${replyChannel.id} ${handoff.agentName} responded in ${elapsed}s (${handoffResult.text.length} chars)`);
 
-          const handoffChunks = chunkMessage(handoffResult.text, 2000);
-          for (const chunk of handoffChunks) {
-            await replyChannel.send(chunk);
-          }
+          await sendAgentMessage(
+            replyChannel,
+            handoffResult.text,
+            handoff.agentName,
+            handoff.agent.role,
+          );
 
           responseText = handoffResult.text;
           currentAgentName = handoff.agentName;
