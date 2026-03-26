@@ -4,7 +4,7 @@ import type { SessionManager } from './session-manager.js';
 import type { GatewayConfig } from './config.js';
 import { buildToolArgs } from './claude-cli.js';
 import { parseAgentMention } from './agent-dispatch.js';
-import { sendAgentMessage } from './embed-format.js';
+import { sendAgentMessage, buildHandoffEmbed } from './embed-format.js';
 import type { TurnCounter } from './turn-counter.js';
 
 export function chunkMessage(text: string, limit: number): string[] {
@@ -361,6 +361,14 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
 
           replyChannel.sendTyping().catch(() => {});
 
+          // Post handoff announcement — non-blocking so a failed send doesn't prevent the handoff (#56)
+          const announcement = await replyChannel.send({ embeds: [buildHandoffEmbed(handoff.agentName, handoff.agent.role)] }).catch(() => null);
+          const deleteAnnouncement = () => {
+            if (announcement && 'delete' in announcement) {
+              (announcement as { delete(): Promise<unknown> }).delete().catch(() => {});
+            }
+          };
+
           console.log(`[handoff] thread=${replyChannel.id} sending to ${handoff.agentName} (key=${handoffKey}, prompt length=${responseText.length})`);
           const sendStart = Date.now();
 
@@ -375,6 +383,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
           } catch (handoffErr) {
             const msg = handoffErr instanceof Error ? handoffErr.message : String(handoffErr);
             console.log(`[handoff] thread=${replyChannel.id} ${handoff.agentName} failed: ${msg}`);
+            deleteAnnouncement();
             await replyChannel.send(
               `⚠️ Agent \`@${handoff.agentName}\` failed: ${msg.slice(0, 1800)}`
             );
@@ -383,6 +392,9 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
 
           const elapsed = ((Date.now() - sendStart) / 1000).toFixed(1);
           console.log(`[handoff] thread=${replyChannel.id} ${handoff.agentName} responded in ${elapsed}s (${handoffResult.text.length} chars)`);
+
+          // Remove announcement now that the response is posted (#56)
+          deleteAnnouncement();
 
           await sendAgentMessage(
             replyChannel,

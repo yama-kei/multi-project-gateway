@@ -4,6 +4,7 @@ import type { GatewayConfig, AgentConfig } from '../src/config.js';
 import type { SessionManager } from '../src/session-manager.js';
 import { parseAgentMention } from '../src/agent-dispatch.js';
 import { createTurnCounter } from '../src/turn-counter.js';
+import { buildHandoffEmbed } from '../src/embed-format.js';
 
 const testConfig: GatewayConfig = {
   defaults: { idleTimeoutMs: 1800000, maxConcurrentSessions: 4, claudeArgs: [], sessionTtlMs: 604800000, maxPersistedSessions: 50, maxTurnsPerAgent: 5, agentTimeoutMs: 180000 },
@@ -335,6 +336,12 @@ describe('agent handoff flow', () => {
     turnCounter.reset(threadId);
     expect(turnCounter.getTurns(threadId)).toBe(0);
     expect(turnCounter.isOverLimit(threadId, 3)).toBe(false);
+  });
+
+  it('buildHandoffEmbed is available for handoff announcements', () => {
+    const embed = buildHandoffEmbed('engineer', 'Engineer');
+    expect(embed.data.description).toBe('Handing off to **@engineer**...');
+    expect(embed.data.author?.name).toBe('Engineer');
   });
 
   it('uses correct session keys for agent dispatch', () => {

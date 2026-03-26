@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { agentColor, PALETTE, buildAgentEmbeds, sendAgentMessage } from '../src/embed-format.js';
+import { agentColor, PALETTE, buildAgentEmbeds, buildHandoffEmbed, sendAgentMessage } from '../src/embed-format.js';
 
 describe('agentColor', () => {
   it('returns the same color for the same key', () => {
@@ -57,6 +57,20 @@ describe('buildAgentEmbeds', () => {
     expect(embeds).toHaveLength(1);
     expect(embeds[0].data.description).toBe('');
     expect(embeds[0].data.author?.name).toBe('Product Manager');
+  });
+});
+
+describe('buildHandoffEmbed', () => {
+  it('creates an embed with the handoff message', () => {
+    const embed = buildHandoffEmbed('engineer', 'Software Engineer');
+    expect(embed.data.description).toBe('Handing off to **@engineer**...');
+    expect(embed.data.author?.name).toBe('Software Engineer');
+    expect(embed.data.color).toBe(agentColor('engineer'));
+  });
+
+  it('uses the correct agent color', () => {
+    const embed = buildHandoffEmbed('pm', 'Product Manager');
+    expect(embed.data.color).toBe(agentColor('pm'));
   });
 });
 
