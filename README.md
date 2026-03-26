@@ -195,12 +195,14 @@ Commands:
   start     Start the gateway (default)
   init      Interactive setup wizard
   status    Show session status from disk
+  logs      Show structured gateway logs
   help      Show help
 
 Options:
   --profile <name>  Use a named profile (default: "default")
   --config <path>   Use a specific config.json path
   --migrate         Copy CWD config files into ~/.mpg/profiles/default/
+  --level <level>   (logs) Filter by minimum log level (debug|info|warn|error)
 ```
 
 ## Config home (`~/.mpg/`)
@@ -279,6 +281,10 @@ If `~/.mpg/` does not exist and CWD files do, everything works exactly as before
 | `defaults.disallowedTools` | string[] | `[]` | Tools Claude is forbidden from using (conflicts with `allowedTools`) |
 | `defaults.maxTurnsPerAgent` | number | `5` | Max automatic handoffs in a single agent chain |
 | `defaults.agentTimeoutMs` | number | `180000` (3 min) | Timeout per agent turn during auto-handoff |
+| `defaults.sessionTtlMs` | number | `604800000` (7 days) | Max age for persisted sessions before pruning |
+| `defaults.maxPersistedSessions` | number | `50` | Max number of persisted sessions kept on disk |
+| `defaults.httpPort` | number \| false | `3100` | Port for the `/health` HTTP endpoint (`false` to disable) |
+| `defaults.logLevel` | string | `"info"` | Minimum log level (`debug`, `info`, `warn`, `error`) |
 | `projects.<channelId>.name` | string | channel ID | Display name for the project |
 | `projects.<channelId>.directory` | string | **required** | Absolute path to the project directory |
 | `projects.<channelId>.idleTimeoutMs` | number | inherits default | Per-project idle timeout override |
@@ -286,6 +292,8 @@ If `~/.mpg/` does not exist and CWD files do, everything works exactly as before
 | `projects.<channelId>.allowedTools` | string[] | inherits default | Per-project allowed tools override |
 | `projects.<channelId>.disallowedTools` | string[] | inherits default | Per-project disallowed tools override |
 | `projects.<channelId>.agents` | object | — | Named agents for this project (see [Multi-agent setup](#multi-agent-setup)) |
+| `projects.<channelId>.allowedRoles` | string[] | — | Discord role names required to use this project (empty = no restriction) |
+| `projects.<channelId>.rateLimitPerUser` | number | — | Max messages per user per minute for this project |
 
 ## Multi-agent setup
 
@@ -417,6 +425,13 @@ The gateway responds to commands in any mapped Discord channel:
 | `src/claude-cli.ts` | Spawns `claude --print` subprocess, parses JSON output |
 | `src/agent-dispatch.ts` | Parses `@mentions`, resolves agent targets |
 | `src/turn-counter.ts` | Tracks handoff turns per thread, enforces `maxTurnsPerAgent` |
+| `src/worktree.ts` | Manages git worktrees for session isolation; reconciles orphans on startup |
+| `src/embed-format.ts` | Builds Discord embeds for agent responses and handoff announcements |
+| `src/persona-presets.ts` | Built-in persona library (PM, engineer, etc.) for agent shorthand config |
+| `src/role-check.ts` | Checks Discord member roles against `allowedRoles` |
+| `src/rate-limiter.ts` | Per-user rate limiting (sliding window) |
+| `src/health-server.ts` | HTTP `/health` endpoint with uptime and session count |
+| `src/logger.ts` | Structured logger with level filtering and JSON output |
 | `src/discord.ts` | Discord.js client, message routing, agent handoff loop, response chunking |
 
 ## Scripts
@@ -435,7 +450,7 @@ The gateway responds to commands in any mapped Discord channel:
 - **One message at a time per project** — concurrent messages to the same project are queued
 - **Per-thread sessions** — each thread gets its own Claude session scoped to the parent channel's project; threads auto-archive after 60 minutes of inactivity
 - **Local only** — the gateway runs on the same machine as the project directories
-- **No Discord access control** — any user in a mapped channel can send prompts; restrict channel access in Discord server settings
+- **Optional Discord access control** — per-project `allowedRoles` restricts usage to specific Discord roles; `rateLimitPerUser` throttles per-user message rate. Without these, any user in a mapped channel can send prompts
 
 ## License
 
