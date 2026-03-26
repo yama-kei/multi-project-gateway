@@ -51,7 +51,7 @@ export function friendlyError(stderr: string): string {
   return `Claude error: ${stderr.slice(0, 500)}`;
 }
 
-const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const DEFAULT_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes
 
 export function runClaude(
   cwd: string,
