@@ -17,6 +17,43 @@ export function parseClaudeJsonOutput(raw: string): ClaudeResult {
   };
 }
 
+export interface ToolRestrictions {
+  allowedTools?: string[];
+  disallowedTools?: string[];
+}
+
+/**
+ * Build --allowed-tools / --disallowed-tools CLI args from config.
+ * Per-project overrides take precedence over gateway defaults.
+ * If both allowed and disallowed are set, allowed takes precedence
+ * (disallowed is ignored) — config validation already warns about this.
+ * Skips tool flags if baseArgs already contain them (manual claudeArgs override).
+ */
+export function buildToolArgs(
+  defaults: ToolRestrictions,
+  projectOverrides?: ToolRestrictions,
+  existingArgs?: string[],
+): string[] {
+  // If the user already manually set tool flags in claudeArgs, don't conflict
+  if (existingArgs?.includes('--allowed-tools') || existingArgs?.includes('--disallowed-tools')) {
+    return [];
+  }
+
+  // Per-project overrides take precedence over gateway defaults
+  const allowed = projectOverrides?.allowedTools ?? defaults.allowedTools;
+  const disallowed = projectOverrides?.disallowedTools ?? defaults.disallowedTools;
+
+  const args: string[] = [];
+
+  if (allowed && allowed.length > 0) {
+    args.push('--allowed-tools', ...allowed);
+  } else if (disallowed && disallowed.length > 0) {
+    args.push('--disallowed-tools', ...disallowed);
+  }
+
+  return args;
+}
+
 export function buildClaudeArgs(
   baseArgs: string[],
   prompt: string,

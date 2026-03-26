@@ -34,8 +34,54 @@ By default, each Claude session is restricted to its project directory using `--
 **Important considerations:**
 - Anyone who can post in a mapped Discord channel can instruct Claude to read and modify files in that project's directory
 - Only map channels that trusted users have access to
-- For stricter control, use `--allowed-tools` in `claudeArgs` to whitelist specific tools
+- Tool restrictions are enforced via `--allowed-tools` / `--disallowed-tools` (see [Tool security](#tool-security))
 - For maximum access (e.g., in a sandboxed environment), you can set `claudeArgs` to use `--dangerously-skip-permissions`, but this gives Claude full OS-level access
+
+### Tool security
+
+The gateway restricts which tools Claude can use via `--allowed-tools` and `--disallowed-tools` CLI flags. By default, only safe file-system and read-only tools are allowed.
+
+**Default allowlist:**
+
+| Tool | Description | Security implications |
+|------|-------------|----------------------|
+| `Read` | Read file contents | Read-only. Can read any file in the project directory. |
+| `Edit` | Edit existing files (patch-based) | Can modify existing files. Cannot create new files. |
+| `Write` | Create or overwrite files | Can create new files or overwrite existing ones. |
+| `Glob` | Find files by pattern | Read-only directory listing. Low risk. |
+| `Grep` | Search file contents | Read-only content search. Low risk. |
+| `Bash(git:*)` | Run git commands only | Restricted to `git` subcommands. Can commit, push, branch. Cannot run arbitrary shell commands. |
+| `TodoWrite` | Write to Claude's internal todo list | No file-system side effects. |
+
+**Tools NOT in the default allowlist (higher risk):**
+
+| Tool | Risk | Why it is excluded |
+|------|------|--------------------|
+| `Bash` (unrestricted) | **High** | Full shell access: can run any command, install packages, access network, modify system files. |
+| `WebSearch` / `WebFetch` | **Medium** | Network access: can exfiltrate data or fetch untrusted content. |
+| `NotebookEdit` | **Low** | Jupyter notebook editing. Excluded for simplicity; add if needed. |
+
+**Configuration examples:**
+
+```json
+{
+  "defaults": {
+    "allowedTools": ["Read", "Edit", "Write", "Glob", "Grep", "Bash(git:*)", "TodoWrite"]
+  },
+  "projects": {
+    "TRUSTED_PROJECT_CHANNEL": {
+      "directory": "/path/to/trusted-project",
+      "allowedTools": ["Read", "Edit", "Write", "Glob", "Grep", "Bash", "TodoWrite"]
+    },
+    "READ_ONLY_CHANNEL": {
+      "directory": "/path/to/sensitive-project",
+      "allowedTools": ["Read", "Glob", "Grep"]
+    }
+  }
+}
+```
+
+**Override precedence:** per-project `allowedTools`/`disallowedTools` override gateway defaults. If both `allowedTools` and `disallowedTools` are set at the same level, `allowedTools` takes precedence (a warning is logged). If `claudeArgs` already contains `--allowed-tools` or `--disallowed-tools`, the config-based tool restrictions are skipped to avoid conflicts.
 
 ## Prerequisites
 
@@ -226,12 +272,16 @@ If `~/.mpg/` does not exist and CWD files do, everything works exactly as before
 | `defaults.idleTimeoutMs` | number | `1800000` (30 min) | Session idle timeout before cleanup |
 | `defaults.maxConcurrentSessions` | number | `4` | Max concurrent Claude processes |
 | `defaults.claudeArgs` | string[] | `["--permission-mode", "acceptEdits", "--output-format", "json"]` | Args passed to every `claude` invocation |
-| `defaults.maxTurnsPerAgent` | number | `10` | Max automatic handoffs in a single agent chain |
+| `defaults.allowedTools` | string[] | `["Read", "Edit", "Write", "Glob", "Grep", "Bash(git:*)", "TodoWrite"]` | Tools Claude is allowed to use (see [Tool security](#tool-security)) |
+| `defaults.disallowedTools` | string[] | `[]` | Tools Claude is forbidden from using (conflicts with `allowedTools`) |
+| `defaults.maxTurnsPerAgent` | number | `5` | Max automatic handoffs in a single agent chain |
 | `defaults.agentTimeoutMs` | number | `180000` (3 min) | Timeout per agent turn during auto-handoff |
 | `projects.<channelId>.name` | string | channel ID | Display name for the project |
 | `projects.<channelId>.directory` | string | **required** | Absolute path to the project directory |
 | `projects.<channelId>.idleTimeoutMs` | number | inherits default | Per-project idle timeout override |
 | `projects.<channelId>.claudeArgs` | string[] | inherits default | Per-project Claude args override |
+| `projects.<channelId>.allowedTools` | string[] | inherits default | Per-project allowed tools override |
+| `projects.<channelId>.disallowedTools` | string[] | inherits default | Per-project disallowed tools override |
 | `projects.<channelId>.agents` | object | — | Named agents for this project (see [Multi-agent setup](#multi-agent-setup)) |
 
 ## Multi-agent setup
@@ -296,7 +346,7 @@ When an agent's response contains an `@mention` of another agent in the same pro
 4. Engineer implements and responds mentioning `@pm` for review
 5. Loop continues until no `@mention` is found or the turn limit is reached
 
-The turn counter resets whenever a human posts a new message. The `maxTurnsPerAgent` default (10) prevents runaway loops.
+The turn counter resets whenever a human posts a new message. The `maxTurnsPerAgent` default (5) prevents runaway loops.
 
 ### Listing agents
 

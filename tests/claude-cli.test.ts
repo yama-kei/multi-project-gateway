@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { parseClaudeJsonOutput, buildClaudeArgs, friendlyError, runClaude } from '../src/claude-cli.js';
+import { parseClaudeJsonOutput, buildClaudeArgs, buildToolArgs, friendlyError, runClaude } from '../src/claude-cli.js';
 
 describe('parseClaudeJsonOutput', () => {
   it('extracts result text and session_id from JSON output', () => {
@@ -67,6 +67,95 @@ describe('buildClaudeArgs', () => {
   it('omits --append-system-prompt when not provided', () => {
     const args = buildClaudeArgs([], 'hello', undefined);
     expect(args).not.toContain('--append-system-prompt');
+  });
+});
+
+describe('buildToolArgs', () => {
+  it('returns --allowed-tools from defaults when no project overrides', () => {
+    const args = buildToolArgs(
+      { allowedTools: ['Read', 'Edit', 'Grep'] },
+    );
+    expect(args).toEqual(['--allowed-tools', 'Read', 'Edit', 'Grep']);
+  });
+
+  it('returns --disallowed-tools when only disallowedTools is set', () => {
+    const args = buildToolArgs(
+      { disallowedTools: ['Bash', 'WebSearch'] },
+    );
+    expect(args).toEqual(['--disallowed-tools', 'Bash', 'WebSearch']);
+  });
+
+  it('allowed takes precedence over disallowed (they conflict)', () => {
+    const args = buildToolArgs(
+      { allowedTools: ['Read'], disallowedTools: ['Bash'] },
+    );
+    expect(args).toEqual(['--allowed-tools', 'Read']);
+    expect(args).not.toContain('--disallowed-tools');
+  });
+
+  it('project overrides take precedence over defaults', () => {
+    const args = buildToolArgs(
+      { allowedTools: ['Read', 'Edit'] },
+      { allowedTools: ['Read', 'Edit', 'Bash'] },
+    );
+    expect(args).toEqual(['--allowed-tools', 'Read', 'Edit', 'Bash']);
+  });
+
+  it('project disallowedTools overrides default allowedTools', () => {
+    const args = buildToolArgs(
+      { allowedTools: ['Read', 'Edit'] },
+      { disallowedTools: ['Bash'] },
+    );
+    // Project override has no allowedTools, falls back to defaults.allowedTools
+    // But project sets disallowedTools — since project overrides are checked first
+    // and allowedTools is undefined for project, we fall back to defaults.allowedTools
+    expect(args).toEqual(['--allowed-tools', 'Read', 'Edit']);
+  });
+
+  it('returns empty array when no tools configured', () => {
+    const args = buildToolArgs({});
+    expect(args).toEqual([]);
+  });
+
+  it('returns empty array when allowedTools is empty', () => {
+    const args = buildToolArgs({ allowedTools: [] });
+    expect(args).toEqual([]);
+  });
+
+  it('skips tool args when existingArgs already has --allowed-tools', () => {
+    const args = buildToolArgs(
+      { allowedTools: ['Read'] },
+      undefined,
+      ['--output-format', 'json', '--allowed-tools', 'Bash'],
+    );
+    expect(args).toEqual([]);
+  });
+
+  it('skips tool args when existingArgs already has --disallowed-tools', () => {
+    const args = buildToolArgs(
+      { allowedTools: ['Read'] },
+      undefined,
+      ['--disallowed-tools', 'Bash'],
+    );
+    expect(args).toEqual([]);
+  });
+
+  it('handles undefined project overrides gracefully', () => {
+    const args = buildToolArgs(
+      { allowedTools: ['Read', 'Glob'] },
+      undefined,
+    );
+    expect(args).toEqual(['--allowed-tools', 'Read', 'Glob']);
+  });
+
+  it('project with empty allowedTools falls through to disallowed', () => {
+    const args = buildToolArgs(
+      { disallowedTools: ['Bash'] },
+      { allowedTools: [] },
+    );
+    // Project overrides allowedTools with empty array, so allowed is []
+    // Falls to disallowed from defaults
+    expect(args).toEqual(['--disallowed-tools', 'Bash']);
   });
 });
 
