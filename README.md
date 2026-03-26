@@ -283,7 +283,7 @@ If `~/.mpg/` does not exist and CWD files do, everything works exactly as before
 | `defaults.agentTimeoutMs` | number | `180000` (3 min) | Timeout per agent turn during auto-handoff |
 | `defaults.sessionTtlMs` | number | `604800000` (7 days) | Max age for persisted sessions before pruning |
 | `defaults.maxPersistedSessions` | number | `50` | Max number of persisted sessions kept on disk |
-| `defaults.httpPort` | number \| false | `3100` | Port for the `/health` HTTP endpoint (`false` to disable) |
+| `defaults.httpPort` | number \| false | `3100` | Port for the web dashboard and API (`false` to disable) |
 | `defaults.logLevel` | string | `"info"` | Minimum log level (`debug`, `info`, `warn`, `error`) |
 | `projects.<channelId>.name` | string | channel ID | Display name for the project |
 | `projects.<channelId>.directory` | string | **required** | Absolute path to the project directory |
@@ -408,8 +408,29 @@ The gateway responds to commands in any mapped Discord channel:
 | `!session <name>` | Inspect a specific project's session (ID, idle time, queue) |
 | `!restart <name>` | Reset a session (fresh context, keeps worktree) |
 | `!kill <name>` | Force-close a project's session |
+| `!ask <agent> <message>` | Dispatch a message to a specific agent (shorthand: `!<agent> <message>`) |
 | `!agents` | List available agents for the current project |
 | `!help` | Show available commands |
+
+## Web dashboard
+
+The gateway includes a built-in web dashboard for monitoring sessions and projects. It starts automatically on the port configured by `defaults.httpPort` (default: `3100`). Set `httpPort` to `false` to disable it.
+
+Open `http://localhost:3100/` to view the dashboard, which shows:
+
+- Gateway health and Discord connection status
+- Active sessions with last activity time and queue depth
+- Configured projects and their agents
+
+### API endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /` | Web dashboard (auto-refreshes every 5 seconds) |
+| `GET /health` | Health check — returns status, uptime, session/queue counts, and Discord connection state |
+| `GET /api/sessions` | List all active sessions with details |
+| `GET /api/projects` | List configured projects and their agents |
+| `GET /api/status` | Combined status: version, health, sessions, and projects |
 
 ## Architecture
 
@@ -430,7 +451,7 @@ The gateway responds to commands in any mapped Discord channel:
 | `src/persona-presets.ts` | Built-in persona library (PM, engineer, etc.) for agent shorthand config |
 | `src/role-check.ts` | Checks Discord member roles against `allowedRoles` |
 | `src/rate-limiter.ts` | Per-user rate limiting (sliding window) |
-| `src/health-server.ts` | HTTP `/health` endpoint with uptime and session count |
+| `src/health-server.ts` | Web dashboard and REST API (`/health`, `/api/sessions`, `/api/projects`, `/api/status`) |
 | `src/logger.ts` | Structured logger with level filtering and JSON output |
 | `src/discord.ts` | Discord.js client, message routing, agent handoff loop, response chunking |
 
