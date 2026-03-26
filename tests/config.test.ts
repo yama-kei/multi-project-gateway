@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { loadConfig, type GatewayConfig } from '../src/config.js';
+import { PERSONA_PRESETS } from '../src/persona-presets.js';
 
 describe('loadConfig', () => {
   it('loads a valid config object', () => {
@@ -114,5 +115,107 @@ describe('loadConfig', () => {
     };
     const config = loadConfig(raw as any);
     expect(config.defaults.idleTimeoutMs).toBe(1800000);
+  });
+
+  it('resolves agents from array shorthand using presets', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          directory: '/tmp/app',
+          agents: ['pm', 'engineer', 'qa'],
+        },
+      },
+    });
+    const agents = config.projects['ch-1'].agents!;
+    expect(agents.pm).toEqual(PERSONA_PRESETS.pm);
+    expect(agents.engineer).toEqual(PERSONA_PRESETS.engineer);
+    expect(agents.qa).toEqual(PERSONA_PRESETS.qa);
+  });
+
+  it('ignores unknown preset names in array shorthand', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          directory: '/tmp/app',
+          agents: ['pm', 'nonexistent'],
+        },
+      },
+    });
+    const agents = config.projects['ch-1'].agents!;
+    expect(agents.pm).toBeDefined();
+    expect(agents.nonexistent).toBeUndefined();
+  });
+
+  it('resolves preset field in object-form agents', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          directory: '/tmp/app',
+          agents: {
+            pm: { preset: 'pm' },
+          },
+        },
+      },
+    });
+    const agents = config.projects['ch-1'].agents!;
+    expect(agents.pm.role).toBe('Product Manager');
+    expect(agents.pm.prompt).toBe(PERSONA_PRESETS.pm.prompt);
+  });
+
+  it('appends user prompt to preset base prompt', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          directory: '/tmp/app',
+          agents: {
+            engineer: { preset: 'engineer', prompt: 'This is a TypeScript monorepo.' },
+          },
+        },
+      },
+    });
+    const agent = config.projects['ch-1'].agents!.engineer;
+    expect(agent.prompt).toContain(PERSONA_PRESETS.engineer.prompt);
+    expect(agent.prompt).toContain('This is a TypeScript monorepo.');
+    expect(agent.prompt).toBe(`${PERSONA_PRESETS.engineer.prompt}\n\nThis is a TypeScript monorepo.`);
+  });
+
+  it('allows role override with preset', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          directory: '/tmp/app',
+          agents: {
+            pm: { preset: 'pm', role: 'Tech Lead' },
+          },
+        },
+      },
+    });
+    expect(config.projects['ch-1'].agents!.pm.role).toBe('Tech Lead');
+  });
+
+  it('inline agents still work alongside preset agents (backward compatible)', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          directory: '/tmp/app',
+          agents: {
+            pm: { preset: 'pm' },
+            custom: { role: 'Custom Agent', prompt: 'You do custom things.' },
+          },
+        },
+      },
+    });
+    const agents = config.projects['ch-1'].agents!;
+    expect(agents.pm.role).toBe('Product Manager');
+    expect(agents.custom).toEqual({ role: 'Custom Agent', prompt: 'You do custom things.' });
+  });
+
+  it('returns undefined agents when array shorthand has only unknown presets', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': { directory: '/tmp/app', agents: ['unknown1', 'unknown2'] },
+      },
+    });
+    expect(config.projects['ch-1'].agents).toBeUndefined();
   });
 });
