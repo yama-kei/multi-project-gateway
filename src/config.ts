@@ -19,6 +19,8 @@ export interface ProjectConfig {
   allowedTools?: string[];
   disallowedTools?: string[];
   agents?: Record<string, AgentConfig>;
+  allowedRoles?: string[];
+  rateLimitPerUser?: number;
 }
 
 export const DEFAULT_ALLOWED_TOOLS: string[] = [
@@ -115,6 +117,9 @@ export function loadConfig(raw: unknown): GatewayConfig {
       console.warn(`Warning: project "${typeof p.name === 'string' ? p.name : channelId}" sets both allowedTools and disallowedTools — they conflict. allowedTools takes precedence.`);
     }
 
+    const allowedRoles = Array.isArray(p.allowedRoles) ? (p.allowedRoles as string[]).filter(r => typeof r === 'string') : undefined;
+    const rateLimitPerUser = typeof p.rateLimitPerUser === 'number' && p.rateLimitPerUser > 0 ? p.rateLimitPerUser : undefined;
+
     validated[channelId] = {
       name: typeof p.name === 'string' ? p.name : channelId,
       directory: p.directory,
@@ -123,6 +128,8 @@ export function loadConfig(raw: unknown): GatewayConfig {
       ...(projectAllowed && { allowedTools: projectAllowed }),
       ...(projectDisallowed && { disallowedTools: projectDisallowed }),
       ...(agents && { agents }),
+      ...(allowedRoles && allowedRoles.length > 0 && { allowedRoles }),
+      ...(rateLimitPerUser !== undefined && { rateLimitPerUser }),
     };
   }
 
