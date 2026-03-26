@@ -100,9 +100,10 @@ The gateway restricts which tools Claude can use via `--allowed-tools` and `--di
 3. Go to **Bot** in the sidebar
 4. Click **Reset Token** and copy the token (you'll need it in step 3)
 5. Enable **Message Content Intent** under Privileged Gateway Intents
-6. Go to **OAuth2 > URL Generator**, select the `bot` scope
-7. Under Bot Permissions, select: **Send Messages**, **Read Message History**, **Add Reactions**
-8. Copy the generated URL and open it in your browser to invite the bot to your server
+6. If you plan to use **role-based access control** (`allowedRoles` in config), also enable the **Server Members Intent** (GuildMembers) under Privileged Gateway Intents. This is required for the bot to read member roles.
+7. Go to **OAuth2 > URL Generator**, select the `bot` scope
+8. Under Bot Permissions, select: **Send Messages**, **Read Message History**, **Add Reactions**
+9. Copy the generated URL and open it in your browser to invite the bot to your server
 
 ### 2. Create Discord channels for your projects
 

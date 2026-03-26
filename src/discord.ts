@@ -248,7 +248,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
 
     // Per-user rate limiting
     if (projectForAcl?.rateLimitPerUser) {
-      const result = rateLimiter.check(message.author.id, projectForAcl.rateLimitPerUser);
+      const result = rateLimiter.check(`${message.author.id}:${projectChannelIdForAcl}`, projectForAcl.rateLimitPerUser);
       if (!result.allowed) {
         await message.reply(
           `You're sending messages too quickly. Please wait ${result.retryAfterSeconds}s before trying again.`,
@@ -438,6 +438,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
       console.log(`Gateway connected as ${client.user?.tag}`);
     },
     stop() {
+      rateLimiter.dispose();
       client.destroy();
     },
     getStatus(): string {
