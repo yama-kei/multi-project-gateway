@@ -3,6 +3,7 @@ import { request } from 'node:http';
 import { createHealthServer, type HealthServer } from '../src/health-server.js';
 import type { SessionManager, SessionInfo } from '../src/session-manager.js';
 import type { DiscordBot } from '../src/discord.js';
+import type { GatewayConfig } from '../src/config.js';
 
 function makeSessionManager(sessions: SessionInfo[] = []): SessionManager {
   return {
@@ -23,6 +24,36 @@ function makeBot(status = 'connected'): DiscordBot {
   };
 }
 
+function makeConfig(overrides?: Partial<GatewayConfig>): GatewayConfig {
+  return {
+    defaults: {
+      idleTimeoutMs: 1800000,
+      maxConcurrentSessions: 4,
+      sessionTtlMs: 604800000,
+      maxPersistedSessions: 50,
+      claudeArgs: [],
+      allowedTools: [],
+      disallowedTools: [],
+      maxTurnsPerAgent: 5,
+      agentTimeoutMs: 180000,
+      httpPort: 3100,
+      logLevel: 'info',
+    },
+    projects: {
+      'ch-1': {
+        name: 'My Project',
+        directory: '/home/user/project',
+        agents: { pm: { role: 'PM', prompt: 'You are a PM' }, engineer: { role: 'Engineer', prompt: 'You are an engineer' } },
+      },
+      'ch-2': {
+        name: 'Other Project',
+        directory: '/home/user/other',
+      },
+    },
+    ...overrides,
+  };
+}
+
 function httpGet(port: number, path: string): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const req = request({ hostname: '127.0.0.1', port, path, method: 'GET' }, (res) => {
@@ -35,6 +66,10 @@ function httpGet(port: number, path: string): Promise<{ status: number; body: st
   });
 }
 
+// Use a port counter to avoid conflicts across tests
+let nextPort = 19876;
+function getPort() { return nextPort++; }
+
 describe('createHealthServer', () => {
   let server: HealthServer | undefined;
 
@@ -46,19 +81,11 @@ describe('createHealthServer', () => {
   });
 
   it('returns 200 with health JSON on GET /health', async () => {
+    const port = getPort();
     const sessions: SessionInfo[] = [
       { sessionId: 'sess-1', projectKey: 'ch-1', lastActivity: Date.now(), queueLength: 0 },
       { sessionId: 'sess-2', projectKey: 'ch-2', lastActivity: Date.now(), queueLength: 2 },
     ];
-    server = await createHealthServer(0, makeSessionManager(sessions), makeBot('connected'));
-
-    // Extract the actual port from the server (port 0 means OS-assigned)
-    const addr = (server as any);
-    // We need the actual port — use a different approach: pass a known port
-    await server.close();
-
-    // Use a specific port for the test
-    const port = 19876;
     server = await createHealthServer(port, makeSessionManager(sessions), makeBot('connected'));
 
     const res = await httpGet(port, '/health');
@@ -74,7 +101,7 @@ describe('createHealthServer', () => {
   });
 
   it('returns 404 for unknown routes', async () => {
-    const port = 19877;
+    const port = getPort();
     server = await createHealthServer(port, makeSessionManager(), makeBot());
 
     const res = await httpGet(port, '/unknown');
@@ -85,7 +112,7 @@ describe('createHealthServer', () => {
   });
 
   it('returns 404 for POST /health', async () => {
-    const port = 19878;
+    const port = getPort();
     server = await createHealthServer(port, makeSessionManager(), makeBot());
 
     const res = await new Promise<{ status: number; body: string }>((resolve, reject) => {
@@ -101,7 +128,7 @@ describe('createHealthServer', () => {
   });
 
   it('reports zero sessions when none exist', async () => {
-    const port = 19879;
+    const port = getPort();
     server = await createHealthServer(port, makeSessionManager([]), makeBot());
 
     const res = await httpGet(port, '/health');
@@ -111,7 +138,7 @@ describe('createHealthServer', () => {
   });
 
   it('reflects discord status from bot', async () => {
-    const port = 19880;
+    const port = getPort();
     server = await createHealthServer(port, makeSessionManager(), makeBot('reconnecting'));
 
     const res = await httpGet(port, '/health');
@@ -120,12 +147,119 @@ describe('createHealthServer', () => {
   });
 
   it('closes gracefully', async () => {
-    const port = 19881;
+    const port = getPort();
     server = await createHealthServer(port, makeSessionManager(), makeBot());
     await server.close();
     server = undefined;
 
     // Should fail to connect after close
     await expect(httpGet(port, '/health')).rejects.toThrow();
+  });
+
+  // --- New API endpoint tests ---
+
+  describe('GET /api/sessions', () => {
+    it('returns session list', async () => {
+      const port = getPort();
+      const sessions: SessionInfo[] = [
+        { sessionId: 'sess-1', projectKey: 'ch-1', lastActivity: 1700000000000, queueLength: 3 },
+      ];
+      server = await createHealthServer(port, makeSessionManager(sessions), makeBot());
+
+      const res = await httpGet(port, '/api/sessions');
+      expect(res.status).toBe(200);
+
+      const json = JSON.parse(res.body);
+      expect(json).toHaveLength(1);
+      expect(json[0].sessionId).toBe('sess-1');
+      expect(json[0].projectKey).toBe('ch-1');
+      expect(json[0].lastActivity).toBe(1700000000000);
+      expect(json[0].queueLength).toBe(3);
+    });
+
+    it('returns empty array when no sessions', async () => {
+      const port = getPort();
+      server = await createHealthServer(port, makeSessionManager([]), makeBot());
+
+      const res = await httpGet(port, '/api/sessions');
+      const json = JSON.parse(res.body);
+      expect(json).toEqual([]);
+    });
+  });
+
+  describe('GET /api/projects', () => {
+    it('returns project list with agents when config provided', async () => {
+      const port = getPort();
+      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig());
+
+      const res = await httpGet(port, '/api/projects');
+      expect(res.status).toBe(200);
+
+      const json = JSON.parse(res.body);
+      expect(json).toHaveLength(2);
+
+      const proj1 = json.find((p: any) => p.channelId === 'ch-1');
+      expect(proj1.name).toBe('My Project');
+      expect(proj1.directory).toBe('/home/user/project');
+      expect(proj1.agents).toEqual(['pm', 'engineer']);
+
+      const proj2 = json.find((p: any) => p.channelId === 'ch-2');
+      expect(proj2.name).toBe('Other Project');
+      expect(proj2.agents).toEqual([]);
+    });
+
+    it('returns empty array when no config provided', async () => {
+      const port = getPort();
+      server = await createHealthServer(port, makeSessionManager(), makeBot());
+
+      const res = await httpGet(port, '/api/projects');
+      const json = JSON.parse(res.body);
+      expect(json).toEqual([]);
+    });
+  });
+
+  describe('GET /api/status', () => {
+    it('returns combined status overview', async () => {
+      const port = getPort();
+      const sessions: SessionInfo[] = [
+        { sessionId: 'sess-1', projectKey: 'ch-1', lastActivity: Date.now(), queueLength: 1 },
+      ];
+      server = await createHealthServer(port, makeSessionManager(sessions), makeBot('connected'), makeConfig());
+
+      const res = await httpGet(port, '/api/status');
+      expect(res.status).toBe(200);
+
+      const json = JSON.parse(res.body);
+
+      // Version
+      expect(typeof json.version).toBe('string');
+
+      // Health sub-object
+      expect(json.health.status).toBe('ok');
+      expect(typeof json.health.uptime).toBe('number');
+      expect(json.health.sessions.active).toBe(1);
+      expect(json.health.sessions.queued).toBe(1);
+      expect(json.health.discord).toBe('connected');
+
+      // Sessions array
+      expect(json.sessions).toHaveLength(1);
+      expect(json.sessions[0].sessionId).toBe('sess-1');
+
+      // Projects array
+      expect(json.projects).toHaveLength(2);
+    });
+  });
+
+  describe('GET /', () => {
+    it('serves HTML dashboard', async () => {
+      const port = getPort();
+      server = await createHealthServer(port, makeSessionManager(), makeBot());
+
+      const res = await httpGet(port, '/');
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('<!DOCTYPE html>');
+      expect(res.body).toContain('Multi-Project Gateway');
+      expect(res.body).toContain('/api/status');
+    });
   });
 });
