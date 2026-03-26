@@ -331,6 +331,12 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
         if (history) userPrompt = `${history}${userPrompt}`;
       }
 
+      // Guard against empty prompts (e.g. attachment-only messages, bare @agent mentions)
+      if (!userPrompt.trim()) {
+        await replyChannel.send('Please include a message with your request.');
+        return;
+      }
+
       const result = await sessionManager.send(
         sessionKey,
         resolved.directory,
