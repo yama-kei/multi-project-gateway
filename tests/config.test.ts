@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { loadConfig, type GatewayConfig } from '../src/config.js';
+import { describe, it, expect, vi } from 'vitest';
+import { loadConfig, DEFAULT_ALLOWED_TOOLS, type GatewayConfig } from '../src/config.js';
 import { PERSONA_PRESETS } from '../src/persona-presets.js';
 
 describe('loadConfig', () => {
@@ -238,5 +238,95 @@ describe('loadConfig', () => {
       projects: { 'ch-1': { directory: '/tmp/a' } },
     });
     expect(config.defaults.httpPort).toBe(false);
+  });
+
+  // --- allowedTools / disallowedTools ---
+
+  it('applies DEFAULT_ALLOWED_TOOLS when no tools config specified', () => {
+    const config = loadConfig({
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.defaults.allowedTools).toEqual(DEFAULT_ALLOWED_TOOLS);
+    expect(config.defaults.disallowedTools).toEqual([]);
+  });
+
+  it('overrides default allowedTools from config', () => {
+    const config = loadConfig({
+      defaults: { allowedTools: ['Read', 'Bash'] },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.defaults.allowedTools).toEqual(['Read', 'Bash']);
+  });
+
+  it('loads disallowedTools from defaults', () => {
+    const config = loadConfig({
+      defaults: { disallowedTools: ['Bash', 'WebSearch'] },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.defaults.disallowedTools).toEqual(['Bash', 'WebSearch']);
+    // allowedTools still gets defaults since not overridden
+    expect(config.defaults.allowedTools).toEqual(DEFAULT_ALLOWED_TOOLS);
+  });
+
+  it('warns when both allowedTools and disallowedTools are set in defaults', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    loadConfig({
+      defaults: { allowedTools: ['Read'], disallowedTools: ['Bash'] },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('gateway defaults set both allowedTools and disallowedTools')
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('loads per-project allowedTools', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          directory: '/tmp/a',
+          allowedTools: ['Read', 'Edit', 'Bash'],
+        },
+      },
+    });
+    expect(config.projects['ch-1'].allowedTools).toEqual(['Read', 'Edit', 'Bash']);
+  });
+
+  it('loads per-project disallowedTools', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          directory: '/tmp/a',
+          disallowedTools: ['WebSearch'],
+        },
+      },
+    });
+    expect(config.projects['ch-1'].disallowedTools).toEqual(['WebSearch']);
+  });
+
+  it('warns when project sets both allowedTools and disallowedTools', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    loadConfig({
+      projects: {
+        'ch-1': {
+          name: 'TestProj',
+          directory: '/tmp/a',
+          allowedTools: ['Read'],
+          disallowedTools: ['Bash'],
+        },
+      },
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('project "TestProj" sets both allowedTools and disallowedTools')
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('omits allowedTools/disallowedTools from project when not specified', () => {
+    const config = loadConfig({
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.projects['ch-1'].allowedTools).toBeUndefined();
+    expect(config.projects['ch-1'].disallowedTools).toBeUndefined();
   });
 });

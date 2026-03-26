@@ -10,7 +10,7 @@ export interface SessionInfo {
 }
 
 export interface SessionManager {
-  send(projectKey: string, cwd: string, prompt: string, opts?: { worktree?: boolean; systemPrompt?: string; timeoutMs?: number }): Promise<ClaudeResult>;
+  send(projectKey: string, cwd: string, prompt: string, opts?: { worktree?: boolean; systemPrompt?: string; timeoutMs?: number; extraArgs?: string[] }): Promise<ClaudeResult>;
   getSession(projectKey: string): SessionInfo | undefined;
   listSessions(): SessionInfo[];
   clearSession(projectKey: string): boolean;
@@ -30,6 +30,7 @@ interface InternalSession {
     prompt: string;
     systemPrompt?: string;
     timeoutMs?: number;
+    extraArgs?: string[];
     resolve: (result: ClaudeResult) => void;
     reject: (error: Error) => void;
   }>;
@@ -133,11 +134,12 @@ export function createSessionManager(defaults: {
 
     while (session.queue.length > 0) {
       const item = session.queue.shift()!;
+      const effectiveArgs = item.extraArgs ? [...defaults.claudeArgs, ...item.extraArgs] : defaults.claudeArgs;
       await acquireSlot();
       try {
         const result = await runClaude(
           session.cwd,
-          defaults.claudeArgs,
+          effectiveArgs,
           item.prompt,
           session.sessionId,
           item.systemPrompt,
@@ -161,7 +163,7 @@ export function createSessionManager(defaults: {
         if (session.sessionId) {
           session.sessionId = undefined;
           try {
-            const result = await runClaude(session.cwd, defaults.claudeArgs, item.prompt, undefined, item.systemPrompt, item.timeoutMs);
+            const result = await runClaude(session.cwd, effectiveArgs, item.prompt, undefined, item.systemPrompt, item.timeoutMs);
             session.sessionId = result.sessionId || undefined;
             session.lastActivity = Date.now();
             resetIdleTimer(session);
@@ -255,10 +257,10 @@ export function createSessionManager(defaults: {
   }
 
   return {
-    send(projectKey: string, cwd: string, prompt: string, opts?: { worktree?: boolean; systemPrompt?: string; timeoutMs?: number }): Promise<ClaudeResult> {
+    send(projectKey: string, cwd: string, prompt: string, opts?: { worktree?: boolean; systemPrompt?: string; timeoutMs?: number; extraArgs?: string[] }): Promise<ClaudeResult> {
       const session = getOrCreateSession(projectKey, cwd, opts?.worktree);
       return new Promise<ClaudeResult>((resolve, reject) => {
-        session.queue.push({ prompt, systemPrompt: opts?.systemPrompt, timeoutMs: opts?.timeoutMs, resolve, reject });
+        session.queue.push({ prompt, systemPrompt: opts?.systemPrompt, timeoutMs: opts?.timeoutMs, extraArgs: opts?.extraArgs, resolve, reject });
         processQueue(session);
       });
     },

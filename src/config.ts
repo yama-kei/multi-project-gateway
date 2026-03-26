@@ -16,8 +16,20 @@ export interface ProjectConfig {
   directory: string;
   idleTimeoutMs?: number;
   claudeArgs?: string[];
+  allowedTools?: string[];
+  disallowedTools?: string[];
   agents?: Record<string, AgentConfig>;
 }
+
+export const DEFAULT_ALLOWED_TOOLS: string[] = [
+  'Read',
+  'Edit',
+  'Write',
+  'Glob',
+  'Grep',
+  'Bash(git:*)',
+  'TodoWrite',
+];
 
 export interface GatewayDefaults {
   idleTimeoutMs: number;
@@ -25,6 +37,8 @@ export interface GatewayDefaults {
   sessionTtlMs: number;
   maxPersistedSessions: number;
   claudeArgs: string[];
+  allowedTools: string[];
+  disallowedTools: string[];
   maxTurnsPerAgent: number;
   agentTimeoutMs: number;
   httpPort: number | false;
@@ -95,16 +109,30 @@ export function loadConfig(raw: unknown): GatewayConfig {
       if (Object.keys(agents).length === 0) agents = undefined;
     }
 
+    const projectAllowed = Array.isArray(p.allowedTools) ? (p.allowedTools as string[]) : undefined;
+    const projectDisallowed = Array.isArray(p.disallowedTools) ? (p.disallowedTools as string[]) : undefined;
+    if (projectAllowed && projectDisallowed) {
+      console.warn(`Warning: project "${typeof p.name === 'string' ? p.name : channelId}" sets both allowedTools and disallowedTools — they conflict. allowedTools takes precedence.`);
+    }
+
     validated[channelId] = {
       name: typeof p.name === 'string' ? p.name : channelId,
       directory: p.directory,
       ...(p.idleTimeoutMs !== undefined && { idleTimeoutMs: Number(p.idleTimeoutMs) }),
       ...(Array.isArray(p.claudeArgs) && { claudeArgs: p.claudeArgs as string[] }),
+      ...(projectAllowed && { allowedTools: projectAllowed }),
+      ...(projectDisallowed && { disallowedTools: projectDisallowed }),
       ...(agents && { agents }),
     };
   }
 
   const defaults = (obj.defaults ?? {}) as Record<string, unknown>;
+
+  const defaultAllowed = Array.isArray(defaults.allowedTools) ? (defaults.allowedTools as string[]) : DEFAULT_ALLOWED_TOOLS;
+  const defaultDisallowed = Array.isArray(defaults.disallowedTools) ? (defaults.disallowedTools as string[]) : [];
+  if (Array.isArray(defaults.allowedTools) && Array.isArray(defaults.disallowedTools)) {
+    console.warn('Warning: gateway defaults set both allowedTools and disallowedTools — they conflict. allowedTools takes precedence.');
+  }
 
   return {
     defaults: {
@@ -113,7 +141,9 @@ export function loadConfig(raw: unknown): GatewayConfig {
       sessionTtlMs: typeof defaults.sessionTtlMs === 'number' ? defaults.sessionTtlMs : 7 * 24 * 60 * 60 * 1000,
       maxPersistedSessions: typeof defaults.maxPersistedSessions === 'number' ? defaults.maxPersistedSessions : 50,
       claudeArgs: Array.isArray(defaults.claudeArgs) ? (defaults.claudeArgs as string[]) : ['--permission-mode', 'acceptEdits', '--output-format', 'json'],
-      maxTurnsPerAgent: typeof defaults.maxTurnsPerAgent === 'number' ? defaults.maxTurnsPerAgent : 10,
+      allowedTools: defaultAllowed,
+      disallowedTools: defaultDisallowed,
+      maxTurnsPerAgent: typeof defaults.maxTurnsPerAgent === 'number' ? defaults.maxTurnsPerAgent : 5,
       agentTimeoutMs: typeof defaults.agentTimeoutMs === 'number' ? defaults.agentTimeoutMs : 3 * 60 * 1000,
       httpPort: defaults.httpPort === false ? false : (typeof defaults.httpPort === 'number' ? defaults.httpPort : 3100),
     },

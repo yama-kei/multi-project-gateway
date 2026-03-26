@@ -2,6 +2,7 @@ import { Client, GatewayIntentBits, Events, Status, type Message, type TextChann
 import type { Router } from './router.js';
 import type { SessionManager } from './session-manager.js';
 import type { GatewayConfig } from './config.js';
+import { buildToolArgs } from './claude-cli.js';
 import { parseAgentMention } from './agent-dispatch.js';
 import { sendAgentMessage } from './embed-format.js';
 import type { TurnCounter } from './turn-counter.js';
@@ -266,6 +267,17 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
     const project = config.projects[projectChannelId];
     const agents = project?.agents;
 
+    // Build tool restriction args (per-project overrides gateway defaults).
+    // Check both gateway-level and per-project claudeArgs for manual --allowed-tools / --disallowed-tools flags.
+    const allClaudeArgs = project?.claudeArgs
+      ? [...config.defaults.claudeArgs, ...project.claudeArgs]
+      : config.defaults.claudeArgs;
+    const toolArgs = buildToolArgs(
+      config.defaults,
+      project ? { allowedTools: project.allowedTools, disallowedTools: project.disallowedTools } : undefined,
+      allClaudeArgs,
+    );
+
     // Reset turn counter on human messages
     if (turnCounter) turnCounter.reset(replyChannel.id);
 
@@ -300,6 +312,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
         {
           worktree: replyChannel.isThread() ? true : undefined,
           systemPrompt,
+          extraArgs: toolArgs.length > 0 ? toolArgs : undefined,
         },
       );
 
@@ -357,7 +370,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
               handoffKey,
               resolved.directory,
               responseText,
-              { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: handoffPrompt, timeoutMs: config.defaults.agentTimeoutMs },
+              { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: handoffPrompt, timeoutMs: config.defaults.agentTimeoutMs, extraArgs: toolArgs.length > 0 ? toolArgs : undefined },
             );
           } catch (handoffErr) {
             const msg = handoffErr instanceof Error ? handoffErr.message : String(handoffErr);
