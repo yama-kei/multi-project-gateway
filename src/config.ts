@@ -1,4 +1,5 @@
 import { resolvePreset } from './persona-presets.js';
+import { isValidLogLevel, type LogLevel } from './logger.js';
 
 export interface AgentConfig {
   role: string;
@@ -44,6 +45,7 @@ export interface GatewayDefaults {
   maxTurnsPerAgent: number;
   agentTimeoutMs: number;
   httpPort: number | false;
+  logLevel: LogLevel;
 }
 
 export interface GatewayConfig {
@@ -153,6 +155,7 @@ export function loadConfig(raw: unknown): GatewayConfig {
       maxTurnsPerAgent: typeof defaults.maxTurnsPerAgent === 'number' ? defaults.maxTurnsPerAgent : 5,
       agentTimeoutMs: typeof defaults.agentTimeoutMs === 'number' ? defaults.agentTimeoutMs : 3 * 60 * 1000,
       httpPort: defaults.httpPort === false ? false : (typeof defaults.httpPort === 'number' ? defaults.httpPort : 3100),
+      logLevel: isValidLogLevel(defaults.logLevel) ? defaults.logLevel : 'info',
     },
     projects: validated,
   };

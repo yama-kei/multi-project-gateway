@@ -322,6 +322,29 @@ describe('loadConfig', () => {
     warnSpy.mockRestore();
   });
 
+  // --- logLevel ---
+
+  it('defaults logLevel to info', () => {
+    const config = loadConfig({ projects: { 'ch-1': { directory: '/tmp/a' } } });
+    expect(config.defaults.logLevel).toBe('info');
+  });
+
+  it('overrides logLevel from config', () => {
+    const config = loadConfig({
+      defaults: { logLevel: 'debug' },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.defaults.logLevel).toBe('debug');
+  });
+
+  it('falls back to info for invalid logLevel', () => {
+    const config = loadConfig({
+      defaults: { logLevel: 'verbose' },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.defaults.logLevel).toBe('info');
+  });
+
   it('omits allowedTools/disallowedTools from project when not specified', () => {
     const config = loadConfig({
       projects: { 'ch-1': { directory: '/tmp/a' } },

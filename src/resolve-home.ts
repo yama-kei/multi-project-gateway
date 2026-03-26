@@ -108,8 +108,10 @@ export function parseFlags(argv: string[]): {
   configFlag?: string;
   profileFlag?: string;
   migrate?: boolean;
+  project?: string;
+  level?: string;
 } {
-  const result: { configFlag?: string; profileFlag?: string; migrate?: boolean } = {};
+  const result: { configFlag?: string; profileFlag?: string; migrate?: boolean; project?: string; level?: string } = {};
 
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--config' && i + 1 < argv.length) {
@@ -117,6 +119,12 @@ export function parseFlags(argv: string[]): {
       i++;
     } else if (argv[i] === '--profile' && i + 1 < argv.length) {
       result.profileFlag = argv[i + 1];
+      i++;
+    } else if (argv[i] === '--project' && i + 1 < argv.length) {
+      result.project = argv[i + 1];
+      i++;
+    } else if (argv[i] === '--level' && i + 1 < argv.length) {
+      result.level = argv[i + 1];
       i++;
     } else if (argv[i] === '--migrate') {
       result.migrate = true;

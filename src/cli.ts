@@ -19,6 +19,7 @@ import {
   resolveProfileDir,
   parseFlags,
 } from './resolve-home.js';
+import { createLogger, parseLogEntry, filterLogEntries, type LogLevel, isValidLogLevel } from './logger.js';
 
 const args = process.argv.slice(2);
 const command = args[0] ?? 'start';
@@ -35,6 +36,8 @@ async function main() {
       return runInit(flags.profileFlag);
     case 'status':
       return status();
+    case 'logs':
+      return logs();
     case 'help':
     case '--help':
     case '-h':
@@ -59,14 +62,17 @@ Commands:
   start     Start the gateway (default)
   init      Interactive setup wizard
   status    Show session status
+  logs      Filter structured log output (reads stdin)
   help      Show this message
 
 Options:
-  --profile <name>  Use a named profile (default: "default")
-  --config <path>   Use a specific config.json path
-  --migrate         Copy CWD config files into ~/.mpg/profiles/default/
-  -v, --version     Show version
-  -h, --help        Show this message
+  --profile <name>   Use a named profile (default: "default")
+  --config <path>    Use a specific config.json path
+  --migrate          Copy CWD config files into ~/.mpg/profiles/default/
+  --project <name>   (logs) Filter by project name
+  --level <level>    (logs) Filter by minimum log level (debug|info|warn|error)
+  -v, --version      Show version
+  -h, --help         Show this message
 
 Environment:
   MPG_HOME          Override config home (default: ~/.mpg)
@@ -103,6 +109,8 @@ function start() {
   const rawConfig = JSON.parse(readFileSync(configPath, 'utf-8'));
   const config = loadConfig(rawConfig);
 
+  const log = createLogger(config.defaults.logLevel);
+
   const projectCount = Object.keys(config.projects).length;
   if (projectCount === 0) {
     console.error('No projects configured in config.json');
@@ -111,7 +119,7 @@ function start() {
 
   runHealthChecks(config);
 
-  console.log(`Loaded ${projectCount} project(s) from ${configPath}`);
+  log.info(`Loaded ${projectCount} project(s) from ${configPath}`);
 
   const router = createRouter(config);
   const sessionsPath = resolveSessionsPath(configPath);
@@ -141,7 +149,7 @@ function start() {
   let healthServer: HealthServer | undefined;
 
   function shutdown() {
-    console.log('Shutting down...');
+    log.info('Shutting down...');
     if (healthServer) {
       healthServer.close().catch(() => {});
     }
@@ -159,12 +167,12 @@ function start() {
         try {
           healthServer = await createHealthServer(config.defaults.httpPort, sessionManager, bot);
         } catch (err) {
-          console.warn(`Health server failed to start on port ${config.defaults.httpPort}:`, err);
+          log.warn(`Health server failed to start on port ${config.defaults.httpPort}: ${err}`);
         }
       }
     })
     .catch((err) => {
-      console.error('Failed to start bot:', err);
+      log.error(`Failed to start bot: ${err}`);
       process.exit(1);
     });
 }
@@ -266,6 +274,60 @@ function migrate() {
   }
   console.log(`\nProfile directory: ${profileDir}`);
   console.log('You can now run `mpg start` from any directory.');
+}
+
+function logs() {
+  const levelFlag = flags.level;
+  const projectFlag = flags.project;
+
+  if (levelFlag && !isValidLogLevel(levelFlag)) {
+    console.error(`Invalid log level: ${levelFlag}. Must be one of: debug, info, warn, error`);
+    process.exit(1);
+  }
+
+  const minLevel = levelFlag as LogLevel | undefined;
+
+  let buffer = '';
+  process.stdin.setEncoding('utf-8');
+  process.stdin.on('data', (chunk: string) => {
+    buffer += chunk;
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const entry = parseLogEntry(line);
+      if (!entry) {
+        // Pass through non-JSON lines as-is
+        process.stdout.write(line + '\n');
+        continue;
+      }
+      const [filtered] = filterLogEntries([entry], { project: projectFlag, level: minLevel });
+      if (filtered) {
+        const ts = entry.timestamp.replace('T', ' ').replace('Z', '');
+        const proj = entry.project ? ` [${entry.project}]` : '';
+        const sess = entry.session ? ` (${entry.session.slice(0, 8)})` : '';
+        process.stdout.write(`${ts} ${entry.level.toUpperCase().padEnd(5)}${proj}${sess} ${entry.message}\n`);
+      }
+    }
+  });
+
+  process.stdin.on('end', () => {
+    if (buffer.trim()) {
+      const entry = parseLogEntry(buffer);
+      if (!entry) {
+        process.stdout.write(buffer + '\n');
+      } else {
+        const [filtered] = filterLogEntries([entry], { project: projectFlag, level: minLevel });
+        if (filtered) {
+          const ts = entry.timestamp.replace('T', ' ').replace('Z', '');
+          const proj = entry.project ? ` [${entry.project}]` : '';
+          const sess = entry.session ? ` (${entry.session.slice(0, 8)})` : '';
+          process.stdout.write(`${ts} ${entry.level.toUpperCase().padEnd(5)}${proj}${sess} ${entry.message}\n`);
+        }
+      }
+    }
+  });
 }
 
 main().catch((err) => {
