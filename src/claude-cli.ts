@@ -60,14 +60,15 @@ export function buildClaudeArgs(
   sessionId: string | undefined,
   systemPrompt?: string,
 ): string[] {
-  const args = ['--print', ...baseArgs];
+  // Prompt MUST come before variadic flags like --allowed-tools which consume
+  // all subsequent positional args. Place it right after --print.
+  const args = ['--print', prompt, ...baseArgs];
   if (sessionId) {
     args.push('--resume', sessionId);
   }
   if (systemPrompt) {
     args.push('--append-system-prompt', systemPrompt);
   }
-  args.push(prompt);
   return args;
 }
 
@@ -100,8 +101,6 @@ export function runClaude(
 ): Promise<ClaudeResult> {
   return new Promise((resolve, reject) => {
     const args = buildClaudeArgs(baseArgs, prompt, sessionId, systemPrompt);
-    console.log(`[claude-cli] prompt length=${prompt.length} empty=${!prompt.trim()} sessionId=${sessionId ?? 'none'} args count=${args.length} last arg length=${args[args.length - 1]?.length ?? 0}`);
-    console.log(`[claude-cli] args: ${JSON.stringify(args.map((a, i) => i === args.length - 1 ? `[prompt:${a.length}chars]` : a))}`);
     const proc = spawn('claude', args, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],

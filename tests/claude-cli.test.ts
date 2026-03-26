@@ -37,13 +37,13 @@ describe('parseClaudeJsonOutput', () => {
 describe('buildClaudeArgs', () => {
   const baseArgs = ['--dangerously-skip-permissions', '--output-format', 'json'];
 
-  it('builds args for a new session', () => {
+  it('builds args with prompt before baseArgs (avoids variadic flag consumption)', () => {
     const args = buildClaudeArgs(baseArgs, 'Fix the bug', undefined);
     expect(args).toEqual([
       '--print',
+      'Fix the bug',
       '--dangerously-skip-permissions',
       '--output-format', 'json',
-      'Fix the bug',
     ]);
   });
 
@@ -51,11 +51,17 @@ describe('buildClaudeArgs', () => {
     const args = buildClaudeArgs(baseArgs, 'Now add tests', 'session-uuid-123');
     expect(args).toEqual([
       '--print',
+      'Now add tests',
       '--dangerously-skip-permissions',
       '--output-format', 'json',
       '--resume', 'session-uuid-123',
-      'Now add tests',
     ]);
+  });
+
+  it('prompt is not consumed by --allowed-tools', () => {
+    const argsWithTools = ['--allowed-tools', 'Read', 'Edit', 'Bash(git:*)'];
+    const args = buildClaudeArgs(argsWithTools, 'Do something', undefined);
+    expect(args.indexOf('Do something')).toBe(1); // right after --print, before --allowed-tools
   });
 
   it('includes --append-system-prompt when provided', () => {
