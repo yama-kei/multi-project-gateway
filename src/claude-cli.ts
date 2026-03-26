@@ -101,6 +101,7 @@ export function runClaude(
   return new Promise((resolve, reject) => {
     const args = buildClaudeArgs(baseArgs, prompt, sessionId, systemPrompt);
     console.log(`[claude-cli] prompt length=${prompt.length} empty=${!prompt.trim()} sessionId=${sessionId ?? 'none'} args count=${args.length} last arg length=${args[args.length - 1]?.length ?? 0}`);
+    console.log(`[claude-cli] args: ${JSON.stringify(args.map((a, i) => i === args.length - 1 ? `[prompt:${a.length}chars]` : a))}`);
     const proc = spawn('claude', args, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
