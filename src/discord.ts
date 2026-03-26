@@ -3,7 +3,7 @@ import type { Router } from './router.js';
 import type { SessionManager } from './session-manager.js';
 import type { GatewayConfig } from './config.js';
 import { buildToolArgs } from './claude-cli.js';
-import { parseAgentMention } from './agent-dispatch.js';
+import { parseAgentMention, parseAgentCommand, extractAskTarget } from './agent-dispatch.js';
 import { sendAgentMessage, buildHandoffEmbed } from './embed-format.js';
 import type { TurnCounter } from './turn-counter.js';
 import { hasAllowedRole } from './role-check.js';
@@ -158,14 +158,16 @@ export function handleCommand(
       return `**${context.projectName}** — No agents configured. Messages go to the default session.`;
     }
     const lines = Object.entries(project.agents).map(([name, agent]) =>
-      `- \`@${name}\` — ${agent.role}`
+      `- \`${name}\` — ${agent.role}`
     );
-    return `**${context.projectName} agents**\n${lines.join('\n')}\n\nMention an agent to dispatch: \`@pm review this\``;
+    return `**${context.projectName} agents**\n${lines.join('\n')}\n\nDispatch: \`!ask <agent> <message>\` or shorthand \`!<agent> <message>\``;
   }
 
   if (cmd === '!help') {
     return [
       '**Gateway commands**',
+      '`!ask <agent> <message>` — dispatch a message to a named agent',
+      '`!<agent> <message>` — shorthand for `!ask`',
       '`!sessions` — list all active sessions',
       '`!session` — show session for the current thread (or use `!session <name>`)',
       '`!restart <name>` — reset a session (fresh context, keeps worktree)',
@@ -228,6 +230,30 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
         if (response) {
           await message.channel.send(response);
           return;
+        }
+
+        // Check for !ask <agent> or !<agent> shorthand dispatch
+        const projectChannelId = parentId || resolved.channelId;
+        const project = config.projects[projectChannelId];
+        const agents = project?.agents;
+        if (agents) {
+          const askMention = parseAgentCommand(message.content, agents);
+          if (askMention) {
+            // Fall through to normal message handling — inject the parsed mention
+            // by rewriting message content to @agent form so the existing path picks it up
+          } else {
+            // Check if user tried !ask with an unknown agent name
+            const target = extractAskTarget(message.content);
+            if (target) {
+              const agentList = Object.entries(agents)
+                .map(([name, a]) => `\`${name}\` — ${a.role}`)
+                .join('\n- ');
+              await message.channel.send(
+                `Unknown agent \`${target}\`. Available agents:\n- ${agentList}\n\nUsage: \`!ask <agent> <message>\``,
+              );
+              return;
+            }
+          }
         }
       }
     }
@@ -307,8 +333,10 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
     // Reset turn counter on human messages
     if (turnCounter) turnCounter.reset(replyChannel.id);
 
-    // Check for @agent mention, fall back to last active agent in this thread (#48)
-    const mention = agents ? parseAgentMention(message.content, agents) : null;
+    // Check for !ask <agent> command, @agent mention, or fall back to last active agent (#48, #60)
+    const mention = agents
+      ? (parseAgentCommand(message.content, agents) ?? parseAgentMention(message.content, agents))
+      : null;
     const activeAgent = mention ?? (message.channel.isThread() ? lastActiveAgent.get(replyChannel.id) ?? null : null);
 
     // Use thread ID for session keys so each thread gets its own agent sessions.
