@@ -174,6 +174,16 @@ export function createSessionManager(defaults: {
         session.sessionId = result.sessionId || session.sessionId;
         session.lastActivity = Date.now();
         session.messageCount++;
+        if (pulseEmitter && session.sessionId && result.usage) {
+          const agentTarget = session.projectKey.includes(':') ? session.projectKey.split(':').pop() : undefined;
+          pulseEmitter.messageCompleted(
+            session.sessionId,
+            session.projectKey,
+            session.cwd,
+            result.usage,
+            { agentTarget },
+          );
+        }
         resetIdleTimer(session);
         persistSessions();
         if (sessionChanged) {
@@ -189,6 +199,16 @@ export function createSessionManager(defaults: {
             session.sessionId = result.sessionId || undefined;
             session.lastActivity = Date.now();
             session.messageCount++;
+            if (pulseEmitter && session.sessionId && result.usage) {
+              const agentTarget = session.projectKey.includes(':') ? session.projectKey.split(':').pop() : undefined;
+              pulseEmitter.messageCompleted(
+                session.sessionId,
+                session.projectKey,
+                session.cwd,
+                result.usage,
+                { agentTarget },
+              );
+            }
             resetIdleTimer(session);
             persistSessions();
             item.resolve({ ...result, sessionReset: true });
