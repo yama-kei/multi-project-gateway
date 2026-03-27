@@ -6,6 +6,7 @@ import { createRouter } from './router.js';
 import { createSessionManager } from './session-manager.js';
 import { createFileSessionStore } from './session-store.js';
 import { createDiscordBot } from './discord.js';
+import { createPulseEmitter } from './pulse-events.js';
 import { createHealthServer, type HealthServer } from './health-server.js';
 import { createTurnCounter } from './turn-counter.js';
 import { runInit } from './init.js';
@@ -153,7 +154,8 @@ function start() {
   const router = createRouter(config);
   const sessionsPath = resolveSessionsPath(configPath);
   const sessionStore = createFileSessionStore(sessionsPath);
-  const sessionManager = createSessionManager(config.defaults, sessionStore);
+  const pulseEmitter = createPulseEmitter();
+  const sessionManager = createSessionManager(config.defaults, sessionStore, pulseEmitter);
 
   // Reconcile orphaned worktrees from crashed sessions
   const persistedSessions = sessionStore.load();

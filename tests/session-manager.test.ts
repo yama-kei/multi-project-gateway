@@ -386,6 +386,100 @@ describe('SessionManager', () => {
     });
   });
 
+  describe('pulse event emission', () => {
+    let pulseEmitter: {
+      sessionStart: ReturnType<typeof vi.fn>;
+      sessionEnd: ReturnType<typeof vi.fn>;
+      sessionIdle: ReturnType<typeof vi.fn>;
+      sessionResume: ReturnType<typeof vi.fn>;
+      messageRouted: ReturnType<typeof vi.fn>;
+    };
+    let pulseManager: SessionManager;
+
+    beforeEach(async () => {
+      const { runClaude } = await import('../src/claude-cli.js');
+      vi.mocked(runClaude).mockReset();
+      vi.mocked(runClaude).mockResolvedValue({
+        text: 'Mock response',
+        sessionId: 'mock-session-id',
+        isError: false,
+      });
+
+      pulseEmitter = {
+        sessionStart: vi.fn(),
+        sessionEnd: vi.fn(),
+        sessionIdle: vi.fn(),
+        sessionResume: vi.fn(),
+        messageRouted: vi.fn(),
+      };
+      pulseManager = createSessionManager(defaults, undefined, pulseEmitter);
+    });
+
+    afterEach(() => {
+      pulseManager.shutdown();
+    });
+
+    it('emits session_start on first message to a project', async () => {
+      await pulseManager.send('project-a', '/tmp/a', 'Hello');
+      expect(pulseEmitter.sessionStart).toHaveBeenCalledOnce();
+      expect(pulseEmitter.sessionStart).toHaveBeenCalledWith(
+        expect.any(String), 'project-a', '/tmp/a', expect.objectContaining({ triggerSource: 'discord' }),
+      );
+    });
+
+    it('emits message_routed on each dispatched message', async () => {
+      await pulseManager.send('project-a', '/tmp/a', 'Hello');
+      expect(pulseEmitter.messageRouted).toHaveBeenCalledOnce();
+      expect(pulseEmitter.messageRouted).toHaveBeenCalledWith(
+        expect.any(String), 'project-a', '/tmp/a', expect.objectContaining({ queueDepth: expect.any(Number) }),
+      );
+    });
+
+    it('does not emit session_start on subsequent messages to same project', async () => {
+      await pulseManager.send('project-a', '/tmp/a', 'Hello');
+      await pulseManager.send('project-a', '/tmp/a', 'World');
+      expect(pulseEmitter.sessionStart).toHaveBeenCalledOnce();
+      expect(pulseEmitter.messageRouted).toHaveBeenCalledTimes(2);
+    });
+
+    it('emits session_end on clearSession', async () => {
+      await pulseManager.send('project-a', '/tmp/a', 'Hello');
+      pulseManager.clearSession('project-a');
+      expect(pulseEmitter.sessionEnd).toHaveBeenCalledOnce();
+      expect(pulseEmitter.sessionEnd).toHaveBeenCalledWith(
+        'mock-session-id', 'project-a', '/tmp/a', expect.any(Number), 1,
+      );
+    });
+
+    it('emits session_idle when idle timer fires', async () => {
+      await pulseManager.send('project-a', '/tmp/a', 'Hello');
+      // Wait for idle timeout (500ms in test defaults)
+      await new Promise(r => setTimeout(r, 600));
+      expect(pulseEmitter.sessionIdle).toHaveBeenCalledOnce();
+      expect(pulseEmitter.sessionIdle).toHaveBeenCalledWith(
+        'mock-session-id', 'project-a', '/tmp/a', expect.any(Number), 1,
+      );
+    });
+
+    it('emits session_resume when restoring a persisted session', async () => {
+      const store = createMockStore([{
+        sessionId: 'old-session',
+        projectKey: 'project-a',
+        cwd: '/tmp/a',
+        lastActivity: Date.now() - 60000,
+      }]);
+      const resumeManager = createSessionManager(defaults, store, pulseEmitter);
+      await resumeManager.send('project-a', '/tmp/a', 'Hello');
+      expect(pulseEmitter.sessionResume).toHaveBeenCalledOnce();
+      expect(pulseEmitter.sessionResume).toHaveBeenCalledWith(
+        'old-session', 'project-a', '/tmp/a', expect.any(Number),
+      );
+      // Should NOT emit session_start for restored sessions
+      expect(pulseEmitter.sessionStart).not.toHaveBeenCalled();
+      resumeManager.shutdown();
+    });
+  });
+
   describe('session pruning', () => {
     it('prunes sessions older than TTL on startup', () => {
       const now = Date.now();

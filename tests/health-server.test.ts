@@ -250,6 +250,90 @@ describe('createHealthServer', () => {
     });
   });
 
+  describe('activity endpoints', () => {
+    it('GET /api/activity/sessions returns pulse CLI output', async () => {
+      const port = getPort();
+      const mockPulseOutput = JSON.stringify({
+        source: 'mpg-sessions',
+        filters: {},
+        events: [{ event_type: 'session_start', session_id: 'abc' }],
+      });
+      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig(), {
+        runPulseCli: async () => mockPulseOutput,
+      });
+      const res = await httpGet(port, '/api/activity/sessions?range=7d');
+      expect(res.status).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.events).toHaveLength(1);
+      expect(body.pulse_available).toBe(true);
+    });
+
+    it('GET /api/activity/summary returns pulse CLI output', async () => {
+      const port = getPort();
+      const mockPulseOutput = JSON.stringify({
+        source: 'mpg-sessions',
+        filters: {},
+        bucket: 'day',
+        sessions_per_bucket: [],
+        duration_stats: [],
+        message_volume: [],
+        persona_breakdown: [],
+        peak_concurrent: [],
+      });
+      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig(), {
+        runPulseCli: async () => mockPulseOutput,
+      });
+      const res = await httpGet(port, '/api/activity/summary?range=7d&bucket=day');
+      expect(res.status).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.pulse_available).toBe(true);
+      expect(body.bucket).toBe('day');
+    });
+
+    it('GET /api/activity/sessions returns empty data when pulse unavailable', async () => {
+      const port = getPort();
+      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig(), {
+        runPulseCli: async () => { throw new Error('pulse not found'); },
+      });
+      const res = await httpGet(port, '/api/activity/sessions');
+      expect(res.status).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.pulse_available).toBe(false);
+      expect(body.events).toEqual([]);
+    });
+
+    it('GET /api/activity/summary returns empty data when pulse unavailable', async () => {
+      const port = getPort();
+      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig(), {
+        runPulseCli: async () => { throw new Error('pulse not found'); },
+      });
+      const res = await httpGet(port, '/api/activity/summary');
+      expect(res.status).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.pulse_available).toBe(false);
+      expect(body.sessions_per_bucket).toEqual([]);
+    });
+
+    it('forwards query params as CLI flags', async () => {
+      const port = getPort();
+      const calls: string[][] = [];
+      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig(), {
+        runPulseCli: async (args) => {
+          calls.push(args);
+          return JSON.stringify({ source: 'mpg-sessions', filters: {}, events: [] });
+        },
+      });
+      await httpGet(port, '/api/activity/sessions?range=24h&project=my-proj&type=session_start');
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toContain('--range');
+      expect(calls[0]).toContain('24h');
+      expect(calls[0]).toContain('--project');
+      expect(calls[0]).toContain('my-proj');
+      expect(calls[0]).toContain('--type');
+      expect(calls[0]).toContain('session_start');
+    });
+  });
+
   describe('GET /', () => {
     it('serves HTML dashboard', async () => {
       const port = getPort();
