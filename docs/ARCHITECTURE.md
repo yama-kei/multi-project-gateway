@@ -27,7 +27,7 @@ graph LR
 | Worktree Manager | `worktree.ts` | Git worktree isolation per thread |
 | Embed Formatter | `embed-format.ts` | Chunks responses, builds Discord embeds |
 | Turn Counter | `turn-counter.ts` | Limits agent-to-agent handoff loops |
-| Health Server | `health-server.ts` | HTTP dashboard and REST API |
+| Dashboard Server | `dashboard-server.ts` | HTTP dashboard and REST API |
 
 ## Module map
 
@@ -48,7 +48,7 @@ src/
 ├── role-check.ts       Discord role-based access control
 ├── persona-presets.ts  Built-in agent templates (pm, engineer, qa, designer, devops)
 ├── turn-counter.ts     Track and limit agent-to-agent handoff turns
-├── health-server.ts    HTTP health endpoint and web dashboard
+├── dashboard-server.ts HTTP dashboard, REST API, and health endpoint
 ├── health.ts           Pre-flight health checks
 ├── logger.ts           Structured JSON logging
 ├── resolve-home.ts     Config/session path resolution (~/.mpg, profiles)

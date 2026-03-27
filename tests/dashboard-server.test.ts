@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { request } from 'node:http';
-import { createHealthServer, type HealthServer } from '../src/health-server.js';
+import { createDashboardServer, type DashboardServer } from '../src/dashboard-server.js';
 import type { SessionManager, SessionInfo } from '../src/session-manager.js';
 import type { DiscordBot } from '../src/discord.js';
 import type { GatewayConfig } from '../src/config.js';
@@ -70,8 +70,8 @@ function httpGet(port: number, path: string): Promise<{ status: number; body: st
 let nextPort = 19876;
 function getPort() { return nextPort++; }
 
-describe('createHealthServer', () => {
-  let server: HealthServer | undefined;
+describe('createDashboardServer', () => {
+  let server: DashboardServer | undefined;
 
   afterEach(async () => {
     if (server) {
@@ -86,7 +86,7 @@ describe('createHealthServer', () => {
       { sessionId: 'sess-1', projectKey: 'ch-1', lastActivity: Date.now(), queueLength: 0 },
       { sessionId: 'sess-2', projectKey: 'ch-2', lastActivity: Date.now(), queueLength: 2 },
     ];
-    server = await createHealthServer(port, makeSessionManager(sessions), makeBot('connected'));
+    server = await createDashboardServer(port, makeSessionManager(sessions), makeBot('connected'));
 
     const res = await httpGet(port, '/health');
     expect(res.status).toBe(200);
@@ -102,7 +102,7 @@ describe('createHealthServer', () => {
 
   it('returns 404 for unknown routes', async () => {
     const port = getPort();
-    server = await createHealthServer(port, makeSessionManager(), makeBot());
+    server = await createDashboardServer(port, makeSessionManager(), makeBot());
 
     const res = await httpGet(port, '/unknown');
     expect(res.status).toBe(404);
@@ -113,7 +113,7 @@ describe('createHealthServer', () => {
 
   it('returns 404 for POST /health', async () => {
     const port = getPort();
-    server = await createHealthServer(port, makeSessionManager(), makeBot());
+    server = await createDashboardServer(port, makeSessionManager(), makeBot());
 
     const res = await new Promise<{ status: number; body: string }>((resolve, reject) => {
       const req = request({ hostname: '127.0.0.1', port, path: '/health', method: 'POST' }, (r) => {
@@ -129,7 +129,7 @@ describe('createHealthServer', () => {
 
   it('reports zero sessions when none exist', async () => {
     const port = getPort();
-    server = await createHealthServer(port, makeSessionManager([]), makeBot());
+    server = await createDashboardServer(port, makeSessionManager([]), makeBot());
 
     const res = await httpGet(port, '/health');
     const json = JSON.parse(res.body);
@@ -139,7 +139,7 @@ describe('createHealthServer', () => {
 
   it('reflects discord status from bot', async () => {
     const port = getPort();
-    server = await createHealthServer(port, makeSessionManager(), makeBot('reconnecting'));
+    server = await createDashboardServer(port, makeSessionManager(), makeBot('reconnecting'));
 
     const res = await httpGet(port, '/health');
     const json = JSON.parse(res.body);
@@ -148,7 +148,7 @@ describe('createHealthServer', () => {
 
   it('closes gracefully', async () => {
     const port = getPort();
-    server = await createHealthServer(port, makeSessionManager(), makeBot());
+    server = await createDashboardServer(port, makeSessionManager(), makeBot());
     await server.close();
     server = undefined;
 
@@ -164,7 +164,7 @@ describe('createHealthServer', () => {
       const sessions: SessionInfo[] = [
         { sessionId: 'sess-1', projectKey: 'ch-1', lastActivity: 1700000000000, queueLength: 3 },
       ];
-      server = await createHealthServer(port, makeSessionManager(sessions), makeBot());
+      server = await createDashboardServer(port, makeSessionManager(sessions), makeBot());
 
       const res = await httpGet(port, '/api/sessions');
       expect(res.status).toBe(200);
@@ -179,7 +179,7 @@ describe('createHealthServer', () => {
 
     it('returns empty array when no sessions', async () => {
       const port = getPort();
-      server = await createHealthServer(port, makeSessionManager([]), makeBot());
+      server = await createDashboardServer(port, makeSessionManager([]), makeBot());
 
       const res = await httpGet(port, '/api/sessions');
       const json = JSON.parse(res.body);
@@ -190,7 +190,7 @@ describe('createHealthServer', () => {
   describe('GET /api/projects', () => {
     it('returns project list with agents when config provided', async () => {
       const port = getPort();
-      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig());
+      server = await createDashboardServer(port, makeSessionManager(), makeBot(), makeConfig());
 
       const res = await httpGet(port, '/api/projects');
       expect(res.status).toBe(200);
@@ -210,7 +210,7 @@ describe('createHealthServer', () => {
 
     it('returns empty array when no config provided', async () => {
       const port = getPort();
-      server = await createHealthServer(port, makeSessionManager(), makeBot());
+      server = await createDashboardServer(port, makeSessionManager(), makeBot());
 
       const res = await httpGet(port, '/api/projects');
       const json = JSON.parse(res.body);
@@ -224,7 +224,7 @@ describe('createHealthServer', () => {
       const sessions: SessionInfo[] = [
         { sessionId: 'sess-1', projectKey: 'ch-1', lastActivity: Date.now(), queueLength: 1 },
       ];
-      server = await createHealthServer(port, makeSessionManager(sessions), makeBot('connected'), makeConfig());
+      server = await createDashboardServer(port, makeSessionManager(sessions), makeBot('connected'), makeConfig());
 
       const res = await httpGet(port, '/api/status');
       expect(res.status).toBe(200);
@@ -274,7 +274,7 @@ describe('createHealthServer', () => {
     it('GET /api/activity/summary returns aggregated activity data', async () => {
       const port = getPort();
       const engine = makeMockEngine();
-      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig(), {
+      server = await createDashboardServer(port, makeSessionManager(), makeBot(), makeConfig(), {
         activityEngine: engine,
       });
       const res = await httpGet(port, '/api/activity/summary?range=7d');
@@ -291,7 +291,7 @@ describe('createHealthServer', () => {
     it('GET /api/activity/summary uses hour bucket for 24h range', async () => {
       const port = getPort();
       const engine = makeMockEngine();
-      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig(), {
+      server = await createDashboardServer(port, makeSessionManager(), makeBot(), makeConfig(), {
         activityEngine: engine,
       });
       await httpGet(port, '/api/activity/summary?range=24h');
@@ -303,7 +303,7 @@ describe('createHealthServer', () => {
 
     it('GET /api/activity/summary returns empty data when no engine provided', async () => {
       const port = getPort();
-      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig());
+      server = await createDashboardServer(port, makeSessionManager(), makeBot(), makeConfig());
       const res = await httpGet(port, '/api/activity/summary');
       expect(res.status).toBe(200);
       const body = JSON.parse(res.body);
@@ -316,7 +316,7 @@ describe('createHealthServer', () => {
   describe('GET /', () => {
     it('serves HTML dashboard', async () => {
       const port = getPort();
-      server = await createHealthServer(port, makeSessionManager(), makeBot());
+      server = await createDashboardServer(port, makeSessionManager(), makeBot());
 
       const res = await httpGet(port, '/');
       expect(res.status).toBe(200);
