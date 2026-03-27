@@ -310,6 +310,21 @@ describe('createDashboardServer', () => {
       expect(body.summary.total_cost_usd).toBe(0);
       expect(body.summary.total_sessions).toBe(0);
       expect(body.tokens_by_project).toEqual([]);
+      expect(body.input_tokens_over_time).toEqual([]);
+      expect(body.output_tokens_over_time).toEqual([]);
+      expect(body.cache_read_over_time).toEqual([]);
+      expect(body.project_name_map).toEqual({});
+    });
+
+    it('GET /api/activity/summary includes project_name_map from config', async () => {
+      const port = getPort();
+      const engine = makeMockEngine();
+      server = await createDashboardServer(port, makeSessionManager(), makeBot(), makeConfig(), {
+        activityEngine: engine,
+      });
+      const res = await httpGet(port, '/api/activity/summary?range=7d');
+      const body = JSON.parse(res.body);
+      expect(body.project_name_map).toEqual({ 'ch-1': 'My Project', 'ch-2': 'Other Project' });
     });
   });
 
