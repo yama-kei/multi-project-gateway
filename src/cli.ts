@@ -11,12 +11,17 @@ import { createTurnCounter } from './turn-counter.js';
 import { runInit } from './init.js';
 import { runHealthChecks } from './health.js';
 import { reconcileWorktrees } from './worktree.js';
+import { checkPidFile, writePid, removePid } from './pid.js';
+import { createFileWriter } from './file-logger.js';
+import { daemonInstall, daemonUninstall, daemonStatus, daemonLogs } from './daemon.js';
 import {
   resolveEnvPath,
   resolveConfigPath,
   resolveSessionsPath,
   resolveMpgHome,
   resolveProfileDir,
+  resolvePidPath,
+  resolveLogPath,
   parseFlags,
 } from './resolve-home.js';
 import { createLogger, parseLogEntry, filterLogEntries, type LogLevel, isValidLogLevel } from './logger.js';
@@ -36,6 +41,10 @@ async function main() {
       return runInit(flags.profileFlag);
     case 'status':
       return status();
+    case 'stop':
+      return stop();
+    case 'daemon':
+      return daemon();
     case 'logs':
       return logs();
     case 'help':
@@ -59,11 +68,16 @@ mpg — multi-project gateway for Claude Code
 Usage: mpg <command>
 
 Commands:
-  start     Start the gateway (default)
-  init      Interactive setup wizard
-  status    Show session status
-  logs      Filter structured log output (reads stdin)
-  help      Show this message
+  start                Start the gateway (default)
+  stop                 Stop a running gateway instance
+  init                 Interactive setup wizard
+  status               Show session status
+  logs                 Filter structured log output (reads stdin)
+  daemon install       Install systemd user service
+  daemon uninstall     Remove systemd user service
+  daemon status        Show systemd service status
+  daemon logs          Show service logs (journalctl)
+  help                 Show this message
 
 Options:
   --profile <name>   Use a named profile (default: "default")
@@ -71,6 +85,7 @@ Options:
   --migrate          Copy CWD config files into ~/.mpg/profiles/default/
   --project <name>   (logs) Filter by project name
   --level <level>    (logs) Filter by minimum log level (debug|info|warn|error)
+  --follow, -f       (daemon logs) Follow log output
   -v, --version      Show version
   -h, --help         Show this message
 
@@ -97,6 +112,15 @@ function start() {
     process.exit(1);
   }
 
+  // Check for existing instance
+  const pidPath = resolvePidPath(flags.profileFlag);
+  const pidCheck = checkPidFile(pidPath);
+  if (pidCheck.status === 'running') {
+    console.error(`MPG is already running (PID ${pidCheck.pid}). Use \`mpg stop\` first.`);
+    process.exit(1);
+  }
+  writePid(pidPath);
+
   const configPath = resolveConfigPath({
     configFlag: flags.configFlag,
     profileFlag: flags.profileFlag,
@@ -109,7 +133,12 @@ function start() {
   const rawConfig = JSON.parse(readFileSync(configPath, 'utf-8'));
   const config = loadConfig(rawConfig);
 
-  const log = createLogger(config.defaults.logLevel);
+  const logPath = resolveLogPath(flags.profileFlag);
+  const fileWriter = createFileWriter(logPath);
+  const log = createLogger(config.defaults.logLevel, (line: string) => {
+    fileWriter(line);
+    process.stderr.write(line + '\n');
+  });
 
   const projectCount = Object.keys(config.projects).length;
   if (projectCount === 0) {
@@ -150,6 +179,7 @@ function start() {
 
   function shutdown() {
     log.info('Shutting down...');
+    removePid(pidPath);
     if (healthServer) {
       healthServer.close().catch(() => {});
     }
@@ -274,6 +304,75 @@ function migrate() {
   }
   console.log(`\nProfile directory: ${profileDir}`);
   console.log('You can now run `mpg start` from any directory.');
+}
+
+function stop() {
+  const pidPath = resolvePidPath(flags.profileFlag);
+  const check = checkPidFile(pidPath);
+
+  if (check.status === 'none') {
+    console.log('No running MPG instance found.');
+    return;
+  }
+
+  if (check.status === 'stale') {
+    console.log(`Removed stale PID file (process ${check.pid} was not running).`);
+    return;
+  }
+
+  const { pid } = check;
+  console.log(`Sending SIGTERM to MPG (PID ${pid})...`);
+
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch (err) {
+    console.error(`Failed to send signal: ${err}`);
+    process.exit(1);
+  }
+
+  // Wait up to 10 seconds for graceful shutdown
+  const deadline = Date.now() + 10_000;
+  const poll = setInterval(() => {
+    try {
+      process.kill(pid, 0);
+      // Still running
+      if (Date.now() > deadline) {
+        clearInterval(poll);
+        console.log('Graceful shutdown timed out. Sending SIGKILL...');
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch { /* ignore */ }
+        removePid(pidPath);
+        console.log('Killed.');
+      }
+    } catch {
+      // Process is gone
+      clearInterval(poll);
+      removePid(pidPath);
+      console.log('Stopped.');
+    }
+  }, 200);
+}
+
+function daemon() {
+  const subcommand = args[1];
+  const daemonFlags = parseFlags(args.slice(2));
+  const profile = daemonFlags.profileFlag ?? flags.profileFlag;
+
+  switch (subcommand) {
+    case 'install':
+      return daemonInstall(profile);
+    case 'uninstall':
+      return daemonUninstall(profile);
+    case 'status':
+      return daemonStatus(profile);
+    case 'logs':
+      return daemonLogs(profile, daemonFlags.follow);
+    default:
+      console.error(`Unknown daemon subcommand: ${subcommand}`);
+      console.error('Usage: mpg daemon <install|uninstall|status|logs>');
+      process.exit(1);
+  }
 }
 
 function logs() {
