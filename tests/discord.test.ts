@@ -1,4 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { chunkMessage, handleCommand } from '../src/discord.js';
 import type { GatewayConfig, AgentConfig } from '../src/config.js';
 import type { SessionManager } from '../src/session-manager.js';
@@ -259,6 +262,108 @@ describe('handleCommand', () => {
     expect(result).toContain('!ask');
     expect(result).toContain('pm');
     expect(result).toContain('engineer');
+  });
+
+  it('includes !apo in !help output', () => {
+    const sm = mockSessionManager();
+    const result = handleCommand('!help', testConfig, sm);
+    expect(result).toContain('!apo');
+  });
+
+  describe('!apo', () => {
+    const apoTmpDir = join(tmpdir(), `mpg-apo-test-${process.pid}`);
+    const pulseDir = join(apoTmpDir, '.pulse');
+    const apoConfig: GatewayConfig = {
+      defaults: testConfig.defaults,
+      projects: {
+        'ch-apo': { name: 'ApoProject', directory: apoTmpDir },
+      },
+    };
+    const sm = mockSessionManager();
+
+    beforeEach(() => {
+      mkdirSync(pulseDir, { recursive: true });
+    });
+
+    afterEach(() => {
+      rmSync(apoTmpDir, { recursive: true, force: true });
+    });
+
+    it('returns error without project context', () => {
+      const result = handleCommand('!apo', apoConfig, sm);
+      expect(result).toBe('Run `!apo` in a project channel or thread.');
+    });
+
+    it('returns error when no .pulse directory exists', () => {
+      rmSync(pulseDir, { recursive: true, force: true });
+      const result = handleCommand('!apo', apoConfig, sm, {
+        channelId: 'ch-apo',
+        projectName: 'ApoProject',
+        isThread: false,
+      });
+      expect(result).toContain('No pulse reports found');
+      expect(result).toContain('ApoProject');
+    });
+
+    it('returns error when .pulse directory is empty', () => {
+      const result = handleCommand('!apo', apoConfig, sm, {
+        channelId: 'ch-apo',
+        projectName: 'ApoProject',
+        isThread: false,
+      });
+      expect(result).toContain('No pulse reports found');
+    });
+
+    it('returns formatted pulse summary for happy path', () => {
+      const report = {
+        timestamp: '2026-03-27T19:02:27.083Z',
+        project: 'ApoProject',
+        convergence: {
+          exchanges: 43,
+          outcomes: 41,
+          rate: 1.05,
+          reworkPercent: 2.3,
+        },
+      };
+      writeFileSync(
+        join(pulseDir, 'pulse-2026-03-27T19-02-27-083Z.json'),
+        JSON.stringify(report),
+      );
+      const result = handleCommand('!apo', apoConfig, sm, {
+        channelId: 'ch-apo',
+        projectName: 'ApoProject',
+        isThread: false,
+      });
+      expect(result).toContain('Pulse — ApoProject');
+      expect(result).toContain('43 exchanges | 41 outcomes | rate 1.05');
+      expect(result).toContain('Rework: 2.3%');
+      expect(result).toContain('Reported: 2026-03-27T19:02:27.083Z');
+    });
+
+    it('reads the latest pulse report by filename sort', () => {
+      const older = { timestamp: 'old', project: 'ApoProject', convergence: { exchanges: 1, outcomes: 1, rate: 1, reworkPercent: 0 } };
+      const newer = { timestamp: 'new', project: 'ApoProject', convergence: { exchanges: 99, outcomes: 98, rate: 1.01, reworkPercent: 1 } };
+      writeFileSync(join(pulseDir, 'pulse-2026-03-27T10-00-00-000Z.json'), JSON.stringify(older));
+      writeFileSync(join(pulseDir, 'pulse-2026-03-27T20-00-00-000Z.json'), JSON.stringify(newer));
+      const result = handleCommand('!apo', apoConfig, sm, {
+        channelId: 'ch-apo',
+        projectName: 'ApoProject',
+        isThread: false,
+      });
+      expect(result).toContain('99 exchanges');
+      expect(result).toContain('Reported: new');
+    });
+
+    it('returns error for invalid JSON in pulse report', () => {
+      writeFileSync(join(pulseDir, 'pulse-2026-03-27T19-00-00-000Z.json'), 'not json');
+      const result = handleCommand('!apo', apoConfig, sm, {
+        channelId: 'ch-apo',
+        projectName: 'ApoProject',
+        isThread: false,
+      });
+      expect(result).toContain('Failed to read pulse report');
+      expect(result).toContain('ApoProject');
+    });
   });
 });
 

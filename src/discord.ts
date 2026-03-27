@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { Client, GatewayIntentBits, Events, Status, type Message, type TextChannel, type ThreadChannel } from 'discord.js';
 import type { Router } from './router.js';
 import type { SessionManager } from './session-manager.js';
@@ -163,6 +165,37 @@ export function handleCommand(
     return `**${context.projectName} agents**\n${lines.join('\n')}\n\nDispatch: \`!ask <agent> <message>\` or shorthand \`!<agent> <message>\``;
   }
 
+  if (cmd === '!apo') {
+    if (!context) return 'Run `!apo` in a project channel or thread.';
+    const match = findProjectByName(config, context.projectName);
+    const projectDir = match ? config.projects[match.channelId]?.directory : undefined;
+    if (!projectDir) return 'Run `!apo` in a project channel or thread.';
+
+    const pulseDir = join(projectDir, '.pulse');
+    let files: string[];
+    try {
+      files = readdirSync(pulseDir).filter(f => f.endsWith('.json')).sort();
+    } catch {
+      return `No pulse reports found for **${context.projectName}**.`;
+    }
+    if (files.length === 0) return `No pulse reports found for **${context.projectName}**.`;
+
+    try {
+      const raw = readFileSync(join(pulseDir, files[files.length - 1]), 'utf-8');
+      const report = JSON.parse(raw);
+      const c = report.convergence ?? {};
+      return [
+        `Pulse — ${report.project ?? context.projectName}`,
+        '═══════════════════════════════',
+        `${c.exchanges ?? '?'} exchanges | ${c.outcomes ?? '?'} outcomes | rate ${c.rate ?? '?'}`,
+        `Rework: ${c.reworkPercent ?? '?'}%`,
+        `Reported: ${report.timestamp ?? 'unknown'}`,
+      ].join('\n');
+    } catch {
+      return `Failed to read pulse report for **${context.projectName}**.`;
+    }
+  }
+
   if (cmd === '!help') {
     return [
       '**Gateway commands**',
@@ -173,6 +206,7 @@ export function handleCommand(
       '`!restart <name>` — reset a session (fresh context, keeps worktree)',
       '`!kill <name>` — force-close a project session',
       '`!agents` — list available agents for the current project',
+      '`!apo` — show latest pulse interaction report',
       '`!help` — show this message',
     ].join('\n');
   }
