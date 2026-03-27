@@ -1,5 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { request } from 'node:http';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createHealthServer, type HealthServer } from '../src/health-server.js';
 import type { SessionManager, SessionInfo } from '../src/session-manager.js';
 import type { DiscordBot } from '../src/discord.js';
@@ -251,86 +254,42 @@ describe('createHealthServer', () => {
   });
 
   describe('activity endpoints', () => {
-    it('GET /api/activity/sessions returns pulse CLI output', async () => {
+    it('GET /api/activity/summary returns aggregated data from JSONL', async () => {
       const port = getPort();
-      const mockPulseOutput = JSON.stringify({
-        source: 'mpg-sessions',
-        filters: {},
-        events: [{ event_type: 'session_start', session_id: 'abc' }],
-      });
-      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig(), {
-        runPulseCli: async () => mockPulseOutput,
-      });
-      const res = await httpGet(port, '/api/activity/sessions?range=7d');
+      const dir = mkdtempSync(join(tmpdir(), 'hs-activity-'));
+      const eventsPath = join(dir, 'events.jsonl');
+      const now = new Date();
+      const events = [
+        JSON.stringify({ schema_version: 1, timestamp: now.toISOString(), event_type: 'session_start', session_id: 's1', project_key: 'proj-a', project_dir: '/tmp' }),
+        JSON.stringify({ schema_version: 1, timestamp: now.toISOString(), event_type: 'message_routed', session_id: 's1', project_key: 'proj-a', project_dir: '/tmp' }),
+        JSON.stringify({ schema_version: 1, timestamp: now.toISOString(), event_type: 'message_completed', session_id: 's1', project_key: 'proj-a', project_dir: '/tmp', input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 500, total_cost_usd: 0.01, duration_ms: 1000, duration_api_ms: 900, num_turns: 1, model: 'opus' }),
+      ];
+      writeFileSync(eventsPath, events.join('\n') + '\n');
+
+      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig(), { pulseEventsPath: eventsPath });
+      const res = await httpGet(port, '/api/activity/summary?range=24h');
       expect(res.status).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.events).toHaveLength(1);
-      expect(body.pulse_available).toBe(true);
+      expect(body.summary.total_cost_usd).toBeCloseTo(0.01);
+      expect(body.summary.total_input_tokens).toBe(100);
+      expect(body.summary.total_sessions).toBe(1);
+      expect(body.summary.total_messages).toBe(1);
+      expect(body.tokens_by_project).toHaveLength(1);
+      expect(body.tokens_by_session).toHaveLength(1);
+      expect(body.model_breakdown).toHaveLength(1);
+      expect(body.cache_efficiency.cache_read_tokens).toBe(500);
+
+      rmSync(dir, { recursive: true, force: true });
     });
 
-    it('GET /api/activity/summary returns pulse CLI output', async () => {
+    it('GET /api/activity/summary returns empty data when no events file', async () => {
       const port = getPort();
-      const mockPulseOutput = JSON.stringify({
-        source: 'mpg-sessions',
-        filters: {},
-        bucket: 'day',
-        sessions_per_bucket: [],
-        duration_stats: [],
-        message_volume: [],
-        persona_breakdown: [],
-        peak_concurrent: [],
-      });
-      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig(), {
-        runPulseCli: async () => mockPulseOutput,
-      });
-      const res = await httpGet(port, '/api/activity/summary?range=7d&bucket=day');
+      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig(), { pulseEventsPath: '/nonexistent.jsonl' });
+      const res = await httpGet(port, '/api/activity/summary?range=7d');
       expect(res.status).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.pulse_available).toBe(true);
-      expect(body.bucket).toBe('day');
-    });
-
-    it('GET /api/activity/sessions returns empty data when pulse unavailable', async () => {
-      const port = getPort();
-      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig(), {
-        runPulseCli: async () => { throw new Error('pulse not found'); },
-      });
-      const res = await httpGet(port, '/api/activity/sessions');
-      expect(res.status).toBe(200);
-      const body = JSON.parse(res.body);
-      expect(body.pulse_available).toBe(false);
-      expect(body.events).toEqual([]);
-    });
-
-    it('GET /api/activity/summary returns empty data when pulse unavailable', async () => {
-      const port = getPort();
-      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig(), {
-        runPulseCli: async () => { throw new Error('pulse not found'); },
-      });
-      const res = await httpGet(port, '/api/activity/summary');
-      expect(res.status).toBe(200);
-      const body = JSON.parse(res.body);
-      expect(body.pulse_available).toBe(false);
-      expect(body.sessions_per_bucket).toEqual([]);
-    });
-
-    it('forwards query params as CLI flags', async () => {
-      const port = getPort();
-      const calls: string[][] = [];
-      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig(), {
-        runPulseCli: async (args) => {
-          calls.push(args);
-          return JSON.stringify({ source: 'mpg-sessions', filters: {}, events: [] });
-        },
-      });
-      await httpGet(port, '/api/activity/sessions?range=24h&project=my-proj&type=session_start');
-      expect(calls).toHaveLength(1);
-      expect(calls[0]).toContain('--range');
-      expect(calls[0]).toContain('24h');
-      expect(calls[0]).toContain('--project');
-      expect(calls[0]).toContain('my-proj');
-      expect(calls[0]).toContain('--type');
-      expect(calls[0]).toContain('session_start');
+      expect(body.summary.total_sessions).toBe(0);
+      expect(body.tokens_by_project).toEqual([]);
     });
   });
 

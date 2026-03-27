@@ -1,9 +1,22 @@
 import { createServer, type Server } from 'node:http';
 import { readFileSync } from 'node:fs';
-import { execFile } from 'node:child_process';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 import type { SessionManager } from './session-manager.js';
 import type { DiscordBot } from './discord.js';
 import type { GatewayConfig } from './config.js';
+import {
+  readEvents,
+  computeSummary,
+  tokensByProject,
+  tokensBySession,
+  bucketedCounts,
+  bucketedSums,
+  sessionDurations,
+  modelBreakdown,
+  personaBreakdown,
+  cacheEfficiency,
+} from './activity-engine.js';
 
 export interface HealthServer {
   close(): Promise<void>;
@@ -19,16 +32,7 @@ function getVersion(): string {
 }
 
 export interface HealthServerOptions {
-  runPulseCli?: (args: string[]) => Promise<string>;
-}
-
-function defaultRunPulseCli(args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile('pulse', ['activity', ...args], { timeout: 10000 }, (err, stdout) => {
-      if (err) return reject(err);
-      resolve(stdout);
-    });
-  });
+  pulseEventsPath?: string;
 }
 
 function buildDashboardHtml(): string {
@@ -117,27 +121,39 @@ function buildDashboardHtml(): string {
     <button class="range-btn" data-range="7d">7d</button>
     <button class="range-btn" data-range="30d">30d</button>
   </div>
+  <div class="grid" id="activity-cards"></div>
   <div class="chart-grid">
+    <div class="chart-card">
+      <h3>Messages Over Time</h3>
+      <canvas id="messages-chart"></canvas>
+    </div>
+    <div class="chart-card">
+      <h3>Cost Over Time</h3>
+      <canvas id="cost-chart"></canvas>
+    </div>
     <div class="chart-card">
       <h3>Sessions Over Time</h3>
       <canvas id="sessions-chart"></canvas>
     </div>
     <div class="chart-card">
-      <h3>Message Volume</h3>
-      <canvas id="messages-chart"></canvas>
+      <h3>Token Usage Over Time</h3>
+      <canvas id="tokens-chart"></canvas>
     </div>
     <div class="chart-card">
       <h3>Persona Breakdown</h3>
       <canvas id="persona-chart"></canvas>
     </div>
     <div class="chart-card">
-      <h3>Peak Concurrency</h3>
-      <canvas id="concurrency-chart"></canvas>
+      <h3>Model Breakdown</h3>
+      <canvas id="model-chart"></canvas>
     </div>
   </div>
-  <h3>Duration Stats</h3>
-  <div id="duration-table"></div>
-  <div id="pulse-warning" class="empty" style="display:none">Pulse CLI not available — install pulse for activity graphs</div>
+  <h3>Token Usage by Project</h3>
+  <div id="project-tokens-table"></div>
+  <h3>Token Usage by Session</h3>
+  <div id="session-tokens-table"></div>
+  <h3>Cache Efficiency</h3>
+  <div id="cache-table"></div>
 </div>
 
 <script>
@@ -244,49 +260,98 @@ function destroyChart(key) {
   if (chartInstances[key]) { chartInstances[key].destroy(); chartInstances[key] = null; }
 }
 
+function fmtTokens(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+  return n.toString();
+}
+
+function fmtDuration(ms) {
+  if (ms < 60000) return Math.round(ms / 1000) + 's';
+  if (ms < 3600000) return Math.round(ms / 60000) + 'm';
+  var h = Math.floor(ms / 3600000);
+  var m = Math.round((ms % 3600000) / 60000);
+  return h + 'h ' + m + 'm';
+}
+
+function fmtCost(n) {
+  return '$' + n.toFixed(2);
+}
+
+function chartOpts(hideLegend) {
+  return {
+    scales: {
+      y: { beginAtZero: true, ticks: { color: '#8b949e' }, grid: { color: '#30363d' } },
+      x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }
+    },
+    plugins: { legend: { display: !hideLegend, labels: { color: '#8b949e' } } }
+  };
+}
+
 function refreshActivity() {
-  var bucket = currentRange === '24h' ? 'hour' : 'day';
-  fetch('/api/activity/summary?range=' + currentRange + '&bucket=' + bucket)
+  fetch('/api/activity/summary?range=' + currentRange)
     .then(function(r) { return r.json(); })
     .then(function(d) {
-      if (d.pulse_available === false) {
-        document.getElementById('pulse-warning').style.display = '';
-        return;
-      }
-      document.getElementById('pulse-warning').style.display = 'none';
+      // Summary cards
+      var s = d.summary;
+      document.getElementById('activity-cards').innerHTML =
+        '<div class="card"><div class="card-label">Total Cost</div><div class="card-value">' + fmtCost(s.total_cost_usd) + '</div></div>' +
+        '<div class="card"><div class="card-label">Total Tokens</div><div class="card-value">' + fmtTokens(s.total_input_tokens + s.total_output_tokens) + '</div></div>' +
+        '<div class="card"><div class="card-label">Sessions</div><div class="card-value">' + s.total_sessions + '</div></div>' +
+        '<div class="card"><div class="card-label">Messages</div><div class="card-value">' + s.total_messages + '</div></div>' +
+        '<div class="card"><div class="card-label">Avg Duration</div><div class="card-value">' + fmtDuration(s.avg_session_duration_ms) + '</div></div>';
+
+      // Messages Over Time
+      var mLabels = d.messages_over_time.map(function(e) { return e.bucket; });
+      var mData = d.messages_over_time.map(function(e) { return e.value; });
+      destroyChart('messages');
+      chartInstances['messages'] = new Chart(document.getElementById('messages-chart'), {
+        type: 'bar',
+        data: { labels: mLabels, datasets: [{ label: 'Messages', data: mData, backgroundColor: '#58a6ff' }] },
+        options: chartOpts(true)
+      });
+
+      // Cost Over Time
+      var cLabels = d.cost_over_time.map(function(e) { return e.bucket; });
+      var cData = d.cost_over_time.map(function(e) { return e.value; });
+      destroyChart('cost');
+      chartInstances['cost'] = new Chart(document.getElementById('cost-chart'), {
+        type: 'line',
+        data: { labels: cLabels, datasets: [{ label: 'Cost ($)', data: cData, borderColor: '#3fb950', tension: 0.3 }] },
+        options: chartOpts(true)
+      });
 
       // Sessions Over Time
-      var sessionBuckets = {};
-      d.sessions_per_bucket.forEach(function(s) {
-        if (!sessionBuckets[s.bucket]) sessionBuckets[s.bucket] = 0;
-        sessionBuckets[s.bucket] += s.count;
-      });
-      var sLabels = Object.keys(sessionBuckets).sort();
-      var sData = sLabels.map(function(l) { return sessionBuckets[l]; });
+      var sLabels = d.sessions_over_time.map(function(e) { return e.bucket; });
+      var sData = d.sessions_over_time.map(function(e) { return e.value; });
       destroyChart('sessions');
       chartInstances['sessions'] = new Chart(document.getElementById('sessions-chart'), {
         type: 'bar',
-        data: { labels: sLabels, datasets: [{ label: 'Sessions', data: sData, backgroundColor: '#58a6ff' }] },
-        options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }, x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } } }, plugins: { legend: { display: false } } }
+        data: { labels: sLabels, datasets: [{ label: 'Sessions', data: sData, backgroundColor: '#d29922' }] },
+        options: chartOpts(true)
       });
 
-      // Message Volume
-      var msgBuckets = {};
-      d.message_volume.forEach(function(m) {
-        if (!msgBuckets[m.bucket]) msgBuckets[m.bucket] = 0;
-        msgBuckets[m.bucket] += m.count;
-      });
-      var mLabels = Object.keys(msgBuckets).sort();
-      var mData = mLabels.map(function(l) { return msgBuckets[l]; });
-      destroyChart('messages');
-      chartInstances['messages'] = new Chart(document.getElementById('messages-chart'), {
-        type: 'line',
-        data: { labels: mLabels, datasets: [{ label: 'Messages', data: mData, borderColor: '#3fb950', tension: 0.3 }] },
-        options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }, x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } } }, plugins: { legend: { display: false } } }
+      // Token Usage Over Time (stacked bar: input vs output)
+      var allBuckets = {};
+      d.input_tokens_over_time.forEach(function(e) { allBuckets[e.bucket] = true; });
+      d.output_tokens_over_time.forEach(function(e) { allBuckets[e.bucket] = true; });
+      var tLabels = Object.keys(allBuckets).sort();
+      var inputMap = {}; d.input_tokens_over_time.forEach(function(e) { inputMap[e.bucket] = e.value; });
+      var outputMap = {}; d.output_tokens_over_time.forEach(function(e) { outputMap[e.bucket] = e.value; });
+      var tInputData = tLabels.map(function(b) { return inputMap[b] || 0; });
+      var tOutputData = tLabels.map(function(b) { return outputMap[b] || 0; });
+      destroyChart('tokens');
+      chartInstances['tokens'] = new Chart(document.getElementById('tokens-chart'), {
+        type: 'bar',
+        data: { labels: tLabels, datasets: [
+          { label: 'Input', data: tInputData, backgroundColor: '#bc8cff' },
+          { label: 'Output', data: tOutputData, backgroundColor: '#79c0ff' }
+        ] },
+        options: { scales: { y: { beginAtZero: true, stacked: true, ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }, x: { stacked: true, ticks: { color: '#8b949e' }, grid: { color: '#30363d' } } }, plugins: { legend: { labels: { color: '#8b949e' } } } }
       });
 
       // Persona Breakdown
-      var pLabels = d.persona_breakdown.map(function(p) { return p.agent || 'default'; });
+      var pLabels = d.persona_breakdown.map(function(p) { return p.agent; });
       var pData = d.persona_breakdown.map(function(p) { return p.count; });
       destroyChart('persona');
       if (pLabels.length > 0) {
@@ -297,31 +362,55 @@ function refreshActivity() {
         });
       }
 
-      // Peak Concurrency
-      var cLabels = d.peak_concurrent.map(function(p) { return p.bucket; });
-      var cData = d.peak_concurrent.map(function(p) { return p.max_concurrent; });
-      destroyChart('concurrency');
-      chartInstances['concurrency'] = new Chart(document.getElementById('concurrency-chart'), {
-        type: 'line',
-        data: { labels: cLabels, datasets: [{ label: 'Peak Concurrent', data: cData, borderColor: '#d29922', tension: 0.3 }] },
-        options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e', stepSize: 1 }, grid: { color: '#30363d' } }, x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } } }, plugins: { legend: { display: false } } }
-      });
-
-      // Duration Stats Table
-      var dt = document.getElementById('duration-table');
-      if (d.duration_stats.length === 0) {
-        dt.innerHTML = '<div class="empty">No duration data</div>';
-      } else {
-        var dh = '<table><tr><th>Project</th><th>Avg</th><th>Median</th><th>P95</th></tr>';
-        d.duration_stats.forEach(function(s) {
-          dh += '<tr><td>' + escapeHtml(s.project_key) + '</td><td>' + (s.avg_ms / 60000).toFixed(1) + 'm</td><td>' + (s.median_ms / 60000).toFixed(1) + 'm</td><td>' + (s.p95_ms / 60000).toFixed(1) + 'm</td></tr>';
+      // Model Breakdown
+      var mdLabels = d.model_breakdown.map(function(m) { return m.model; });
+      var mdData = d.model_breakdown.map(function(m) { return m.cost_usd; });
+      destroyChart('model');
+      if (mdLabels.length > 0) {
+        chartInstances['model'] = new Chart(document.getElementById('model-chart'), {
+          type: 'doughnut',
+          data: { labels: mdLabels, datasets: [{ data: mdData, backgroundColor: CHART_COLORS.slice(0, mdLabels.length) }] },
+          options: { plugins: { legend: { labels: { color: '#8b949e' } } } }
         });
-        dh += '</table>';
-        dt.innerHTML = dh;
+      }
+
+      // Token Usage by Project table
+      var pt = document.getElementById('project-tokens-table');
+      if (d.tokens_by_project.length === 0) {
+        pt.innerHTML = '<div class="empty">No token data yet — data appears after new messages are processed</div>';
+      } else {
+        var ph = '<table><tr><th>Project</th><th>Input Tokens</th><th>Output Tokens</th><th>Cache Read</th><th>Cost</th><th>Messages</th></tr>';
+        d.tokens_by_project.forEach(function(p) {
+          ph += '<tr><td>' + escapeHtml(p.project_key) + '</td><td>' + fmtTokens(p.input_tokens) + '</td><td>' + fmtTokens(p.output_tokens) + '</td><td>' + fmtTokens(p.cache_read_input_tokens) + '</td><td>' + fmtCost(p.cost_usd) + '</td><td>' + p.message_count + '</td></tr>';
+        });
+        ph += '</table>';
+        pt.innerHTML = ph;
+      }
+
+      // Token Usage by Session table
+      var st = document.getElementById('session-tokens-table');
+      if (d.tokens_by_session.length === 0) {
+        st.innerHTML = '<div class="empty">No token data yet</div>';
+      } else {
+        var sh = '<table><tr><th>Session</th><th>Project</th><th>Input</th><th>Output</th><th>Cost</th><th>Messages</th><th>Duration</th></tr>';
+        d.tokens_by_session.forEach(function(s) {
+          sh += '<tr><td>' + escapeHtml(s.session_id.slice(0, 12)) + '...</td><td>' + escapeHtml(s.project_key) + '</td><td>' + fmtTokens(s.input_tokens) + '</td><td>' + fmtTokens(s.output_tokens) + '</td><td>' + fmtCost(s.cost_usd) + '</td><td>' + s.message_count + '</td><td>' + fmtDuration(s.duration_ms) + '</td></tr>';
+        });
+        sh += '</table>';
+        st.innerHTML = sh;
+      }
+
+      // Cache Efficiency table
+      var ct = document.getElementById('cache-table');
+      var ce = d.cache_efficiency;
+      if (ce.total_input_tokens === 0 && ce.cache_read_tokens === 0) {
+        ct.innerHTML = '<div class="empty">No cache data yet</div>';
+      } else {
+        ct.innerHTML = '<table><tr><th>Total Input Tokens</th><th>Cache Read Tokens</th><th>Hit Ratio</th></tr><tr><td>' + fmtTokens(ce.total_input_tokens) + '</td><td>' + fmtTokens(ce.cache_read_tokens) + '</td><td>' + (ce.cache_hit_ratio * 100).toFixed(1) + '%</td></tr></table>';
       }
     })
-    .catch(function() {
-      document.getElementById('pulse-warning').style.display = '';
+    .catch(function(err) {
+      console.error('Activity refresh failed:', err);
     });
 }
 
@@ -345,7 +434,7 @@ export function createHealthServer(
   const startTime = Date.now();
   const version = getVersion();
   const dashboardHtml = buildDashboardHtml();
-  const runPulse = options?.runPulseCli ?? defaultRunPulseCli;
+  const eventsPath = options?.pulseEventsPath ?? join(homedir(), '.pulse', 'events', 'mpg-sessions.jsonl');
 
   function getHealthData() {
     const sessions = sessionManager.listSessions();
@@ -412,57 +501,29 @@ export function createHealthServer(
       return;
     }
 
-    if (pathname === '/api/activity/sessions') {
-      const url = new URL(req.url ?? '/', `http://localhost`);
-      const args: string[] = ['sessions', '--json'];
-      const range = url.searchParams.get('range');
-      if (range) { args.push('--range', range); }
-      const project = url.searchParams.get('project');
-      if (project) { args.push('--project', project); }
-      const type = url.searchParams.get('type');
-      if (type) { args.push('--type', type); }
-
-      runPulse(args)
-        .then((stdout) => {
-          const data = JSON.parse(stdout);
-          data.pulse_available = true;
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(data));
-        })
-        .catch(() => {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            source: 'mpg-sessions', filters: {}, events: [], pulse_available: false,
-          }));
-        });
-      return;
-    }
-
     if (pathname === '/api/activity/summary') {
       const url = new URL(req.url ?? '/', `http://localhost`);
-      const args: string[] = ['summary', '--json'];
-      const range = url.searchParams.get('range');
-      if (range) { args.push('--range', range); }
-      const project = url.searchParams.get('project');
-      if (project) { args.push('--project', project); }
-      const bucket = url.searchParams.get('bucket');
-      if (bucket) { args.push('--bucket', bucket); }
+      const range = url.searchParams.get('range') ?? '7d';
+      const rangeMs = range === '24h' ? 86_400_000 : range === '30d' ? 2_592_000_000 : 604_800_000;
+      const bucket = (range === '24h' ? 'hour' : 'day') as 'hour' | 'day';
 
-      runPulse(args)
-        .then((stdout) => {
-          const data = JSON.parse(stdout);
-          data.pulse_available = true;
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(data));
-        })
-        .catch(() => {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            source: 'mpg-sessions', filters: {}, bucket: 'day',
-            sessions_per_bucket: [], duration_stats: [], message_volume: [],
-            persona_breakdown: [], peak_concurrent: [], pulse_available: false,
-          }));
-        });
+      const events = readEvents(eventsPath, rangeMs);
+      const body = JSON.stringify({
+        summary: computeSummary(events),
+        tokens_by_project: tokensByProject(events),
+        tokens_by_session: tokensBySession(events),
+        sessions_over_time: bucketedCounts(events, 'session_start', bucket),
+        messages_over_time: bucketedCounts(events, 'message_routed', bucket),
+        cost_over_time: bucketedSums(events, 'message_completed', 'total_cost_usd', bucket),
+        input_tokens_over_time: bucketedSums(events, 'message_completed', 'input_tokens', bucket),
+        output_tokens_over_time: bucketedSums(events, 'message_completed', 'output_tokens', bucket),
+        session_durations: sessionDurations(events),
+        model_breakdown: modelBreakdown(events),
+        persona_breakdown: personaBreakdown(events),
+        cache_efficiency: cacheEfficiency(events),
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(body);
       return;
     }
 
