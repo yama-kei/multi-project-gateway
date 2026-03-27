@@ -475,7 +475,7 @@ export function createDashboardServer(
   return new Promise<DashboardServer>((resolve, reject) => {
     server.on('error', reject);
     server.listen(port, () => {
-      console.log(`Health endpoint listening on http://localhost:${port}/health`);
+      console.log(`Dashboard server listening on http://localhost:${port}/`);
       resolve({
         close() {
           return new Promise<void>((res, rej) => {
