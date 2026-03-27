@@ -453,7 +453,7 @@ For detailed architecture documentation — message lifecycle, session managemen
 | `src/persona-presets.ts` | Built-in persona library (PM, engineer, etc.) for agent shorthand config |
 | `src/role-check.ts` | Checks Discord member roles against `allowedRoles` |
 | `src/rate-limiter.ts` | Per-user rate limiting (sliding window) |
-| `src/health-server.ts` | Web dashboard and REST API (`/health`, `/api/sessions`, `/api/projects`, `/api/status`) |
+| `src/dashboard-server.ts` | Web dashboard and REST API (`/health`, `/api/sessions`, `/api/projects`, `/api/status`) |
 | `src/logger.ts` | Structured logger with level filtering and JSON output |
 | `src/discord.ts` | Discord.js client, message routing, agent handoff loop, response chunking |
 

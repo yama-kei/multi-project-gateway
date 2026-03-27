@@ -8,7 +8,7 @@ import { createFileSessionStore } from './session-store.js';
 import { createDiscordBot } from './discord.js';
 import { createPulseEmitter } from './pulse-events.js';
 import { createActivityEngine } from './activity-engine.js';
-import { createHealthServer, type HealthServer } from './health-server.js';
+import { createDashboardServer, type DashboardServer } from './dashboard-server.js';
 import { createTurnCounter } from './turn-counter.js';
 import { runInit } from './init.js';
 import { runHealthChecks } from './health.js';
@@ -178,13 +178,13 @@ function start() {
   const turnCounter = createTurnCounter();
   const bot = createDiscordBot(router, sessionManager, config, turnCounter);
 
-  let healthServer: HealthServer | undefined;
+  let dashboardServer: DashboardServer | undefined;
 
   function shutdown() {
     log.info('Shutting down...');
     removePid(pidPath);
-    if (healthServer) {
-      healthServer.close().catch(() => {});
+    if (dashboardServer) {
+      dashboardServer.close().catch(() => {});
     }
     sessionManager.shutdown();
     bot.stop();
@@ -199,9 +199,9 @@ function start() {
       if (config.defaults.httpPort !== false) {
         try {
           const activityEngine = createActivityEngine();
-          healthServer = await createHealthServer(config.defaults.httpPort, sessionManager, bot, config, { activityEngine });
+          dashboardServer = await createDashboardServer(config.defaults.httpPort, sessionManager, bot, config, { activityEngine });
         } catch (err) {
-          log.warn(`Health server failed to start on port ${config.defaults.httpPort}: ${err}`);
+          log.warn(`Dashboard server failed to start on port ${config.defaults.httpPort}: ${err}`);
         }
       }
     })

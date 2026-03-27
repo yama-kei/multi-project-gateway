@@ -5,7 +5,7 @@ import type { DiscordBot } from './discord.js';
 import type { GatewayConfig } from './config.js';
 import type { ActivityEngine, TimeRange, Bucket } from './activity-engine.js';
 
-export interface HealthServer {
+export interface DashboardServer {
   close(): Promise<void>;
 }
 
@@ -18,7 +18,7 @@ function getVersion(): string {
   }
 }
 
-export interface HealthServerOptions {
+export interface DashboardServerOptions {
   activityEngine?: ActivityEngine;
 }
 
@@ -340,13 +340,13 @@ setInterval(function() {
 </html>`;
 }
 
-export function createHealthServer(
+export function createDashboardServer(
   port: number,
   sessionManager: SessionManager,
   bot: DiscordBot,
   config?: GatewayConfig,
-  options?: HealthServerOptions,
-): Promise<HealthServer> {
+  options?: DashboardServerOptions,
+): Promise<DashboardServer> {
   const startTime = Date.now();
   const version = getVersion();
   const dashboardHtml = buildDashboardHtml();
@@ -472,7 +472,7 @@ export function createHealthServer(
     res.end(JSON.stringify({ error: 'Not Found' }));
   });
 
-  return new Promise<HealthServer>((resolve, reject) => {
+  return new Promise<DashboardServer>((resolve, reject) => {
     server.on('error', reject);
     server.listen(port, () => {
       console.log(`Health endpoint listening on http://localhost:${port}/health`);
