@@ -1,5 +1,6 @@
 import { runClaude, type ClaudeResult } from './claude-cli.js';
 import type { SessionStore, PersistedSession } from './session-store.js';
+import type { PulseEmitter } from './pulse-events.js';
 import { createWorktree as gitCreateWorktree, removeWorktree as gitRemoveWorktree } from './worktree.js';
 
 export interface SessionInfo {
@@ -25,6 +26,10 @@ interface InternalSession {
   projectDir: string | undefined;
   worktreePath: string | undefined;
   lastActivity: number;
+  createdAt: number;
+  messageCount: number;
+  restored: boolean;
+  resumeEmitted: boolean;
   processing: boolean;
   queue: Array<{
     prompt: string;
@@ -43,7 +48,7 @@ export function createSessionManager(defaults: {
   sessionTtlMs?: number;
   maxPersistedSessions?: number;
   claudeArgs: string[];
-}, store?: SessionStore): SessionManager {
+}, store?: SessionStore, pulseEmitter?: PulseEmitter): SessionManager {
   const sessions = new Map<string, InternalSession>();
   const sessionTtlMs = defaults.sessionTtlMs ?? 7 * 24 * 60 * 60 * 1000;
   const maxPersistedSessions = defaults.maxPersistedSessions ?? 50;
@@ -119,11 +124,17 @@ export function createSessionManager(defaults: {
 
   function resetIdleTimer(session: InternalSession) {
     if (session.idleTimer) clearTimeout(session.idleTimer);
-    // Don't start idle timer while session has queued work waiting.
     if (session.queue.length > 0) return;
     session.idleTimer = setTimeout(() => {
-      // Remove from memory only; session ID and worktree stay on disk for later resume.
-      // Worktrees persist on idle intentionally — cleaned up on !kill or startup reconciliation.
+      if (pulseEmitter && session.sessionId) {
+        pulseEmitter.sessionIdle(
+          session.sessionId,
+          session.projectKey,
+          session.cwd,
+          Date.now() - session.createdAt,
+          session.messageCount,
+        );
+      }
       sessions.delete(session.projectKey);
     }, defaults.idleTimeoutMs);
   }
@@ -136,6 +147,14 @@ export function createSessionManager(defaults: {
       const item = session.queue.shift()!;
       const effectiveArgs = item.extraArgs ? [...defaults.claudeArgs, ...item.extraArgs] : defaults.claudeArgs;
       await acquireSlot();
+      if (pulseEmitter) {
+        pulseEmitter.messageRouted(
+          session.sessionId ?? session.projectKey,
+          session.projectKey,
+          session.cwd,
+          { agentTarget: undefined, queueDepth: session.queue.length },
+        );
+      }
       try {
         const result = await runClaude(
           session.cwd,
@@ -152,6 +171,7 @@ export function createSessionManager(defaults: {
         );
         session.sessionId = result.sessionId || session.sessionId;
         session.lastActivity = Date.now();
+        session.messageCount++;
         resetIdleTimer(session);
         persistSessions();
         if (sessionChanged) {
@@ -166,6 +186,7 @@ export function createSessionManager(defaults: {
             const result = await runClaude(session.cwd, effectiveArgs, item.prompt, undefined, item.systemPrompt, item.timeoutMs);
             session.sessionId = result.sessionId || undefined;
             session.lastActivity = Date.now();
+            session.messageCount++;
             resetIdleTimer(session);
             persistSessions();
             item.resolve({ ...result, sessionReset: true });
@@ -185,6 +206,15 @@ export function createSessionManager(defaults: {
 
   function getOrCreateSession(projectKey: string, cwd: string, useWorktree?: boolean): InternalSession {
     let session = sessions.get(projectKey);
+    if (session && session.restored && !session.resumeEmitted && pulseEmitter && session.sessionId) {
+      session.resumeEmitted = true;
+      pulseEmitter.sessionResume(
+        session.sessionId,
+        session.projectKey,
+        session.cwd,
+        Date.now() - session.lastActivity,
+      );
+    }
     if (!session) {
       // Check store for a previously persisted session ID
       let restoredSessionId: string | undefined;
@@ -217,12 +247,34 @@ export function createSessionManager(defaults: {
         projectDir,
         worktreePath,
         lastActivity: Date.now(),
+        createdAt: Date.now(),
+        messageCount: 0,
+        restored: !!restoredSessionId,
+        resumeEmitted: false,
         processing: false,
         queue: [],
         idleTimer: null,
       };
       sessions.set(projectKey, session);
       resetIdleTimer(session);
+      if (pulseEmitter) {
+        if (restoredSessionId) {
+          session.resumeEmitted = true;
+          pulseEmitter.sessionResume(
+            restoredSessionId,
+            projectKey,
+            effectiveCwd,
+            Date.now() - (store?.load().get(projectKey)?.lastActivity ?? Date.now()),
+          );
+        } else {
+          pulseEmitter.sessionStart(
+            session.sessionId ?? projectKey,
+            projectKey,
+            effectiveCwd,
+            { triggerSource: 'discord' },
+          );
+        }
+      }
     }
     return session;
   }
@@ -243,6 +295,10 @@ export function createSessionManager(defaults: {
         projectDir: entry.projectDir,
         worktreePath: entry.worktreePath,
         lastActivity: entry.lastActivity,
+        createdAt: entry.lastActivity,
+        messageCount: 0,
+        restored: true,
+        resumeEmitted: false,
         processing: false,
         queue: [],
         idleTimer: null,
@@ -289,6 +345,15 @@ export function createSessionManager(defaults: {
       const session = sessions.get(projectKey);
       if (!session) return false;
       if (session.idleTimer) clearTimeout(session.idleTimer);
+      if (pulseEmitter && session.sessionId) {
+        pulseEmitter.sessionEnd(
+          session.sessionId,
+          session.projectKey,
+          session.cwd,
+          Date.now() - session.createdAt,
+          session.messageCount,
+        );
+      }
       if (session.worktreePath && session.projectDir) {
         gitRemoveWorktree(session.projectDir, session.projectKey);
       }
