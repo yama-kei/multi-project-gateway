@@ -82,3 +82,31 @@ export function parseAgentMention(
 
   return { agentName: matchedName, agent, prompt };
 }
+
+/**
+ * Parse explicit `HANDOFF @agent: <task>` command in agent responses.
+ * Only this syntax triggers auto-handoff — bare @agent mentions are ignored.
+ *
+ * Note: the `prompt` field captures the rest of the HANDOFF line only.
+ * The handoff loop in discord.ts passes the full responseText to the
+ * dispatched agent, not this prompt — the dispatched agent sees the
+ * complete previous response plus thread context.
+ */
+export function parseHandoffCommand(
+  text: string,
+  agents: Record<string, AgentConfig>,
+): AgentMention | null {
+  const agentNames = Object.keys(agents);
+  if (agentNames.length === 0) return null;
+
+  const escaped = agentNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const pattern = new RegExp(`^HANDOFF\\s+@(${escaped.join('|')})\\s*:\\s*(.*)$`, 'im');
+  const match = text.match(pattern);
+  if (!match) return null;
+
+  const matchedName = match[1].toLowerCase();
+  const agent = agents[matchedName];
+  if (!agent) return null;
+
+  return { agentName: matchedName, agent, prompt: match[2].trim() };
+}
