@@ -434,6 +434,8 @@ Open `http://localhost:3100/` to view the dashboard, which shows:
 
 ## Architecture
 
+For detailed architecture documentation — message lifecycle, session management, agent dispatch, security boundaries, and extension points — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 | Module | Responsibility |
 |--------|---------------|
 | `src/cli.ts` | CLI entry point — `mpg start`, `mpg init`, `mpg status` |
