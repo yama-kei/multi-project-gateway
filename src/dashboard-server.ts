@@ -150,6 +150,19 @@ function formatAgo(ts) {
   if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
   return Math.floor(diff / 3600) + 'h ago';
 }
+function formatDuration(startTs) {
+  var diff = Math.floor((Date.now() - startTs) / 1000);
+  if (diff < 60) return diff + 's';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm';
+  var h = Math.floor(diff / 3600);
+  var m = Math.floor((diff % 3600) / 60);
+  return h + 'h ' + m + 'm';
+}
+function sessionStatus(s) {
+  if (s.processing) return '<span style="color:#3fb950">processing</span>';
+  if (s.queueLength > 0) return '<span style="color:#d29922">waiting</span>';
+  return '<span style="color:#8b949e">idle</span>';
+}
 function statusClass(v) {
   if (v === 'ok' || v === 'connected') return 'status-ok';
   if (v === 'reconnecting') return 'status-warn';
@@ -167,7 +180,7 @@ function compactTokens(n) {
 }
 function formatLocalTime(isoStr, isHourBucket) {
   var d = new Date(isoStr);
-  if (isHourBucket) return d.getHours() + 'h';
+  if (isHourBucket) return String(d.getHours()).padStart(2, '0') + ':00';
   var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   return months[d.getMonth()] + ' ' + d.getDate();
 }
@@ -217,12 +230,12 @@ function refresh() {
       if (d.sessions.length === 0) {
         st.innerHTML = '<div class="empty">No active sessions</div>';
       } else {
-        var h = '<table><tr><th>Project</th><th>Session ID</th><th>Last Activity</th><th>Queue</th></tr>';
+        var h = '<table><tr><th>Project</th><th>Session ID</th><th>Status</th><th>Duration</th><th>Last Activity</th></tr>';
         for (var i = 0; i < d.sessions.length; i++) {
           var s = d.sessions[i];
           var sid = s.sessionId || '';
           var shortSid = sid ? sid.slice(0, 12) + '...' : '—';
-          h += '<tr><td>' + escapeHtml(resolveProjectName(s.projectKey, projectNameMap)) + '</td><td><span class="clickable-id" style="cursor:pointer;text-decoration:underline dotted" title="Click to copy: ' + escapeHtml(sid) + '" onclick="copyToClipboard(\\'' + escapeHtml(sid) + '\\', this)">' + escapeHtml(shortSid) + '</span></td><td>' + formatAgo(s.lastActivity) + '</td><td>' + s.queueLength + '</td></tr>';
+          h += '<tr><td>' + escapeHtml(resolveProjectName(s.projectKey, projectNameMap)) + '</td><td><span class="clickable-id" style="cursor:pointer;text-decoration:underline dotted" title="Click to copy: ' + escapeHtml(sid) + '" onclick="copyToClipboard(\\'' + escapeHtml(sid) + '\\', this)">' + escapeHtml(shortSid) + '</span></td><td>' + sessionStatus(s) + '</td><td>' + formatDuration(s.createdAt) + '</td><td>' + formatAgo(s.lastActivity) + '</td></tr>';
         }
         h += '</table>';
         st.innerHTML = h;
@@ -311,11 +324,11 @@ function refreshActivity() {
 
       var xOpts = timeAxisOptions(isHourBucket);
 
-      // Messages Over Time (bar)
+      // Messages Over Time (line)
       destroyChart('messages');
       chartInstances['messages'] = new Chart(document.getElementById('messages-chart'), {
-        type: 'bar',
-        data: { labels: d.messages_over_time.map(function(e) { return e.bucket; }), datasets: [{ label: 'Messages', data: d.messages_over_time.map(function(e) { return e.value; }), backgroundColor: '#58a6ff' }] },
+        type: 'line',
+        data: { labels: d.messages_over_time.map(function(e) { return e.bucket; }), datasets: [{ label: 'Messages', data: d.messages_over_time.map(function(e) { return e.value; }), borderColor: '#58a6ff', tension: 0.3 }] },
         options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }, x: xOpts }, plugins: { legend: { display: false } } }
       });
 
@@ -327,11 +340,11 @@ function refreshActivity() {
         options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }, x: xOpts }, plugins: { legend: { display: false } } }
       });
 
-      // Sessions Over Time (bar)
+      // Sessions Over Time (line)
       destroyChart('sessions');
       chartInstances['sessions'] = new Chart(document.getElementById('sessions-chart'), {
-        type: 'bar',
-        data: { labels: d.sessions_over_time.map(function(e) { return e.bucket; }), datasets: [{ label: 'Sessions', data: d.sessions_over_time.map(function(e) { return e.value; }), backgroundColor: '#d29922' }] },
+        type: 'line',
+        data: { labels: d.sessions_over_time.map(function(e) { return e.bucket; }), datasets: [{ label: 'Sessions', data: d.sessions_over_time.map(function(e) { return e.value; }), borderColor: '#d29922', tension: 0.3 }] },
         options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e', stepSize: 1 }, grid: { color: '#30363d' } }, x: xOpts }, plugins: { legend: { display: false } } }
       });
 

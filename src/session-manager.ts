@@ -8,6 +8,8 @@ export interface SessionInfo {
   projectKey: string;
   lastActivity: number;
   queueLength: number;
+  createdAt: number;
+  processing: boolean;
 }
 
 export interface SessionManager {
@@ -353,6 +355,8 @@ export function createSessionManager(defaults: {
         projectKey: session.projectKey,
         lastActivity: session.lastActivity,
         queueLength: session.queue.length,
+        createdAt: session.createdAt,
+        processing: session.processing,
       };
     },
 
@@ -362,6 +366,8 @@ export function createSessionManager(defaults: {
         projectKey: s.projectKey,
         lastActivity: s.lastActivity,
         queueLength: s.queue.length,
+        createdAt: s.createdAt,
+        processing: s.processing,
       }));
     },
 
