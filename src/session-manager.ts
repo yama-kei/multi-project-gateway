@@ -176,6 +176,16 @@ export function createSessionManager(defaults: {
         session.messageCount++;
         resetIdleTimer(session);
         persistSessions();
+        if (pulseEmitter && result.usage) {
+          const agentTarget = session.projectKey.includes(':') ? session.projectKey.split(':').pop() : undefined;
+          pulseEmitter.messageCompleted(
+            session.sessionId ?? session.projectKey,
+            session.projectKey,
+            session.cwd,
+            result.usage,
+            { agentTarget },
+          );
+        }
         if (sessionChanged) {
           item.resolve({ ...result, sessionChanged: true });
         } else {
@@ -191,6 +201,16 @@ export function createSessionManager(defaults: {
             session.messageCount++;
             resetIdleTimer(session);
             persistSessions();
+            if (pulseEmitter && result.usage) {
+              const agentTarget = session.projectKey.includes(':') ? session.projectKey.split(':').pop() : undefined;
+              pulseEmitter.messageCompleted(
+                session.sessionId ?? session.projectKey,
+                session.projectKey,
+                session.cwd,
+                result.usage,
+                { agentTarget },
+              );
+            }
             item.resolve({ ...result, sessionReset: true });
           } catch (retryErr) {
             item.reject(retryErr instanceof Error ? retryErr : new Error(String(retryErr)));
