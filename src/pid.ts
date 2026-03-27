@@ -1,6 +1,8 @@
-import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 export function writePid(pidPath: string, pid: number = process.pid): void {
+  mkdirSync(dirname(pidPath), { recursive: true });
   writeFileSync(pidPath, `${pid}\n`);
 }
 
