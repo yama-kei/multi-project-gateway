@@ -102,6 +102,33 @@ export function resolveSessionsPath(configPath: string): string {
 }
 
 /**
+ * Resolve PID file path.
+ * Default profile or 'default' → mpg.pid
+ * Named profile → mpg-<profile>.pid
+ */
+export function resolvePidPath(profile?: string): string {
+  const name = !profile || profile === 'default' ? 'mpg' : `mpg-${profile}`;
+  return resolve(resolveMpgHome(), `${name}.pid`);
+}
+
+/**
+ * Resolve log directory path.
+ */
+export function resolveLogDir(): string {
+  return resolve(resolveMpgHome(), 'logs');
+}
+
+/**
+ * Resolve log file path.
+ * Default profile or 'default' → mpg.log
+ * Named profile → mpg-<profile>.log
+ */
+export function resolveLogPath(profile?: string): string {
+  const name = !profile || profile === 'default' ? 'mpg' : `mpg-${profile}`;
+  return resolve(resolveLogDir(), `${name}.log`);
+}
+
+/**
  * Parse --config, --profile flags from argv.
  */
 export function parseFlags(argv: string[]): {
@@ -110,8 +137,9 @@ export function parseFlags(argv: string[]): {
   migrate?: boolean;
   project?: string;
   level?: string;
+  follow?: boolean;
 } {
-  const result: { configFlag?: string; profileFlag?: string; migrate?: boolean; project?: string; level?: string } = {};
+  const result: { configFlag?: string; profileFlag?: string; migrate?: boolean; project?: string; level?: string; follow?: boolean } = {};
 
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--config' && i + 1 < argv.length) {
@@ -128,6 +156,8 @@ export function parseFlags(argv: string[]): {
       i++;
     } else if (argv[i] === '--migrate') {
       result.migrate = true;
+    } else if (argv[i] === '--follow' || argv[i] === '-f') {
+      result.follow = true;
     }
   }
 

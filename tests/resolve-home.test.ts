@@ -9,6 +9,9 @@ import {
   resolveConfigPath,
   resolveSessionsPath,
   parseFlags,
+  resolvePidPath,
+  resolveLogDir,
+  resolveLogPath,
 } from '../src/resolve-home.js';
 
 describe('resolveMpgHome', () => {
@@ -267,5 +270,76 @@ describe('parseFlags', () => {
     expect(result.configFlag).toBeUndefined();
     expect(result.profileFlag).toBeUndefined();
     expect(result.migrate).toBeUndefined();
+  });
+
+  it('parses --follow flag', () => {
+    const result = parseFlags(['--follow']);
+    expect(result.follow).toBe(true);
+  });
+
+  it('parses -f flag', () => {
+    const result = parseFlags(['-f']);
+    expect(result.follow).toBe(true);
+  });
+});
+
+describe('resolvePidPath', () => {
+  const originalEnv = process.env.MPG_HOME;
+  afterEach(() => {
+    if (originalEnv === undefined) { delete process.env.MPG_HOME; } else { process.env.MPG_HOME = originalEnv; }
+  });
+
+  it('returns mpg.pid under MPG_HOME', () => {
+    process.env.MPG_HOME = '/custom/mpg';
+    expect(resolvePidPath()).toBe('/custom/mpg/mpg.pid');
+  });
+
+  it('returns mpg.pid under ~/.mpg when MPG_HOME is not set', () => {
+    delete process.env.MPG_HOME;
+    expect(resolvePidPath()).toBe(resolve(homedir(), '.mpg', 'mpg.pid'));
+  });
+
+  it('includes profile name when provided', () => {
+    process.env.MPG_HOME = '/custom/mpg';
+    expect(resolvePidPath('work')).toBe('/custom/mpg/mpg-work.pid');
+  });
+
+  it('uses mpg.pid for default profile', () => {
+    process.env.MPG_HOME = '/custom/mpg';
+    expect(resolvePidPath('default')).toBe('/custom/mpg/mpg.pid');
+  });
+});
+
+describe('resolveLogDir', () => {
+  const originalEnv = process.env.MPG_HOME;
+  afterEach(() => {
+    if (originalEnv === undefined) { delete process.env.MPG_HOME; } else { process.env.MPG_HOME = originalEnv; }
+  });
+
+  it('returns logs/ under MPG_HOME', () => {
+    process.env.MPG_HOME = '/custom/mpg';
+    expect(resolveLogDir()).toBe('/custom/mpg/logs');
+  });
+});
+
+describe('resolveLogPath', () => {
+  const originalEnv = process.env.MPG_HOME;
+  afterEach(() => {
+    if (originalEnv === undefined) { delete process.env.MPG_HOME; } else { process.env.MPG_HOME = originalEnv; }
+  });
+
+  it('returns mpg.log under logs dir', () => {
+    process.env.MPG_HOME = '/custom/mpg';
+    expect(resolveLogPath()).toBe('/custom/mpg/logs/mpg.log');
+  });
+
+  it('includes profile name when provided', () => {
+    process.env.MPG_HOME = '/custom/mpg';
+    expect(resolveLogPath('work')).toBe('/custom/mpg/logs/mpg-work.log');
+  });
+
+  it('uses mpg.log for default profile', () => {
+    process.env.MPG_HOME = '/custom/mpg';
+    expect(resolveLogPath('default')).toBe('/custom/mpg/logs/mpg.log');
   });
 });
