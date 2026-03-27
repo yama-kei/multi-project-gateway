@@ -215,10 +215,11 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
       const messages = getEvents(range, 'message_completed');
       const totalInput = messages.reduce((s, e) => s + (Number(e.input_tokens) || 0), 0);
       const cacheRead = messages.reduce((s, e) => s + (Number(e.cache_read_input_tokens) || 0), 0);
+      const denominator = cacheRead + totalInput;
       return {
         total_input_tokens: totalInput,
         cache_read_tokens: cacheRead,
-        cache_hit_ratio: totalInput > 0 ? cacheRead / totalInput : 0,
+        cache_hit_ratio: denominator > 0 ? cacheRead / denominator : 0,
       };
     },
   };

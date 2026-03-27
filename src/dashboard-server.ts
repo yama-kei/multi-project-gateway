@@ -123,7 +123,8 @@ function buildDashboardHtml(): string {
     <div class="chart-card"><h3>Messages Over Time</h3><canvas id="messages-chart"></canvas></div>
     <div class="chart-card"><h3>Cost Over Time</h3><canvas id="cost-chart"></canvas></div>
     <div class="chart-card"><h3>Sessions Over Time</h3><canvas id="sessions-chart"></canvas></div>
-    <div class="chart-card"><h3>Token Usage Over Time</h3><canvas id="tokens-chart"></canvas></div>
+    <div class="chart-card"><h3>Token Usage Over Time (Input / Output)</h3><canvas id="tokens-chart"></canvas></div>
+    <div class="chart-card"><h3>Cache Read Tokens Over Time</h3><canvas id="cache-chart-time"></canvas></div>
     <div class="chart-card"><h3>Persona Breakdown</h3><canvas id="persona-chart"></canvas></div>
     <div class="chart-card"><h3>Model Breakdown</h3><canvas id="model-chart"></canvas></div>
   </div>
@@ -159,6 +160,35 @@ function escapeHtml(s) {
   d.textContent = s;
   return d.innerHTML;
 }
+function compactTokens(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return String(n);
+}
+function formatLocalTime(isoStr, isHourBucket) {
+  var d = new Date(isoStr);
+  if (isHourBucket) return d.getHours() + 'h';
+  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return months[d.getMonth()] + ' ' + d.getDate();
+}
+function resolveProjectName(key, nameMap) {
+  if (!key) return '—';
+  var parts = key.split(':');
+  var channelId = parts[0];
+  var agent = parts.length > 1 ? parts[1] : null;
+  var name = (nameMap && nameMap[channelId]) ? nameMap[channelId] : channelId;
+  return agent ? name + ':' + agent : name;
+}
+function copyToClipboard(text, el) {
+  navigator.clipboard.writeText(text).then(function() {
+    var orig = el.textContent;
+    el.textContent = 'copied!';
+    el.style.color = '#3fb950';
+    setTimeout(function() { el.textContent = orig; el.style.color = ''; }, 1200);
+  });
+}
+
+var projectNameMap = {};
 
 function refresh() {
   fetch('/api/status')
@@ -175,6 +205,13 @@ function refresh() {
       discordEl.textContent = d.health.discord;
       discordEl.className = 'card-value ' + statusClass(d.health.discord);
 
+      // Build name map from projects list
+      if (d.projects) {
+        d.projects.forEach(function(p) {
+          if (p.channelId && p.name) projectNameMap[p.channelId] = p.name;
+        });
+      }
+
       // Sessions table
       var st = document.getElementById('sessions-table');
       if (d.sessions.length === 0) {
@@ -183,7 +220,9 @@ function refresh() {
         var h = '<table><tr><th>Project</th><th>Session ID</th><th>Last Activity</th><th>Queue</th></tr>';
         for (var i = 0; i < d.sessions.length; i++) {
           var s = d.sessions[i];
-          h += '<tr><td>' + escapeHtml(s.projectKey) + '</td><td>' + escapeHtml(s.sessionId ? s.sessionId.slice(0, 12) + '...' : '—') + '</td><td>' + formatAgo(s.lastActivity) + '</td><td>' + s.queueLength + '</td></tr>';
+          var sid = s.sessionId || '';
+          var shortSid = sid ? sid.slice(0, 12) + '...' : '—';
+          h += '<tr><td>' + escapeHtml(resolveProjectName(s.projectKey, projectNameMap)) + '</td><td><span class="clickable-id" style="cursor:pointer;text-decoration:underline dotted" title="Click to copy: ' + escapeHtml(sid) + '" onclick="copyToClipboard(\\'' + escapeHtml(sid) + '\\', this)">' + escapeHtml(shortSid) + '</span></td><td>' + formatAgo(s.lastActivity) + '</td><td>' + s.queueLength + '</td></tr>';
         }
         h += '</table>';
         st.innerHTML = h;
@@ -239,25 +278,45 @@ function destroyChart(key) {
   if (chartInstances[key]) { chartInstances[key].destroy(); chartInstances[key] = null; }
 }
 
+function timeAxisOptions(isHourBucket) {
+  return {
+    ticks: {
+      color: '#8b949e',
+      callback: function(value, index, ticks) {
+        var label = this.getLabelForValue(value);
+        return formatLocalTime(label, isHourBucket);
+      }
+    },
+    grid: { color: '#30363d' }
+  };
+}
+
 function refreshActivity() {
+  var isHourBucket = currentRange === '24h';
   fetch('/api/activity/summary?range=' + currentRange)
     .then(function(r) { return r.json(); })
     .then(function(d) {
+      var nameMap = d.project_name_map || {};
+      // Merge into global map
+      Object.keys(nameMap).forEach(function(k) { projectNameMap[k] = nameMap[k]; });
+
       // Summary cards
       var s = d.summary;
       document.getElementById('total-cost').textContent = '$' + s.total_cost_usd.toFixed(2);
       var totalTok = s.total_input_tokens + s.total_output_tokens;
-      document.getElementById('total-tokens').textContent = totalTok > 1e6 ? (totalTok / 1e6).toFixed(1) + 'M' : totalTok > 1e3 ? (totalTok / 1e3).toFixed(1) + 'k' : String(totalTok);
+      document.getElementById('total-tokens').textContent = compactTokens(totalTok);
       document.getElementById('total-sessions-card').textContent = String(s.total_sessions);
       document.getElementById('total-messages').textContent = String(s.total_messages);
       document.getElementById('avg-duration').textContent = Math.round(s.avg_session_duration_ms / 60000) + 'm';
+
+      var xOpts = timeAxisOptions(isHourBucket);
 
       // Messages Over Time (bar)
       destroyChart('messages');
       chartInstances['messages'] = new Chart(document.getElementById('messages-chart'), {
         type: 'bar',
         data: { labels: d.messages_over_time.map(function(e) { return e.bucket; }), datasets: [{ label: 'Messages', data: d.messages_over_time.map(function(e) { return e.value; }), backgroundColor: '#58a6ff' }] },
-        options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }, x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } } }, plugins: { legend: { display: false } } }
+        options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }, x: xOpts }, plugins: { legend: { display: false } } }
       });
 
       // Cost Over Time (line)
@@ -265,7 +324,7 @@ function refreshActivity() {
       chartInstances['cost'] = new Chart(document.getElementById('cost-chart'), {
         type: 'line',
         data: { labels: d.cost_over_time.map(function(e) { return e.bucket; }), datasets: [{ label: 'Cost ($)', data: d.cost_over_time.map(function(e) { return e.value; }), borderColor: '#3fb950', tension: 0.3 }] },
-        options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }, x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } } }, plugins: { legend: { display: false } } }
+        options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }, x: xOpts }, plugins: { legend: { display: false } } }
       });
 
       // Sessions Over Time (bar)
@@ -273,15 +332,35 @@ function refreshActivity() {
       chartInstances['sessions'] = new Chart(document.getElementById('sessions-chart'), {
         type: 'bar',
         data: { labels: d.sessions_over_time.map(function(e) { return e.bucket; }), datasets: [{ label: 'Sessions', data: d.sessions_over_time.map(function(e) { return e.value; }), backgroundColor: '#d29922' }] },
-        options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e', stepSize: 1 }, grid: { color: '#30363d' } }, x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } } }, plugins: { legend: { display: false } } }
+        options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e', stepSize: 1 }, grid: { color: '#30363d' } }, x: xOpts }, plugins: { legend: { display: false } } }
       });
 
-      // Token Usage Over Time (stacked bar)
+      // Token Usage Over Time — Input + Output stacked (NO cache reads)
+      var allBuckets = {};
+      (d.input_tokens_over_time || []).forEach(function(e) { allBuckets[e.bucket] = true; });
+      (d.output_tokens_over_time || []).forEach(function(e) { allBuckets[e.bucket] = true; });
+      var bucketKeys = Object.keys(allBuckets).sort();
+      var inputMap = {}; (d.input_tokens_over_time || []).forEach(function(e) { inputMap[e.bucket] = e.value; });
+      var outputMap = {}; (d.output_tokens_over_time || []).forEach(function(e) { outputMap[e.bucket] = e.value; });
       destroyChart('tokens');
       chartInstances['tokens'] = new Chart(document.getElementById('tokens-chart'), {
         type: 'bar',
-        data: { labels: d.tokens_over_time.map(function(e) { return e.bucket; }), datasets: [{ label: 'Input Tokens', data: d.tokens_over_time.map(function(e) { return e.value; }), backgroundColor: '#58a6ff' }] },
-        options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }, x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } } }, plugins: { legend: { labels: { color: '#8b949e' } } } }
+        data: {
+          labels: bucketKeys,
+          datasets: [
+            { label: 'Input', data: bucketKeys.map(function(k) { return inputMap[k] || 0; }), backgroundColor: '#58a6ff' },
+            { label: 'Output', data: bucketKeys.map(function(k) { return outputMap[k] || 0; }), backgroundColor: '#3fb950' }
+          ]
+        },
+        options: { scales: { y: { beginAtZero: true, stacked: true, ticks: { color: '#8b949e', callback: function(v) { return compactTokens(v); } }, grid: { color: '#30363d' } }, x: Object.assign({}, xOpts, { stacked: true }) }, plugins: { legend: { labels: { color: '#8b949e' } } } }
+      });
+
+      // Cache Read Tokens Over Time — separate chart
+      destroyChart('cache-time');
+      chartInstances['cache-time'] = new Chart(document.getElementById('cache-chart-time'), {
+        type: 'bar',
+        data: { labels: (d.cache_read_over_time || []).map(function(e) { return e.bucket; }), datasets: [{ label: 'Cache Read', data: (d.cache_read_over_time || []).map(function(e) { return e.value; }), backgroundColor: '#bc8cff' }] },
+        options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e', callback: function(v) { return compactTokens(v); } }, grid: { color: '#30363d' } }, x: xOpts }, plugins: { legend: { display: false } } }
       });
 
       // Persona Breakdown (doughnut)
@@ -304,28 +383,31 @@ function refreshActivity() {
         });
       }
 
-      // Token Usage by Project table
+      // Token Usage by Project table — resolve names, compact token notation
       var pt = document.getElementById('project-table');
       if (d.tokens_by_project.length === 0) { pt.innerHTML = '<div class="empty">No data</div>'; }
       else {
         var h = '<table><tr><th>Project</th><th>Input</th><th>Output</th><th>Cache Read</th><th>Cost</th><th>Messages</th></tr>';
-        d.tokens_by_project.forEach(function(p) { h += '<tr><td>' + escapeHtml(p.project_key) + '</td><td>' + p.input_tokens.toLocaleString() + '</td><td>' + p.output_tokens.toLocaleString() + '</td><td>' + p.cache_read_input_tokens.toLocaleString() + '</td><td>$' + p.cost_usd.toFixed(3) + '</td><td>' + p.message_count + '</td></tr>'; });
+        d.tokens_by_project.forEach(function(p) { h += '<tr><td>' + escapeHtml(resolveProjectName(p.project_key, nameMap)) + '</td><td>' + compactTokens(p.input_tokens) + '</td><td>' + compactTokens(p.output_tokens) + '</td><td>' + compactTokens(p.cache_read_input_tokens) + '</td><td>$' + p.cost_usd.toFixed(3) + '</td><td>' + p.message_count + '</td></tr>'; });
         pt.innerHTML = h + '</table>';
       }
 
-      // Token Usage by Session table
+      // Token Usage by Session table — resolve names, copy-to-clipboard session IDs
       var st = document.getElementById('session-table');
       if (d.tokens_by_session.length === 0) { st.innerHTML = '<div class="empty">No data</div>'; }
       else {
         var h2 = '<table><tr><th>Session</th><th>Project</th><th>Input</th><th>Output</th><th>Cost</th><th>Msgs</th><th>Duration</th></tr>';
-        d.tokens_by_session.forEach(function(row) { h2 += '<tr><td>' + escapeHtml(row.session_id.substring(0, 8)) + '</td><td>' + escapeHtml(row.project_key) + '</td><td>' + row.input_tokens.toLocaleString() + '</td><td>' + row.output_tokens.toLocaleString() + '</td><td>$' + row.cost_usd.toFixed(3) + '</td><td>' + row.message_count + '</td><td>' + Math.round(row.duration_ms / 60000) + 'm</td></tr>'; });
+        d.tokens_by_session.forEach(function(row) {
+          var shortId = row.session_id.substring(0, 8) + '...';
+          h2 += '<tr><td><span class="clickable-id" style="cursor:pointer;text-decoration:underline dotted" title="Click to copy: ' + escapeHtml(row.session_id) + '" onclick="copyToClipboard(\\'' + escapeHtml(row.session_id) + '\\', this)">' + escapeHtml(shortId) + '</span></td><td>' + escapeHtml(resolveProjectName(row.project_key, nameMap)) + '</td><td>' + compactTokens(row.input_tokens) + '</td><td>' + compactTokens(row.output_tokens) + '</td><td>$' + row.cost_usd.toFixed(3) + '</td><td>' + row.message_count + '</td><td>' + Math.round(row.duration_ms / 60000) + 'm</td></tr>';
+        });
         st.innerHTML = h2 + '</table>';
       }
 
       // Cache Efficiency table
       var ct = document.getElementById('cache-table');
       var ce = d.cache_efficiency;
-      ct.innerHTML = '<table><tr><th>Total Input</th><th>Cache Read</th><th>Hit Ratio</th></tr><tr><td>' + ce.total_input_tokens.toLocaleString() + '</td><td>' + ce.cache_read_tokens.toLocaleString() + '</td><td>' + (ce.cache_hit_ratio * 100).toFixed(1) + '%</td></tr></table>';
+      ct.innerHTML = '<table><tr><th>Total Input</th><th>Cache Read</th><th>Hit Ratio</th></tr><tr><td>' + compactTokens(ce.total_input_tokens) + '</td><td>' + compactTokens(ce.cache_read_tokens) + '</td><td>' + (ce.cache_hit_ratio * 100).toFixed(1) + '%</td></tr></table>';
     })
     .catch(function(err) { console.error('Activity fetch error:', err); });
 }
@@ -432,14 +514,24 @@ export function createDashboardServer(
         res.end(JSON.stringify({
           summary: { total_cost_usd: 0, total_input_tokens: 0, total_output_tokens: 0, total_sessions: 0, total_messages: 0, avg_session_duration_ms: 0 },
           tokens_by_project: [], tokens_by_session: [],
-          sessions_over_time: [], messages_over_time: [], cost_over_time: [], tokens_over_time: [],
+          sessions_over_time: [], messages_over_time: [], cost_over_time: [],
+          input_tokens_over_time: [], output_tokens_over_time: [], cache_read_over_time: [],
           session_durations: [], model_breakdown: [], persona_breakdown: [],
           cache_efficiency: { total_input_tokens: 0, cache_read_tokens: 0, cache_hit_ratio: 0 },
+          project_name_map: {},
         }));
         return;
       }
 
       try {
+        // Build channel ID → project name map from config
+        const projectNameMap: Record<string, string> = {};
+        if (config) {
+          for (const [channelId, project] of Object.entries(config.projects)) {
+            projectNameMap[channelId] = project.name;
+          }
+        }
+
         const data = {
           summary: engine.computeSummary(range),
           tokens_by_project: engine.tokensByProject(range),
@@ -447,11 +539,14 @@ export function createDashboardServer(
           sessions_over_time: engine.bucketed(range, bucket, 'session_start'),
           messages_over_time: engine.bucketed(range, bucket, 'message_completed'),
           cost_over_time: engine.bucketed(range, bucket, 'message_completed', 'total_cost_usd'),
-          tokens_over_time: engine.bucketed(range, bucket, 'message_completed', 'input_tokens'),
+          input_tokens_over_time: engine.bucketed(range, bucket, 'message_completed', 'input_tokens'),
+          output_tokens_over_time: engine.bucketed(range, bucket, 'message_completed', 'output_tokens'),
+          cache_read_over_time: engine.bucketed(range, bucket, 'message_completed', 'cache_read_input_tokens'),
           session_durations: engine.sessionDurations(range),
           model_breakdown: engine.modelBreakdown(range),
           persona_breakdown: engine.personaBreakdown(range),
           cache_efficiency: engine.cacheEfficiency(range),
+          project_name_map: projectNameMap,
         };
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(data));

@@ -198,7 +198,8 @@ describe('ActivityEngine', () => {
       const ce = engine.cacheEfficiency('7d');
       expect(ce.total_input_tokens).toBe(20000);
       expect(ce.cache_read_tokens).toBe(13000);
-      expect(ce.cache_hit_ratio).toBeCloseTo(0.65);
+      // cache_hit_ratio = cache_read / (cache_read + input) = 13000 / 33000 ≈ 0.394
+      expect(ce.cache_hit_ratio).toBeCloseTo(13000 / 33000);
     });
 
     it('returns 0 ratio when no input tokens', () => {
