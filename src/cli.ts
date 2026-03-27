@@ -344,12 +344,14 @@ function stop() {
         } catch { /* ignore */ }
         removePid(pidPath);
         console.log('Killed.');
+        process.exit(0);
       }
     } catch {
       // Process is gone
       clearInterval(poll);
       removePid(pidPath);
       console.log('Stopped.');
+      process.exit(0);
     }
   }, 200);
 }

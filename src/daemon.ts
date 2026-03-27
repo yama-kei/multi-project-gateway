@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { mkdirSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
 import { unitFileName, generateUnitFile } from './systemd.js';
+import { resolveLogPath } from './resolve-home.js';
 
 export function resolveServiceDir(): string {
   return resolve(homedir(), '.config', 'systemd', 'user');
@@ -85,7 +86,7 @@ export function daemonLogs(profile?: string, follow?: boolean): void {
   try {
     execFileSync('journalctl', args, { stdio: 'inherit' });
   } catch {
-    console.error('journalctl not available. Use `mpg daemon logs --follow` with file-based logging.');
+    console.error(`journalctl not available. View logs at: ${resolveLogPath(profile)}`);
   }
 }
 
@@ -98,6 +99,8 @@ function resolveOwnBinary(): string {
     // Fall through
   }
 
-  // Fallback: use node + script path
-  return resolve(process.argv[1] ?? '.');
+  // Fallback: use absolute path to current script
+  const fallback = resolve(process.argv[1] ?? '.');
+  console.warn(`Warning: 'mpg' not found on PATH. Using ${fallback} in service file.`);
+  return fallback;
 }

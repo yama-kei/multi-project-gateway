@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 
 export function writePid(pidPath: string, pid: number = process.pid): void {
   writeFileSync(pidPath, `${pid}\n`);
