@@ -417,7 +417,13 @@ export function createHealthServer(
 
     if (pathname === '/api/activity/summary') {
       const url = new URL(req.url ?? '/', `http://localhost`);
-      const range = (url.searchParams.get('range') || '7d') as TimeRange;
+      const rangeParam = url.searchParams.get('range') || '7d';
+      if (rangeParam !== '24h' && rangeParam !== '7d' && rangeParam !== '30d') {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid range. Must be 24h, 7d, or 30d' }));
+        return;
+      }
+      const range: TimeRange = rangeParam;
       const bucket: Bucket = range === '24h' ? 'hour' : 'day';
       const engine = options?.activityEngine;
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { request } from 'node:http';
 import { createHealthServer, type HealthServer } from '../src/health-server.js';
 import type { SessionManager, SessionInfo } from '../src/session-manager.js';
