@@ -319,7 +319,7 @@ describe('createDashboardServer', () => {
     it('GET /api/activity/summary includes project_name_map from config', async () => {
       const port = getPort();
       const engine = makeMockEngine();
-      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig(), {
+      server = await createDashboardServer(port, makeSessionManager(), makeBot(), makeConfig(), {
         activityEngine: engine,
       });
       const res = await httpGet(port, '/api/activity/summary?range=7d');
