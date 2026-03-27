@@ -3,7 +3,7 @@ import type { Router } from './router.js';
 import type { SessionManager } from './session-manager.js';
 import type { GatewayConfig } from './config.js';
 import { buildToolArgs } from './claude-cli.js';
-import { parseAgentMention, parseAgentCommand, extractAskTarget } from './agent-dispatch.js';
+import { parseAgentMention, parseAgentCommand, extractAskTarget, parseHandoffCommand } from './agent-dispatch.js';
 import { sendAgentMessage, buildHandoffEmbed } from './embed-format.js';
 import type { TurnCounter } from './turn-counter.js';
 import { hasAllowedRole } from './role-check.js';
@@ -401,7 +401,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
         const maxTurns = config.defaults.maxTurnsPerAgent;
 
         while (true) {
-          const handoff = parseAgentMention(responseText, agents);
+          const handoff = parseHandoffCommand(responseText, agents);
           if (!handoff || handoff.agentName === currentAgentName) break;
 
           turnCounter.increment(replyChannel.id);

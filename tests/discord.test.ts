@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { chunkMessage, handleCommand } from '../src/discord.js';
 import type { GatewayConfig, AgentConfig } from '../src/config.js';
 import type { SessionManager } from '../src/session-manager.js';
-import { parseAgentMention } from '../src/agent-dispatch.js';
+import { parseAgentMention, parseHandoffCommand } from '../src/agent-dispatch.js';
 import { createTurnCounter } from '../src/turn-counter.js';
 import { buildHandoffEmbed } from '../src/embed-format.js';
 
@@ -273,12 +273,12 @@ describe('agent handoff flow', () => {
     const threadId = 'thread-handoff-test';
     const maxTurns = 3;
 
-    // Simulate: PM responds mentioning @engineer, engineer responds mentioning @pm, repeat
+    // Simulate: PM uses HANDOFF to dispatch to engineer, engineer uses HANDOFF back
     const responses = [
-      'Great analysis! @engineer please implement the login feature.',
-      'Done implementing. @pm please review the PR.',
-      'Looks good! @engineer please add tests.',
-      'Tests added. @pm ready for merge.',
+      'Great analysis!\n\nHANDOFF @engineer: please implement the login feature.',
+      'Done implementing.\n\nHANDOFF @pm: please review the PR.',
+      'Looks good!\n\nHANDOFF @engineer: please add tests.',
+      'Tests added.\n\nHANDOFF @pm: ready for merge.',
     ];
 
     // Reset on human message
@@ -293,7 +293,7 @@ describe('agent handoff flow', () => {
 
     // Simulate the handoff while loop from discord.ts
     while (true) {
-      const handoff = parseAgentMention(responseText, agents);
+      const handoff = parseHandoffCommand(responseText, agents);
       if (!handoff || handoff.agentName === currentAgent) break;
 
       turnCounter.increment(threadId);
@@ -324,23 +324,30 @@ describe('agent handoff flow', () => {
 
     turnCounter.reset(threadId);
     const responseText = 'All done, no more handoffs needed.';
-    const handoff = parseAgentMention(responseText, agents);
+    const handoff = parseHandoffCommand(responseText, agents);
 
     expect(handoff).toBeNull();
     expect(turnCounter.getTurns(threadId)).toBe(0);
   });
 
-  it('stops handoff when agent mentions itself', () => {
-    const turnCounter = createTurnCounter();
-    const threadId = 'thread-self-mention';
+  it('bare @agent mention does not trigger handoff', () => {
+    const responseText = 'I told @engineer to think about this more...';
+    const handoff = parseHandoffCommand(responseText, agents);
+    expect(handoff).toBeNull();
+  });
 
-    const responseText = 'Let me @engineer think about this more...';
-    const handoff = parseAgentMention(responseText, agents);
+  it('conversational @agent reference does not trigger handoff', () => {
+    const responseText = "Once approved, I'll ask @engineer to implement it.";
+    const handoff = parseHandoffCommand(responseText, agents);
+    expect(handoff).toBeNull();
+  });
 
-    // Handoff found, but if currentAgent is already 'engineer', loop breaks
+  it('HANDOFF command triggers handoff detection', () => {
+    const responseText = 'Analysis complete.\n\nHANDOFF @engineer: implement the feature';
+    const handoff = parseHandoffCommand(responseText, agents);
     expect(handoff).not.toBeNull();
     expect(handoff!.agentName).toBe('engineer');
-    // In the loop: handoff.agentName === currentAgentName → break
+    expect(handoff!.prompt).toBe('implement the feature');
   });
 
   it('human message resets turn counter', () => {
