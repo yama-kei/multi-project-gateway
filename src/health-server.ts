@@ -1,9 +1,9 @@
 import { createServer, type Server } from 'node:http';
 import { readFileSync } from 'node:fs';
-import { execFile } from 'node:child_process';
 import type { SessionManager } from './session-manager.js';
 import type { DiscordBot } from './discord.js';
 import type { GatewayConfig } from './config.js';
+import type { ActivityEngine, TimeRange, Bucket } from './activity-engine.js';
 
 export interface HealthServer {
   close(): Promise<void>;
@@ -19,16 +19,7 @@ function getVersion(): string {
 }
 
 export interface HealthServerOptions {
-  runPulseCli?: (args: string[]) => Promise<string>;
-}
-
-function defaultRunPulseCli(args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile('pulse', ['activity', ...args], { timeout: 10000 }, (err, stdout) => {
-      if (err) return reject(err);
-      resolve(stdout);
-    });
-  });
+  activityEngine?: ActivityEngine;
 }
 
 function buildDashboardHtml(): string {
@@ -345,8 +336,6 @@ export function createHealthServer(
   const startTime = Date.now();
   const version = getVersion();
   const dashboardHtml = buildDashboardHtml();
-  const runPulse = options?.runPulseCli ?? defaultRunPulseCli;
-
   function getHealthData() {
     const sessions = sessionManager.listSessions();
     return {
@@ -412,57 +401,44 @@ export function createHealthServer(
       return;
     }
 
-    if (pathname === '/api/activity/sessions') {
-      const url = new URL(req.url ?? '/', `http://localhost`);
-      const args: string[] = ['sessions', '--json'];
-      const range = url.searchParams.get('range');
-      if (range) { args.push('--range', range); }
-      const project = url.searchParams.get('project');
-      if (project) { args.push('--project', project); }
-      const type = url.searchParams.get('type');
-      if (type) { args.push('--type', type); }
-
-      runPulse(args)
-        .then((stdout) => {
-          const data = JSON.parse(stdout);
-          data.pulse_available = true;
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(data));
-        })
-        .catch(() => {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            source: 'mpg-sessions', filters: {}, events: [], pulse_available: false,
-          }));
-        });
-      return;
-    }
-
     if (pathname === '/api/activity/summary') {
       const url = new URL(req.url ?? '/', `http://localhost`);
-      const args: string[] = ['summary', '--json'];
-      const range = url.searchParams.get('range');
-      if (range) { args.push('--range', range); }
-      const project = url.searchParams.get('project');
-      if (project) { args.push('--project', project); }
-      const bucket = url.searchParams.get('bucket');
-      if (bucket) { args.push('--bucket', bucket); }
+      const range = (url.searchParams.get('range') || '7d') as TimeRange;
+      const bucket: Bucket = range === '24h' ? 'hour' : 'day';
+      const engine = options?.activityEngine;
 
-      runPulse(args)
-        .then((stdout) => {
-          const data = JSON.parse(stdout);
-          data.pulse_available = true;
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(data));
-        })
-        .catch(() => {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            source: 'mpg-sessions', filters: {}, bucket: 'day',
-            sessions_per_bucket: [], duration_stats: [], message_volume: [],
-            persona_breakdown: [], peak_concurrent: [], pulse_available: false,
-          }));
-        });
+      if (!engine) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          summary: { total_cost_usd: 0, total_input_tokens: 0, total_output_tokens: 0, total_sessions: 0, total_messages: 0, avg_session_duration_ms: 0 },
+          tokens_by_project: [], tokens_by_session: [],
+          sessions_over_time: [], messages_over_time: [], cost_over_time: [], tokens_over_time: [],
+          session_durations: [], model_breakdown: [], persona_breakdown: [],
+          cache_efficiency: { total_input_tokens: 0, cache_read_tokens: 0, cache_hit_ratio: 0 },
+        }));
+        return;
+      }
+
+      try {
+        const data = {
+          summary: engine.computeSummary(range),
+          tokens_by_project: engine.tokensByProject(range),
+          tokens_by_session: engine.tokensBySession(range),
+          sessions_over_time: engine.bucketed(range, bucket, 'session_start'),
+          messages_over_time: engine.bucketed(range, bucket, 'message_completed'),
+          cost_over_time: engine.bucketed(range, bucket, 'message_completed', 'total_cost_usd'),
+          tokens_over_time: engine.bucketed(range, bucket, 'message_completed', 'input_tokens'),
+          session_durations: engine.sessionDurations(range),
+          model_breakdown: engine.modelBreakdown(range),
+          persona_breakdown: engine.personaBreakdown(range),
+          cache_efficiency: engine.cacheEfficiency(range),
+        };
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(data));
+      } catch {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Failed to compute activity data' }));
+      }
       return;
     }
 
