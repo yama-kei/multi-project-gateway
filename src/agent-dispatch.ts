@@ -55,6 +55,29 @@ export function extractAskTarget(text: string): string | null {
   return askMatch ? askMatch[1].toLowerCase() : null;
 }
 
+/**
+ * Parse explicit `HANDOFF @agent: <task>` command in agent responses.
+ * Only this syntax triggers auto-handoff — bare @agent mentions are ignored.
+ */
+export function parseHandoffCommand(
+  text: string,
+  agents: Record<string, AgentConfig>,
+): AgentMention | null {
+  const agentNames = Object.keys(agents);
+  if (agentNames.length === 0) return null;
+
+  const escaped = agentNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const pattern = new RegExp(`^HANDOFF\\s+@(${escaped.join('|')})\\s*:\\s*(.*)$`, 'im');
+  const match = text.match(pattern);
+  if (!match) return null;
+
+  const matchedName = match[1].toLowerCase();
+  const agent = agents[matchedName];
+  if (!agent) return null;
+
+  return { agentName: matchedName, agent, prompt: match[2].trim() };
+}
+
 export function parseAgentMention(
   text: string,
   agents: Record<string, AgentConfig>,

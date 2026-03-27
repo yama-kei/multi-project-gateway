@@ -1,6 +1,6 @@
 // tests/agent-dispatch.test.ts
 import { describe, it, expect } from 'vitest';
-import { parseAgentMention, parseAgentCommand, extractAskTarget, type AgentConfig } from '../src/agent-dispatch.js';
+import { parseAgentMention, parseAgentCommand, extractAskTarget, parseHandoffCommand, type AgentConfig } from '../src/agent-dispatch.js';
 
 const agents: Record<string, AgentConfig> = {
   pm: { role: 'Product Manager', prompt: 'You manage requirements.' },
@@ -167,5 +167,68 @@ describe('extractAskTarget', () => {
 
   it('is case-insensitive', () => {
     expect(extractAskTarget('!ASK PM review')).toBe('pm');
+  });
+});
+
+describe('parseHandoffCommand', () => {
+  it('matches HANDOFF @agent: task', () => {
+    const result = parseHandoffCommand('HANDOFF @engineer: implement the login feature', agents);
+    expect(result).toEqual({
+      agentName: 'engineer',
+      agent: agents.engineer,
+      prompt: 'implement the login feature',
+    });
+  });
+
+  it('is case-insensitive for keyword', () => {
+    const result = parseHandoffCommand('handoff @pm: review the spec', agents);
+    expect(result).toEqual({
+      agentName: 'pm',
+      agent: agents.pm,
+      prompt: 'review the spec',
+    });
+  });
+
+  it('matches when HANDOFF is not on the first line', () => {
+    const text = 'I have finished the spec.\n\nHANDOFF @engineer: implement it based on the spec above';
+    const result = parseHandoffCommand(text, agents);
+    expect(result).toEqual({
+      agentName: 'engineer',
+      agent: agents.engineer,
+      prompt: 'implement it based on the spec above',
+    });
+  });
+
+  it('returns null for bare @agent mentions (no HANDOFF keyword)', () => {
+    expect(parseHandoffCommand('@engineer please implement this', agents)).toBeNull();
+    expect(parseHandoffCommand('Hey @pm review this', agents)).toBeNull();
+  });
+
+  it('returns null for conversational references to agents', () => {
+    expect(parseHandoffCommand("Once approved, I'll hand off to @engineer", agents)).toBeNull();
+    expect(parseHandoffCommand('The engineer will handle this', agents)).toBeNull();
+  });
+
+  it('returns null for unknown agent', () => {
+    expect(parseHandoffCommand('HANDOFF @tester: run the suite', agents)).toBeNull();
+  });
+
+  it('returns null when no agents configured', () => {
+    expect(parseHandoffCommand('HANDOFF @pm: do it', {})).toBeNull();
+  });
+
+  it('handles extra whitespace around colon', () => {
+    const result = parseHandoffCommand('HANDOFF @pm :  review this PR', agents);
+    expect(result).toEqual({
+      agentName: 'pm',
+      agent: agents.pm,
+      prompt: 'review this PR',
+    });
+  });
+
+  it('captures rest of line as prompt (not multiline)', () => {
+    const text = 'HANDOFF @engineer: implement login\nExtra context on next line';
+    const result = parseHandoffCommand(text, agents);
+    expect(result!.prompt).toBe('implement login');
   });
 });
