@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { request } from 'node:http';
 import { createHealthServer, type HealthServer } from '../src/health-server.js';
 import type { SessionManager, SessionInfo } from '../src/session-manager.js';
@@ -251,86 +251,65 @@ describe('createHealthServer', () => {
   });
 
   describe('activity endpoints', () => {
-    it('GET /api/activity/sessions returns pulse CLI output', async () => {
+    function makeMockEngine() {
+      return {
+        computeSummary: vi.fn().mockReturnValue({
+          total_cost_usd: 1.23, total_input_tokens: 500000, total_output_tokens: 50000,
+          total_sessions: 10, total_messages: 42, avg_session_duration_ms: 120000,
+        }),
+        tokensByProject: vi.fn().mockReturnValue([
+          { project_key: 'proj-a', project_dir: '/tmp/a', input_tokens: 300000, output_tokens: 30000, cache_read_input_tokens: 100000, cost_usd: 0.8, message_count: 25 },
+        ]),
+        tokensBySession: vi.fn().mockReturnValue([
+          { session_id: 'sess-1', project_key: 'proj-a', input_tokens: 150000, output_tokens: 15000, cost_usd: 0.4, message_count: 12, duration_ms: 60000 },
+        ]),
+        bucketed: vi.fn().mockReturnValue([{ bucket: '2026-03-27T00:00:00.000Z', value: 5 }]),
+        sessionDurations: vi.fn().mockReturnValue([{ session_id: 'sess-1', project_key: 'proj-a', duration_ms: 60000 }]),
+        modelBreakdown: vi.fn().mockReturnValue([{ model: 'claude-sonnet-4-20250514', input_tokens: 500000, output_tokens: 50000, cost_usd: 1.23 }]),
+        personaBreakdown: vi.fn().mockReturnValue([{ agent: 'engineer', count: 25 }]),
+        cacheEfficiency: vi.fn().mockReturnValue({ total_input_tokens: 500000, cache_read_tokens: 200000, cache_hit_ratio: 0.4 }),
+      };
+    }
+
+    it('GET /api/activity/summary returns aggregated activity data', async () => {
       const port = getPort();
-      const mockPulseOutput = JSON.stringify({
-        source: 'mpg-sessions',
-        filters: {},
-        events: [{ event_type: 'session_start', session_id: 'abc' }],
-      });
+      const engine = makeMockEngine();
       server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig(), {
-        runPulseCli: async () => mockPulseOutput,
+        activityEngine: engine,
       });
-      const res = await httpGet(port, '/api/activity/sessions?range=7d');
+      const res = await httpGet(port, '/api/activity/summary?range=7d');
       expect(res.status).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.events).toHaveLength(1);
-      expect(body.pulse_available).toBe(true);
+      expect(body.summary.total_cost_usd).toBe(1.23);
+      expect(body.summary.total_sessions).toBe(10);
+      expect(body.tokens_by_project).toHaveLength(1);
+      expect(body.model_breakdown).toHaveLength(1);
+      expect(body.cache_efficiency.cache_hit_ratio).toBe(0.4);
+      expect(engine.computeSummary).toHaveBeenCalledWith('7d');
     });
 
-    it('GET /api/activity/summary returns pulse CLI output', async () => {
+    it('GET /api/activity/summary uses hour bucket for 24h range', async () => {
       const port = getPort();
-      const mockPulseOutput = JSON.stringify({
-        source: 'mpg-sessions',
-        filters: {},
-        bucket: 'day',
-        sessions_per_bucket: [],
-        duration_stats: [],
-        message_volume: [],
-        persona_breakdown: [],
-        peak_concurrent: [],
-      });
+      const engine = makeMockEngine();
       server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig(), {
-        runPulseCli: async () => mockPulseOutput,
+        activityEngine: engine,
       });
-      const res = await httpGet(port, '/api/activity/summary?range=7d&bucket=day');
-      expect(res.status).toBe(200);
-      const body = JSON.parse(res.body);
-      expect(body.pulse_available).toBe(true);
-      expect(body.bucket).toBe('day');
+      await httpGet(port, '/api/activity/summary?range=24h');
+      const bucketedCalls = engine.bucketed.mock.calls;
+      for (const call of bucketedCalls) {
+        expect(call[1]).toBe('hour');
+      }
     });
 
-    it('GET /api/activity/sessions returns empty data when pulse unavailable', async () => {
+    it('GET /api/activity/summary returns empty data when no engine provided', async () => {
       const port = getPort();
-      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig(), {
-        runPulseCli: async () => { throw new Error('pulse not found'); },
-      });
-      const res = await httpGet(port, '/api/activity/sessions');
-      expect(res.status).toBe(200);
-      const body = JSON.parse(res.body);
-      expect(body.pulse_available).toBe(false);
-      expect(body.events).toEqual([]);
-    });
-
-    it('GET /api/activity/summary returns empty data when pulse unavailable', async () => {
-      const port = getPort();
-      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig(), {
-        runPulseCli: async () => { throw new Error('pulse not found'); },
-      });
+      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig());
       const res = await httpGet(port, '/api/activity/summary');
       expect(res.status).toBe(200);
       const body = JSON.parse(res.body);
-      expect(body.pulse_available).toBe(false);
-      expect(body.sessions_per_bucket).toEqual([]);
-    });
-
-    it('forwards query params as CLI flags', async () => {
-      const port = getPort();
-      const calls: string[][] = [];
-      server = await createHealthServer(port, makeSessionManager(), makeBot(), makeConfig(), {
-        runPulseCli: async (args) => {
-          calls.push(args);
-          return JSON.stringify({ source: 'mpg-sessions', filters: {}, events: [] });
-        },
-      });
-      await httpGet(port, '/api/activity/sessions?range=24h&project=my-proj&type=session_start');
-      expect(calls).toHaveLength(1);
-      expect(calls[0]).toContain('--range');
-      expect(calls[0]).toContain('24h');
-      expect(calls[0]).toContain('--project');
-      expect(calls[0]).toContain('my-proj');
-      expect(calls[0]).toContain('--type');
-      expect(calls[0]).toContain('session_start');
+      expect(body.summary.total_cost_usd).toBe(0);
+      expect(body.summary.total_sessions).toBe(0);
+      expect(body.tokens_by_project).toEqual([]);
     });
   });
 

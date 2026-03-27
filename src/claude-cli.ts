@@ -1,19 +1,49 @@
 import { spawn } from 'node:child_process';
 
+export interface ClaudeUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  total_cost_usd: number;
+  duration_ms: number;
+  duration_api_ms: number;
+  num_turns: number;
+  model?: string;
+}
+
 export interface ClaudeResult {
   text: string;
   sessionId: string;
   isError: boolean;
   sessionReset?: boolean;
   sessionChanged?: boolean;
+  usage?: ClaudeUsage;
 }
 
 export function parseClaudeJsonOutput(raw: string): ClaudeResult {
   const data = JSON.parse(raw);
+  let usage: ClaudeUsage | undefined;
+  if (data.total_cost_usd != null || data.usage) {
+    const model = data.model
+      ?? (data.modelUsage ? Object.keys(data.modelUsage)[0] : undefined);
+    usage = {
+      input_tokens: data.usage?.input_tokens ?? 0,
+      output_tokens: data.usage?.output_tokens ?? 0,
+      cache_creation_input_tokens: data.usage?.cache_creation_input_tokens ?? 0,
+      cache_read_input_tokens: data.usage?.cache_read_input_tokens ?? 0,
+      total_cost_usd: data.total_cost_usd ?? 0,
+      duration_ms: data.duration_ms ?? 0,
+      duration_api_ms: data.duration_api_ms ?? 0,
+      num_turns: data.num_turns ?? 0,
+      model,
+    };
+  }
   return {
     text: data.result ?? '',
     sessionId: data.session_id ?? '',
     isError: Boolean(data.is_error),
+    usage,
   };
 }
 

@@ -1,9 +1,9 @@
 import { createServer, type Server } from 'node:http';
 import { readFileSync } from 'node:fs';
-import { execFile } from 'node:child_process';
 import type { SessionManager } from './session-manager.js';
 import type { DiscordBot } from './discord.js';
 import type { GatewayConfig } from './config.js';
+import type { ActivityEngine, TimeRange, Bucket } from './activity-engine.js';
 
 export interface HealthServer {
   close(): Promise<void>;
@@ -19,16 +19,7 @@ function getVersion(): string {
 }
 
 export interface HealthServerOptions {
-  runPulseCli?: (args: string[]) => Promise<string>;
-}
-
-function defaultRunPulseCli(args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile('pulse', ['activity', ...args], { timeout: 10000 }, (err, stdout) => {
-      if (err) return reject(err);
-      resolve(stdout);
-    });
-  });
+  activityEngine?: ActivityEngine;
 }
 
 function buildDashboardHtml(): string {
@@ -68,6 +59,10 @@ function buildDashboardHtml(): string {
   .chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 16px; margin-bottom: 24px; }
   .chart-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
   .chart-card h3 { margin-bottom: 12px; }
+  .summary-cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 24px; }
+  .summary-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; text-align: center; }
+  .summary-value { font-size: 24px; font-weight: bold; color: #e1e4e8; }
+  .summary-label { font-size: 12px; color: #8b949e; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -117,27 +112,27 @@ function buildDashboardHtml(): string {
     <button class="range-btn" data-range="7d">7d</button>
     <button class="range-btn" data-range="30d">30d</button>
   </div>
-  <div class="chart-grid">
-    <div class="chart-card">
-      <h3>Sessions Over Time</h3>
-      <canvas id="sessions-chart"></canvas>
-    </div>
-    <div class="chart-card">
-      <h3>Message Volume</h3>
-      <canvas id="messages-chart"></canvas>
-    </div>
-    <div class="chart-card">
-      <h3>Persona Breakdown</h3>
-      <canvas id="persona-chart"></canvas>
-    </div>
-    <div class="chart-card">
-      <h3>Peak Concurrency</h3>
-      <canvas id="concurrency-chart"></canvas>
-    </div>
+  <div class="summary-cards">
+    <div class="summary-card"><div class="summary-value" id="total-cost">$0.00</div><div class="summary-label">Total Cost</div></div>
+    <div class="summary-card"><div class="summary-value" id="total-tokens">0</div><div class="summary-label">Total Tokens</div></div>
+    <div class="summary-card"><div class="summary-value" id="total-sessions-card">0</div><div class="summary-label">Sessions</div></div>
+    <div class="summary-card"><div class="summary-value" id="total-messages">0</div><div class="summary-label">Messages</div></div>
+    <div class="summary-card"><div class="summary-value" id="avg-duration">0m</div><div class="summary-label">Avg Duration</div></div>
   </div>
-  <h3>Duration Stats</h3>
-  <div id="duration-table"></div>
-  <div id="pulse-warning" class="empty" style="display:none">Pulse CLI not available — install pulse for activity graphs</div>
+  <div class="chart-grid">
+    <div class="chart-card"><h3>Messages Over Time</h3><canvas id="messages-chart"></canvas></div>
+    <div class="chart-card"><h3>Cost Over Time</h3><canvas id="cost-chart"></canvas></div>
+    <div class="chart-card"><h3>Sessions Over Time</h3><canvas id="sessions-chart"></canvas></div>
+    <div class="chart-card"><h3>Token Usage Over Time</h3><canvas id="tokens-chart"></canvas></div>
+    <div class="chart-card"><h3>Persona Breakdown</h3><canvas id="persona-chart"></canvas></div>
+    <div class="chart-card"><h3>Model Breakdown</h3><canvas id="model-chart"></canvas></div>
+  </div>
+  <h3 style="margin:16px 0 8px">Token Usage by Project</h3>
+  <div id="project-table"></div>
+  <h3 style="margin:16px 0 8px">Token Usage by Session</h3>
+  <div id="session-table"></div>
+  <h3 style="margin:16px 0 8px">Cache Efficiency</h3>
+  <div id="cache-table"></div>
 </div>
 
 <script>
@@ -245,84 +240,94 @@ function destroyChart(key) {
 }
 
 function refreshActivity() {
-  var bucket = currentRange === '24h' ? 'hour' : 'day';
-  fetch('/api/activity/summary?range=' + currentRange + '&bucket=' + bucket)
+  fetch('/api/activity/summary?range=' + currentRange)
     .then(function(r) { return r.json(); })
     .then(function(d) {
-      if (d.pulse_available === false) {
-        document.getElementById('pulse-warning').style.display = '';
-        return;
-      }
-      document.getElementById('pulse-warning').style.display = 'none';
+      // Summary cards
+      var s = d.summary;
+      document.getElementById('total-cost').textContent = '$' + s.total_cost_usd.toFixed(2);
+      var totalTok = s.total_input_tokens + s.total_output_tokens;
+      document.getElementById('total-tokens').textContent = totalTok > 1e6 ? (totalTok / 1e6).toFixed(1) + 'M' : totalTok > 1e3 ? (totalTok / 1e3).toFixed(1) + 'k' : String(totalTok);
+      document.getElementById('total-sessions-card').textContent = String(s.total_sessions);
+      document.getElementById('total-messages').textContent = String(s.total_messages);
+      document.getElementById('avg-duration').textContent = Math.round(s.avg_session_duration_ms / 60000) + 'm';
 
-      // Sessions Over Time
-      var sessionBuckets = {};
-      d.sessions_per_bucket.forEach(function(s) {
-        if (!sessionBuckets[s.bucket]) sessionBuckets[s.bucket] = 0;
-        sessionBuckets[s.bucket] += s.count;
+      // Messages Over Time (bar)
+      destroyChart('messages');
+      chartInstances['messages'] = new Chart(document.getElementById('messages-chart'), {
+        type: 'bar',
+        data: { labels: d.messages_over_time.map(function(e) { return e.bucket; }), datasets: [{ label: 'Messages', data: d.messages_over_time.map(function(e) { return e.value; }), backgroundColor: '#58a6ff' }] },
+        options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }, x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } } }, plugins: { legend: { display: false } } }
       });
-      var sLabels = Object.keys(sessionBuckets).sort();
-      var sData = sLabels.map(function(l) { return sessionBuckets[l]; });
+
+      // Cost Over Time (line)
+      destroyChart('cost');
+      chartInstances['cost'] = new Chart(document.getElementById('cost-chart'), {
+        type: 'line',
+        data: { labels: d.cost_over_time.map(function(e) { return e.bucket; }), datasets: [{ label: 'Cost ($)', data: d.cost_over_time.map(function(e) { return e.value; }), borderColor: '#3fb950', tension: 0.3 }] },
+        options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }, x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } } }, plugins: { legend: { display: false } } }
+      });
+
+      // Sessions Over Time (bar)
       destroyChart('sessions');
       chartInstances['sessions'] = new Chart(document.getElementById('sessions-chart'), {
         type: 'bar',
-        data: { labels: sLabels, datasets: [{ label: 'Sessions', data: sData, backgroundColor: '#58a6ff' }] },
-        options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }, x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } } }, plugins: { legend: { display: false } } }
+        data: { labels: d.sessions_over_time.map(function(e) { return e.bucket; }), datasets: [{ label: 'Sessions', data: d.sessions_over_time.map(function(e) { return e.value; }), backgroundColor: '#d29922' }] },
+        options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e', stepSize: 1 }, grid: { color: '#30363d' } }, x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } } }, plugins: { legend: { display: false } } }
       });
 
-      // Message Volume
-      var msgBuckets = {};
-      d.message_volume.forEach(function(m) {
-        if (!msgBuckets[m.bucket]) msgBuckets[m.bucket] = 0;
-        msgBuckets[m.bucket] += m.count;
-      });
-      var mLabels = Object.keys(msgBuckets).sort();
-      var mData = mLabels.map(function(l) { return msgBuckets[l]; });
-      destroyChart('messages');
-      chartInstances['messages'] = new Chart(document.getElementById('messages-chart'), {
-        type: 'line',
-        data: { labels: mLabels, datasets: [{ label: 'Messages', data: mData, borderColor: '#3fb950', tension: 0.3 }] },
-        options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }, x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } } }, plugins: { legend: { display: false } } }
+      // Token Usage Over Time (stacked bar)
+      destroyChart('tokens');
+      chartInstances['tokens'] = new Chart(document.getElementById('tokens-chart'), {
+        type: 'bar',
+        data: { labels: d.tokens_over_time.map(function(e) { return e.bucket; }), datasets: [{ label: 'Input Tokens', data: d.tokens_over_time.map(function(e) { return e.value; }), backgroundColor: '#58a6ff' }] },
+        options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }, x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } } }, plugins: { legend: { labels: { color: '#8b949e' } } } }
       });
 
-      // Persona Breakdown
-      var pLabels = d.persona_breakdown.map(function(p) { return p.agent || 'default'; });
-      var pData = d.persona_breakdown.map(function(p) { return p.count; });
+      // Persona Breakdown (doughnut)
       destroyChart('persona');
-      if (pLabels.length > 0) {
+      if (d.persona_breakdown.length > 0) {
         chartInstances['persona'] = new Chart(document.getElementById('persona-chart'), {
           type: 'doughnut',
-          data: { labels: pLabels, datasets: [{ data: pData, backgroundColor: CHART_COLORS.slice(0, pLabels.length) }] },
+          data: { labels: d.persona_breakdown.map(function(p) { return p.agent; }), datasets: [{ data: d.persona_breakdown.map(function(p) { return p.count; }), backgroundColor: CHART_COLORS.slice(0, d.persona_breakdown.length) }] },
           options: { plugins: { legend: { labels: { color: '#8b949e' } } } }
         });
       }
 
-      // Peak Concurrency
-      var cLabels = d.peak_concurrent.map(function(p) { return p.bucket; });
-      var cData = d.peak_concurrent.map(function(p) { return p.max_concurrent; });
-      destroyChart('concurrency');
-      chartInstances['concurrency'] = new Chart(document.getElementById('concurrency-chart'), {
-        type: 'line',
-        data: { labels: cLabels, datasets: [{ label: 'Peak Concurrent', data: cData, borderColor: '#d29922', tension: 0.3 }] },
-        options: { scales: { y: { beginAtZero: true, ticks: { color: '#8b949e', stepSize: 1 }, grid: { color: '#30363d' } }, x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } } }, plugins: { legend: { display: false } } }
-      });
-
-      // Duration Stats Table
-      var dt = document.getElementById('duration-table');
-      if (d.duration_stats.length === 0) {
-        dt.innerHTML = '<div class="empty">No duration data</div>';
-      } else {
-        var dh = '<table><tr><th>Project</th><th>Avg</th><th>Median</th><th>P95</th></tr>';
-        d.duration_stats.forEach(function(s) {
-          dh += '<tr><td>' + escapeHtml(s.project_key) + '</td><td>' + (s.avg_ms / 60000).toFixed(1) + 'm</td><td>' + (s.median_ms / 60000).toFixed(1) + 'm</td><td>' + (s.p95_ms / 60000).toFixed(1) + 'm</td></tr>';
+      // Model Breakdown (doughnut)
+      destroyChart('model');
+      if (d.model_breakdown.length > 0) {
+        chartInstances['model'] = new Chart(document.getElementById('model-chart'), {
+          type: 'doughnut',
+          data: { labels: d.model_breakdown.map(function(m) { return m.model; }), datasets: [{ data: d.model_breakdown.map(function(m) { return m.cost_usd; }), backgroundColor: CHART_COLORS.slice(0, d.model_breakdown.length) }] },
+          options: { plugins: { legend: { labels: { color: '#8b949e' } } } }
         });
-        dh += '</table>';
-        dt.innerHTML = dh;
       }
+
+      // Token Usage by Project table
+      var pt = document.getElementById('project-table');
+      if (d.tokens_by_project.length === 0) { pt.innerHTML = '<div class="empty">No data</div>'; }
+      else {
+        var h = '<table><tr><th>Project</th><th>Input</th><th>Output</th><th>Cache Read</th><th>Cost</th><th>Messages</th></tr>';
+        d.tokens_by_project.forEach(function(p) { h += '<tr><td>' + escapeHtml(p.project_key) + '</td><td>' + p.input_tokens.toLocaleString() + '</td><td>' + p.output_tokens.toLocaleString() + '</td><td>' + p.cache_read_input_tokens.toLocaleString() + '</td><td>$' + p.cost_usd.toFixed(3) + '</td><td>' + p.message_count + '</td></tr>'; });
+        pt.innerHTML = h + '</table>';
+      }
+
+      // Token Usage by Session table
+      var st = document.getElementById('session-table');
+      if (d.tokens_by_session.length === 0) { st.innerHTML = '<div class="empty">No data</div>'; }
+      else {
+        var h2 = '<table><tr><th>Session</th><th>Project</th><th>Input</th><th>Output</th><th>Cost</th><th>Msgs</th><th>Duration</th></tr>';
+        d.tokens_by_session.forEach(function(row) { h2 += '<tr><td>' + escapeHtml(row.session_id.substring(0, 8)) + '</td><td>' + escapeHtml(row.project_key) + '</td><td>' + row.input_tokens.toLocaleString() + '</td><td>' + row.output_tokens.toLocaleString() + '</td><td>$' + row.cost_usd.toFixed(3) + '</td><td>' + row.message_count + '</td><td>' + Math.round(row.duration_ms / 60000) + 'm</td></tr>'; });
+        st.innerHTML = h2 + '</table>';
+      }
+
+      // Cache Efficiency table
+      var ct = document.getElementById('cache-table');
+      var ce = d.cache_efficiency;
+      ct.innerHTML = '<table><tr><th>Total Input</th><th>Cache Read</th><th>Hit Ratio</th></tr><tr><td>' + ce.total_input_tokens.toLocaleString() + '</td><td>' + ce.cache_read_tokens.toLocaleString() + '</td><td>' + (ce.cache_hit_ratio * 100).toFixed(1) + '%</td></tr></table>';
     })
-    .catch(function() {
-      document.getElementById('pulse-warning').style.display = '';
-    });
+    .catch(function(err) { console.error('Activity fetch error:', err); });
 }
 
 setInterval(function() {
@@ -345,8 +350,6 @@ export function createHealthServer(
   const startTime = Date.now();
   const version = getVersion();
   const dashboardHtml = buildDashboardHtml();
-  const runPulse = options?.runPulseCli ?? defaultRunPulseCli;
-
   function getHealthData() {
     const sessions = sessionManager.listSessions();
     return {
@@ -412,57 +415,50 @@ export function createHealthServer(
       return;
     }
 
-    if (pathname === '/api/activity/sessions') {
-      const url = new URL(req.url ?? '/', `http://localhost`);
-      const args: string[] = ['sessions', '--json'];
-      const range = url.searchParams.get('range');
-      if (range) { args.push('--range', range); }
-      const project = url.searchParams.get('project');
-      if (project) { args.push('--project', project); }
-      const type = url.searchParams.get('type');
-      if (type) { args.push('--type', type); }
-
-      runPulse(args)
-        .then((stdout) => {
-          const data = JSON.parse(stdout);
-          data.pulse_available = true;
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(data));
-        })
-        .catch(() => {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            source: 'mpg-sessions', filters: {}, events: [], pulse_available: false,
-          }));
-        });
-      return;
-    }
-
     if (pathname === '/api/activity/summary') {
       const url = new URL(req.url ?? '/', `http://localhost`);
-      const args: string[] = ['summary', '--json'];
-      const range = url.searchParams.get('range');
-      if (range) { args.push('--range', range); }
-      const project = url.searchParams.get('project');
-      if (project) { args.push('--project', project); }
-      const bucket = url.searchParams.get('bucket');
-      if (bucket) { args.push('--bucket', bucket); }
+      const rangeParam = url.searchParams.get('range') || '7d';
+      if (rangeParam !== '24h' && rangeParam !== '7d' && rangeParam !== '30d') {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid range. Must be 24h, 7d, or 30d' }));
+        return;
+      }
+      const range: TimeRange = rangeParam;
+      const bucket: Bucket = range === '24h' ? 'hour' : 'day';
+      const engine = options?.activityEngine;
 
-      runPulse(args)
-        .then((stdout) => {
-          const data = JSON.parse(stdout);
-          data.pulse_available = true;
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify(data));
-        })
-        .catch(() => {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            source: 'mpg-sessions', filters: {}, bucket: 'day',
-            sessions_per_bucket: [], duration_stats: [], message_volume: [],
-            persona_breakdown: [], peak_concurrent: [], pulse_available: false,
-          }));
-        });
+      if (!engine) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          summary: { total_cost_usd: 0, total_input_tokens: 0, total_output_tokens: 0, total_sessions: 0, total_messages: 0, avg_session_duration_ms: 0 },
+          tokens_by_project: [], tokens_by_session: [],
+          sessions_over_time: [], messages_over_time: [], cost_over_time: [], tokens_over_time: [],
+          session_durations: [], model_breakdown: [], persona_breakdown: [],
+          cache_efficiency: { total_input_tokens: 0, cache_read_tokens: 0, cache_hit_ratio: 0 },
+        }));
+        return;
+      }
+
+      try {
+        const data = {
+          summary: engine.computeSummary(range),
+          tokens_by_project: engine.tokensByProject(range),
+          tokens_by_session: engine.tokensBySession(range),
+          sessions_over_time: engine.bucketed(range, bucket, 'session_start'),
+          messages_over_time: engine.bucketed(range, bucket, 'message_completed'),
+          cost_over_time: engine.bucketed(range, bucket, 'message_completed', 'total_cost_usd'),
+          tokens_over_time: engine.bucketed(range, bucket, 'message_completed', 'input_tokens'),
+          session_durations: engine.sessionDurations(range),
+          model_breakdown: engine.modelBreakdown(range),
+          persona_breakdown: engine.personaBreakdown(range),
+          cache_efficiency: engine.cacheEfficiency(range),
+        };
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(data));
+      } catch {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Failed to compute activity data' }));
+      }
       return;
     }
 

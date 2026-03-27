@@ -1,8 +1,10 @@
+> **Superseded** by `2026-03-27-activity-dashboard-token-usage-design.md` (commit 7a0a5c2). This file describes the original Approach B (pulse CLI proxy). The agreed design is Approach A (self-contained activity engine). Kept for historical reference only.
+
 # Pulse Activity Integration — Design Spec
 
 **Issue**: #64 — Add session activity monitor and graphs to web dashboard
 **Date**: 2026-03-27
-**Approach**: Thin Proxy — MPG writes JSONL events, shells out to pulse CLI for reads
+**Approach**: ~~Thin Proxy — shells out to pulse CLI~~ **Superseded** — see `2026-03-27-activity-dashboard-token-usage-design.md`
 
 ---
 
@@ -10,198 +12,340 @@
 
 ```
 Discord → Session Manager → pulse-events.ts → ~/.pulse/events/mpg-sessions.jsonl
-                                                         ↑
-Dashboard UI ← /api/activity/* ← health-server.ts ← `pulse activity --json` CLI
+                ↓                                         ↑
+         runClaude() → parseClaudeJsonOutput()    activity-engine.ts (reads JSONL directly)
+                ↓                                         ↑
+         message_completed event (with usage)    /api/activity/* endpoints
+                                                          ↑
+                                                  Dashboard Activity tab
 ```
 
-MPG is a **producer** (writes events) and a **proxy** (forwards pulse CLI output to dashboard). Pulse owns the schema, aggregation logic, and file format. Zero library coupling between projects.
+MPG is a **producer** (writes events including token/cost data) and a **reader** (reads and aggregates JSONL in-process). No external CLI dependency — pulse owns the file format, but MPG handles its own reads and aggregations.
 
 ---
 
-## 1. Event Emitter Module
+## 1. ClaudeUsage Interface
 
-**New file**: `src/pulse-events.ts`
+**New interface** in `src/claude-cli.ts`:
 
-### Interface
+```typescript
+export interface ClaudeUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  total_cost_usd: number;
+  duration_ms: number;
+  duration_api_ms: number;
+  num_turns: number;
+  model?: string;
+}
+```
+
+### Extraction from Claude CLI Output
+
+Claude CLI's `--output-format json` response includes token/cost data at the top level. Extend `parseClaudeJsonOutput` to extract these fields into an optional `usage?: ClaudeUsage` on `ClaudeResult`:
+
+```typescript
+export interface ClaudeResult {
+  text: string;
+  sessionId: string;
+  isError: boolean;
+  sessionReset?: boolean;
+  sessionChanged?: boolean;
+  usage?: ClaudeUsage;
+}
+```
+
+The parser extracts from Claude CLI JSON:
+- `total_cost_usd` → direct mapping
+- `usage.input_tokens`, `usage.output_tokens`, `usage.cache_creation_input_tokens`, `usage.cache_read_input_tokens` → from nested `usage` object
+- `duration_ms`, `duration_api_ms`, `num_turns` → direct mapping
+- `model` → from `model` field if present
+
+If any usage fields are missing, `usage` is `undefined` (graceful degradation for older Claude CLI versions).
+
+---
+
+## 2. New `message_completed` Pulse Event
+
+**Modified file**: `src/pulse-events.ts`
+
+### Extended Interface
+
+Add a new method to `PulseEmitter`:
 
 ```typescript
 export interface PulseEmitter {
-  sessionStart(sessionId: string, projectKey: string, projectDir: string, opts?: { agentName?: string; triggerSource?: string }): void;
-  sessionEnd(sessionId: string, projectKey: string, projectDir: string, durationMs: number, messageCount: number): void;
-  sessionIdle(sessionId: string, projectKey: string, projectDir: string, durationMs: number, messageCount: number): void;
-  sessionResume(sessionId: string, projectKey: string, projectDir: string, idleDurationMs: number): void;
-  messageRouted(sessionId: string, projectKey: string, projectDir: string, opts?: { agentTarget?: string; queueDepth?: number }): void;
+  // ... existing methods unchanged ...
+  messageCompleted(
+    sessionId: string,
+    projectKey: string,
+    projectDir: string,
+    usage: ClaudeUsage,
+    opts?: { agentTarget?: string },
+  ): void;
 }
-
-export function createPulseEmitter(filePath?: string): PulseEmitter;
 ```
 
-### Behavior
+### Event Schema
 
-- Each method constructs a JSON object matching pulse's `SessionEvent` schema (`schema_version: 1`, ISO timestamp, event_type, session_id, project_key, project_dir, plus per-type fields).
-- Appends a single JSON line + `\n` to the JSONL file using `fs.appendFileSync`.
-- **Fire-and-forget**: All writes are wrapped in try/catch. Failures log a warning via the project logger but never throw. The gateway must not crash because of event logging.
-- Default file path: `~/.pulse/events/mpg-sessions.jsonl`. Directory created on first write if missing (`mkdirSync recursive`).
-- `createPulseEmitter` accepts an optional override path for testing.
-
-### Schema (matches pulse's `SessionEvent` types)
-
-All events share these base fields:
 ```json
 {
   "schema_version": 1,
   "timestamp": "2026-03-27T12:00:00.000Z",
-  "event_type": "session_start|session_end|session_idle|session_resume|message_routed",
+  "event_type": "message_completed",
   "session_id": "abc-123",
-  "project_key": "channel-id-or-threadId:agentName",
-  "project_dir": "/path/to/project"
+  "project_key": "channel-id:agentName",
+  "project_dir": "/path/to/project",
+  "agent_target": "engineer",
+  "input_tokens": 15000,
+  "output_tokens": 3200,
+  "cache_creation_input_tokens": 5000,
+  "cache_read_input_tokens": 8000,
+  "total_cost_usd": 0.042,
+  "duration_ms": 45000,
+  "duration_api_ms": 38000,
+  "num_turns": 12,
+  "model": "claude-sonnet-4-20250514"
 }
 ```
 
-Per-type extras:
-| Event | Extra Fields |
-|-------|-------------|
-| `session_start` | `agent_name?: string`, `trigger_source: string` |
-| `session_end` | `duration_ms: number`, `message_count: number` |
-| `session_idle` | `duration_ms: number`, `message_count: number` |
-| `session_resume` | `idle_duration_ms: number` |
-| `message_routed` | `agent_target?: string`, `queue_depth: number` |
+### Emission Point
+
+Emitted from `session-manager.ts` after `runClaude()` returns successfully, when `result.usage` is present.
 
 ---
 
-## 2. Session Manager Hooks
+## 3. Activity Engine
 
-**Modified file**: `src/session-manager.ts`
+**New file**: `src/activity-engine.ts`
 
-The `createSessionManager` function gains a new optional parameter: `pulseEmitter?: PulseEmitter`.
+Reads `~/.pulse/events/mpg-sessions.jsonl` directly (no external CLI), parses events, filters by time range, and computes aggregations.
 
-### Hook Points
+### Interface
 
-| Lifecycle Point | Event | Where in Code |
-|----------------|-------|---------------|
-| New session created | `session_start` | `getOrCreateSession()` — when a brand-new session is created (not restored from store) |
-| Session restored from store | `session_resume` | `getOrCreateSession()` — when restoring a persisted session (idle_duration = now - lastActivity) |
-| Message dispatched | `message_routed` | `processQueue()` — just before `runClaude()` call |
-| Session goes idle | `session_idle` | `resetIdleTimer()` callback — when the idle timer fires and removes session from memory |
-| Session killed | `session_end` | `clearSession()` — explicit termination |
+```typescript
+export interface ActivityEngine {
+  summaryCards(range: TimeRange, project?: string): SummaryCards;
+  tokensByProject(range: TimeRange): ProjectTokenRow[];
+  tokensBySession(range: TimeRange, project?: string): SessionTokenRow[];
+  sessionsOverTime(range: TimeRange, bucket: Bucket): TimeBucketEntry[];
+  messagesOverTime(range: TimeRange, bucket: Bucket): TimeBucketEntry[];
+  costOverTime(range: TimeRange, bucket: Bucket): TimeBucketEntry[];
+  sessionDurations(range: TimeRange, project?: string): SessionDurationRow[];
+  modelBreakdown(range: TimeRange): ModelBreakdownRow[];
+  cacheEfficiency(range: TimeRange, project?: string): CacheEfficiency;
+}
 
-### Message Count Tracking
+export type TimeRange = '24h' | '7d' | '30d';
+export type Bucket = 'hour' | 'day';
 
-Add a `messageCount: number` field to `InternalSession`. Increment on each successful `runClaude()` call. Used by `session_idle` and `session_end` events.
+export function createActivityEngine(filePath?: string): ActivityEngine;
+```
 
-### Duration Tracking
+### Data Types
 
-Add a `createdAt: number` field to `InternalSession` (set once at creation time). Duration = `Date.now() - createdAt`.
+```typescript
+export interface SummaryCards {
+  totalCostUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalSessions: number;
+  totalMessages: number;
+  avgSessionDurationMs: number;
+}
+
+export interface ProjectTokenRow {
+  projectKey: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  totalCostUsd: number;
+  messageCount: number;
+}
+
+export interface SessionTokenRow {
+  sessionId: string;
+  projectKey: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalCostUsd: number;
+  messageCount: number;
+  durationMs: number;
+}
+
+export interface TimeBucketEntry {
+  bucket: string;    // ISO date string for the bucket start
+  value: number;
+}
+
+export interface SessionDurationRow {
+  sessionId: string;
+  projectKey: string;
+  durationMs: number;
+}
+
+export interface ModelBreakdownRow {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalCostUsd: number;
+  messageCount: number;
+}
+
+export interface CacheEfficiency {
+  totalInputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  cacheHitRatio: number;   // cacheReadTokens / totalInputTokens, or 0
+}
+```
+
+### Behavior
+
+- Reads the JSONL file synchronously on each call (file is append-only, small enough for in-memory processing)
+- Filters events by timestamp using the time range (24h → last 24 hours, 7d → last 7 days, 30d → last 30 days)
+- `summaryCards()`: Aggregates across `session_start`, `session_end`, `session_idle`, and `message_completed` events
+  - `totalSessions` = count of `session_start` events
+  - `totalMessages` = count of `message_completed` events
+  - `totalCostUsd` = sum of `total_cost_usd` from `message_completed`
+  - `totalInputTokens` / `totalOutputTokens` = sum from `message_completed`
+  - `avgSessionDurationMs` = average `duration_ms` from `session_end` + `session_idle` events
+- `sessionsOverTime(bucket)` / `messagesOverTime(bucket)` / `costOverTime(bucket)`: Groups events into time buckets
+  - Bucket `hour` for 24h range, `day` for 7d/30d
+  - Returns array of `{ bucket: "2026-03-27T14:00:00.000Z", value: N }`
+- `tokensByProject()`: Groups `message_completed` events by `project_key`
+- `tokensBySession()`: Groups `message_completed` events by `session_id`
+- `modelBreakdown()`: Groups `message_completed` events by `model` field
+- `cacheEfficiency()`: Computes cache hit ratio from `message_completed` events
+- `sessionDurations()`: Returns duration for each session from `session_end`/`session_idle` events
+- Default file path: `~/.pulse/events/mpg-sessions.jsonl`
+- Graceful on missing file: returns zero/empty results
+- `createActivityEngine` accepts optional override path for testing
 
 ---
 
-## 3. API Endpoints
+## 4. API Endpoints
 
 **Modified file**: `src/health-server.ts`
 
-### New Endpoints
+### Changes
 
-#### `GET /api/activity/sessions`
+Remove `defaultRunPulseCli`, `HealthServerOptions.runPulseCli`, and pulse CLI references. Replace with activity engine.
 
-Query params (all optional, forwarded as CLI flags):
-- `range` — time range (e.g., `24h`, `7d`, `30d`). Default: `7d`
-- `project` — filter by project key
-- `type` — filter by event type
+Update `HealthServerOptions`:
 
-Implementation:
 ```typescript
-execFile('pulse', ['activity', 'sessions', '--json', '--range', range, ...])
+export interface HealthServerOptions {
+  activityEngine?: ActivityEngine;
+}
 ```
 
-Returns: pulse's `ActivitySessions` JSON directly, or fallback:
-```json
-{ "source": "mpg-sessions", "filters": {}, "events": [], "pulse_available": false }
-```
+### Updated Endpoints
 
 #### `GET /api/activity/summary`
 
 Query params (all optional):
-- `range` — time range. Default: `7d`
+- `range` — `24h`, `7d`, `30d`. Default: `7d`
 - `project` — filter by project key
-- `bucket` — aggregation bucket (`hour`, `day`, `week`). Default: `day`
 
-Implementation:
+Implementation calls `activityEngine` methods directly:
+
 ```typescript
-execFile('pulse', ['activity', 'summary', '--json', '--range', range, '--bucket', bucket, ...])
+const range = (url.searchParams.get('range') as TimeRange) || '7d';
+const project = url.searchParams.get('project') || undefined;
+const bucket: Bucket = range === '24h' ? 'hour' : 'day';
+
+const summary = engine.summaryCards(range, project);
+const sessionsOverTime = engine.sessionsOverTime(range, bucket);
+const messagesOverTime = engine.messagesOverTime(range, bucket);
+const costOverTime = engine.costOverTime(range, bucket);
+const tokensByProject = engine.tokensByProject(range);
+const tokensBySession = engine.tokensBySession(range, project);
+const modelBreakdown = engine.modelBreakdown(range);
+const cacheEfficiency = engine.cacheEfficiency(range, project);
+const sessionDurations = engine.sessionDurations(range, project);
 ```
 
-Returns: pulse's `ActivitySummary` JSON directly, or fallback:
+Returns:
 ```json
 {
-  "source": "mpg-sessions", "filters": {}, "bucket": "day",
-  "sessions_per_bucket": [], "duration_stats": [], "message_volume": [],
-  "persona_breakdown": [], "peak_concurrent": [],
-  "pulse_available": false
+  "summary": { "totalCostUsd": 1.23, "totalInputTokens": 500000, "..." : "..." },
+  "sessionsOverTime": [{ "bucket": "...", "value": 5 }],
+  "messagesOverTime": [{ "bucket": "...", "value": 42 }],
+  "costOverTime": [{ "bucket": "...", "value": 0.15 }],
+  "tokensByProject": [{ "projectKey": "...", "..." : "..." }],
+  "tokensBySession": [{ "sessionId": "...", "..." : "..." }],
+  "modelBreakdown": [{ "model": "...", "..." : "..." }],
+  "cacheEfficiency": { "totalInputTokens": 500000, "cacheReadTokens": 200000, "cacheHitRatio": 0.4 },
+  "sessionDurations": [{ "sessionId": "...", "durationMs": 45000 }]
 }
 ```
 
+#### `GET /api/activity/sessions` (kept for backward compatibility)
+
+Same data source, returns filtered events list. Can be simplified or removed later.
+
 ### Graceful Degradation
 
-Both endpoints catch `ENOENT` (pulse not on PATH) and exec errors. On failure:
-- Return 200 with empty data + `pulse_available: false` flag
-- Log a warning once (not on every request)
-
-### Helper Function
-
-```typescript
-function runPulseCli(args: string[]): Promise<string>
-```
-- Uses `child_process.execFile` (not `exec`) — no shell injection risk
-- 10-second timeout to prevent hangs
-- Returns stdout on success, throws on failure
+If JSONL file doesn't exist or is empty, return 200 with zero-value summary and empty arrays. No `pulse_available` flag needed — the engine always works.
 
 ---
 
-## 4. Dashboard UI
+## 5. Dashboard Activity Tab
 
 **Modified file**: `src/health-server.ts` (embedded HTML)
 
-### Layout Changes
+### Layout
 
-Add a tabbed navigation to the dashboard:
-- **Overview** tab (existing content: status cards, sessions table, projects table)
-- **Activity** tab (new: charts and breakdowns)
-
-### Chart.js Integration
-
-Load Chart.js via CDN in the `<head>`:
-```html
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
-```
+Tabbed navigation (existing):
+- **Overview** tab (existing content)
+- **Activity** tab (redesigned)
 
 ### Activity Tab Content
 
-1. **Sessions Over Time** (bar chart)
-   - Data from `/api/activity/summary` → `sessions_per_bucket`
-   - X-axis: time buckets, Y-axis: session count
-   - Stacked by project if multiple projects
+#### Summary Cards (top row, 5 cards)
 
-2. **Message Volume** (line chart)
-   - Data from `message_volume`
-   - Same axes as sessions chart
+| Card | Data Source | Format |
+|------|-----------|--------|
+| Total Cost | `summary.totalCostUsd` | `$X.XX` |
+| Total Tokens | `summary.totalInputTokens + summary.totalOutputTokens` | `X.Xk` or `X.XM` |
+| Total Sessions | `summary.totalSessions` | integer |
+| Total Messages | `summary.totalMessages` | integer |
+| Avg Session Duration | `summary.avgSessionDurationMs` | `Xm Ys` |
 
-3. **Duration Stats** (table)
-   - Data from `duration_stats`
-   - Columns: Project, Avg, Median, P95
+#### Charts (2×3 grid)
 
-4. **Persona Breakdown** (doughnut chart)
-   - Data from `persona_breakdown`
-   - Shows agent usage distribution
+| Position | Chart | Type | Data Source |
+|----------|-------|------|-------------|
+| 1,1 | Messages Over Time | Bar | `messagesOverTime` |
+| 1,2 | Cost Over Time | Line | `costOverTime` |
+| 1,3 | Sessions Over Time | Bar | `sessionsOverTime` |
+| 2,1 | Token Usage Over Time | Stacked Bar | Derived: input vs output from `message_completed` events bucketed |
+| 2,2 | Persona Breakdown | Doughnut | Derived from `message_completed` agent_target grouping |
+| 2,3 | Model Breakdown | Doughnut | `modelBreakdown` |
 
-5. **Peak Concurrency** (line chart)
-   - Data from `peak_concurrent`
-   - X-axis: time buckets, Y-axis: max concurrent
+#### Tables (below charts)
 
-### Activity Refresh
+1. **Token Usage by Project** — columns: Project, Input Tokens, Output Tokens, Cache Read, Cost, Messages
+   - Data: `tokensByProject`
 
-- Fetches `/api/activity/summary?range=7d&bucket=day` on tab switch and every 30s (slower than the 5s status refresh — activity data changes slowly)
-- Range selector: buttons for 24h / 7d / 30d that re-fetch with the selected range
-- If `pulse_available === false`, show a notice: "Install pulse CLI for activity graphs"
+2. **Token Usage by Session** — columns: Session, Project, Input Tokens, Output Tokens, Cost, Messages, Duration
+   - Data: `tokensBySession`
+
+3. **Cache Efficiency** — single row: Total Input Tokens, Cache Read Tokens, Cache Creation Tokens, Hit Ratio
+   - Data: `cacheEfficiency`
+
+#### Range Selector
+
+Buttons: **24h** / **7d** / **30d** — re-fetches `/api/activity/summary?range=X` on click.
+
+#### Removed
+
+- Pulse CLI warning banner (`pulse_available` flag)
+- Peak Concurrency chart (not available without pulse CLI)
+- Duration Stats table (replaced by Session table with duration column)
 
 ### Styling
 
@@ -210,39 +354,103 @@ Follow existing dark theme. Chart.js configured with:
 - Light grid lines (`#30363d`)
 - Green/blue/purple color palette matching existing status colors
 
+### Refresh
+
+- Fetches on tab switch and every 30s
+- Bucket selection automatic: `hour` for 24h, `day` for 7d/30d
+
 ---
 
-## 5. Testing Strategy
+## 6. Data Capture Changes
+
+### `parseClaudeJsonOutput` Updates
+
+Extend to extract `ClaudeUsage` from Claude CLI's `--output-format json` response:
+
+```typescript
+export function parseClaudeJsonOutput(raw: string): ClaudeResult {
+  const data = JSON.parse(raw);
+  let usage: ClaudeUsage | undefined;
+  if (data.total_cost_usd != null || data.usage) {
+    usage = {
+      input_tokens: data.usage?.input_tokens ?? 0,
+      output_tokens: data.usage?.output_tokens ?? 0,
+      cache_creation_input_tokens: data.usage?.cache_creation_input_tokens ?? 0,
+      cache_read_input_tokens: data.usage?.cache_read_input_tokens ?? 0,
+      total_cost_usd: data.total_cost_usd ?? 0,
+      duration_ms: data.duration_ms ?? 0,
+      duration_api_ms: data.duration_api_ms ?? 0,
+      num_turns: data.num_turns ?? 0,
+      model: data.model,
+    };
+  }
+  return {
+    text: data.result ?? '',
+    sessionId: data.session_id ?? '',
+    isError: Boolean(data.is_error),
+    usage,
+  };
+}
+```
+
+### Session Manager `message_completed` Emission
+
+In `session-manager.ts`, after `runClaude()` returns successfully and `result.usage` is present:
+
+```typescript
+if (pulseEmitter && session.sessionId && result.usage) {
+  pulseEmitter.messageCompleted(
+    session.sessionId,
+    session.projectKey,
+    session.cwd,
+    result.usage,
+    { agentTarget: /* extracted from prompt or config */ },
+  );
+}
+```
+
+---
+
+## 7. Testing Strategy
 
 ### Unit Tests
 
-- **`tests/pulse-events.test.ts`**: Test each emitter method writes correct JSON to a temp file. Test fire-and-forget (invalid path doesn't throw). Test directory creation.
-- **`tests/session-manager.test.ts`**: Add tests verifying pulse events are emitted at correct lifecycle points (using a mock emitter).
-- **`tests/health-server.test.ts`**: Add tests for `/api/activity/*` endpoints — mock `execFile` to return sample pulse output, test graceful degradation when pulse is unavailable.
+- **`tests/claude-cli.test.ts`**: Test `parseClaudeJsonOutput` extracts `ClaudeUsage` from sample Claude CLI JSON output. Test graceful handling when usage fields are missing.
+- **`tests/pulse-events.test.ts`**: Add test for `messageCompleted` event — verify it writes correct JSON with all usage fields.
+- **`tests/activity-engine.test.ts`**: **New** — Test each aggregation method against a fixture JSONL file with known events. Test time range filtering. Test empty/missing file handling. Test bucketing logic.
+- **`tests/session-manager.test.ts`**: Add test verifying `message_completed` is emitted after successful `runClaude` with usage data.
+- **`tests/health-server.test.ts`**: Update activity endpoint tests to use mock `ActivityEngine` instead of `runPulseCli`.
 
 ### No E2E Test for Dashboard Charts
 
-Chart.js rendering is client-side and not testable in Vitest. Manual verification is sufficient for the initial implementation.
+Chart.js rendering is client-side and not testable in Vitest. Manual verification is sufficient.
 
 ---
 
-## 6. Files Changed
+## 8. Files Changed
 
 | File | Change |
 |------|--------|
-| `src/pulse-events.ts` | **New** — event emitter module |
-| `src/session-manager.ts` | Add pulse hooks, message counter, created timestamp |
-| `src/health-server.ts` | Add `/api/activity/*` endpoints, activity tab in dashboard |
-| `src/cli.ts` | Wire up `createPulseEmitter()` and pass to session manager |
-| `tests/pulse-events.test.ts` | **New** — emitter unit tests |
-| `tests/session-manager.test.ts` | Add pulse event emission tests |
-| `tests/health-server.test.ts` | Add activity endpoint tests |
+| `src/claude-cli.ts` | Add `ClaudeUsage` interface, extend `ClaudeResult`, update `parseClaudeJsonOutput` |
+| `src/pulse-events.ts` | Add `messageCompleted` method to `PulseEmitter` |
+| `src/activity-engine.ts` | **New** — JSONL reader + aggregation engine |
+| `src/session-manager.ts` | Emit `message_completed` after `runClaude()` |
+| `src/health-server.ts` | Replace pulse CLI proxy with activity engine, update dashboard Activity tab |
+| `src/cli.ts` | Wire up `createActivityEngine()` and pass to health server |
+| `tests/claude-cli.test.ts` | Add usage extraction tests |
+| `tests/pulse-events.test.ts` | Add `messageCompleted` tests |
+| `tests/activity-engine.test.ts` | **New** — activity engine unit tests |
+| `tests/session-manager.test.ts` | Add `message_completed` emission test |
+| `tests/health-server.test.ts` | Update to use mock activity engine |
 
 ---
 
-## 7. Phasing
+## 9. Phasing
 
-**Phase 1** (single PR): Event emitter + session manager hooks + API endpoints + tests
-**Phase 2** (follow-up commit in same PR): Dashboard UI with Chart.js
-
-This lets us verify the data pipeline works before building visuals on top, per PM's suggestion.
+**Single PR** with commits per task:
+1. Extend `ClaudeResult` + add `message_completed` pulse event
+2. Build activity engine
+3. Hook `message_completed` into session manager
+4. Update API endpoints to use activity engine
+5. Update dashboard Activity tab
+6. Wire up in CLI, final verification

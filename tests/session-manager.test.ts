@@ -393,6 +393,7 @@ describe('SessionManager', () => {
       sessionIdle: ReturnType<typeof vi.fn>;
       sessionResume: ReturnType<typeof vi.fn>;
       messageRouted: ReturnType<typeof vi.fn>;
+      messageCompleted: ReturnType<typeof vi.fn>;
     };
     let pulseManager: SessionManager;
 
@@ -411,6 +412,7 @@ describe('SessionManager', () => {
         sessionIdle: vi.fn(),
         sessionResume: vi.fn(),
         messageRouted: vi.fn(),
+        messageCompleted: vi.fn(),
       };
       pulseManager = createSessionManager(defaults, undefined, pulseEmitter);
     });
@@ -477,6 +479,46 @@ describe('SessionManager', () => {
       // Should NOT emit session_start for restored sessions
       expect(pulseEmitter.sessionStart).not.toHaveBeenCalled();
       resumeManager.shutdown();
+    });
+
+    it('emits message_completed after successful runClaude with usage data', async () => {
+      const { runClaude } = await import('../src/claude-cli.js');
+      vi.mocked(runClaude).mockReset();
+      vi.mocked(runClaude).mockResolvedValue({
+        text: 'Mock response',
+        sessionId: 'mock-session-id',
+        isError: false,
+        usage: {
+          input_tokens: 15000,
+          output_tokens: 3200,
+          cache_creation_input_tokens: 5000,
+          cache_read_input_tokens: 8000,
+          total_cost_usd: 0.042,
+          duration_ms: 45000,
+          duration_api_ms: 38000,
+          num_turns: 12,
+          model: 'claude-sonnet-4-20250514',
+        },
+      });
+
+      await pulseManager.send('project-a', '/tmp/a', 'Hello');
+      expect(pulseEmitter.messageCompleted).toHaveBeenCalledOnce();
+      expect(pulseEmitter.messageCompleted).toHaveBeenCalledWith(
+        expect.any(String),
+        'project-a',
+        '/tmp/a',
+        expect.objectContaining({
+          input_tokens: 15000,
+          output_tokens: 3200,
+          total_cost_usd: 0.042,
+        }),
+        expect.objectContaining({ agentTarget: undefined }),
+      );
+    });
+
+    it('does not emit message_completed when usage is absent', async () => {
+      await pulseManager.send('project-a', '/tmp/a', 'Hello');
+      expect(pulseEmitter.messageCompleted).not.toHaveBeenCalled();
     });
   });
 

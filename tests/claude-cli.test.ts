@@ -34,6 +34,74 @@ describe('parseClaudeJsonOutput', () => {
   });
 });
 
+describe('parseClaudeJsonOutput — usage extraction', () => {
+  it('extracts ClaudeUsage when usage fields are present', () => {
+    const raw = JSON.stringify({
+      result: 'Hello',
+      session_id: 'sess-1',
+      is_error: false,
+      total_cost_usd: 0.042,
+      duration_ms: 45000,
+      duration_api_ms: 38000,
+      num_turns: 12,
+      model: 'claude-sonnet-4-20250514',
+      usage: {
+        input_tokens: 15000,
+        output_tokens: 3200,
+        cache_creation_input_tokens: 5000,
+        cache_read_input_tokens: 8000,
+      },
+    });
+    const result = parseClaudeJsonOutput(raw);
+    expect(result.usage).toBeDefined();
+    expect(result.usage!.input_tokens).toBe(15000);
+    expect(result.usage!.output_tokens).toBe(3200);
+    expect(result.usage!.cache_creation_input_tokens).toBe(5000);
+    expect(result.usage!.cache_read_input_tokens).toBe(8000);
+    expect(result.usage!.total_cost_usd).toBe(0.042);
+    expect(result.usage!.duration_ms).toBe(45000);
+    expect(result.usage!.duration_api_ms).toBe(38000);
+    expect(result.usage!.num_turns).toBe(12);
+    expect(result.usage!.model).toBe('claude-sonnet-4-20250514');
+  });
+
+  it('returns undefined usage when no usage fields present', () => {
+    const raw = JSON.stringify({
+      result: 'Hello',
+      session_id: 'sess-1',
+      is_error: false,
+    });
+    const result = parseClaudeJsonOutput(raw);
+    expect(result.usage).toBeUndefined();
+  });
+
+  it('handles partial usage — total_cost_usd without nested usage object', () => {
+    const raw = JSON.stringify({
+      result: 'Hello',
+      session_id: 'sess-1',
+      is_error: false,
+      total_cost_usd: 0.01,
+    });
+    const result = parseClaudeJsonOutput(raw);
+    expect(result.usage).toBeDefined();
+    expect(result.usage!.total_cost_usd).toBe(0.01);
+    expect(result.usage!.input_tokens).toBe(0);
+    expect(result.usage!.output_tokens).toBe(0);
+  });
+
+  it('extracts model from first key of modelUsage when model field is absent', () => {
+    const raw = JSON.stringify({
+      result: 'Hello',
+      session_id: 'sess-1',
+      is_error: false,
+      total_cost_usd: 0.05,
+      modelUsage: { 'claude-opus-4-6': { input_tokens: 1000 } },
+    });
+    const result = parseClaudeJsonOutput(raw);
+    expect(result.usage!.model).toBe('claude-opus-4-6');
+  });
+});
+
 describe('buildClaudeArgs', () => {
   const baseArgs = ['--dangerously-skip-permissions', '--output-format', 'json'];
 
