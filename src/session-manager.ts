@@ -219,12 +219,14 @@ export function createSessionManager(defaults: {
       // Check store for a previously persisted session ID
       let restoredSessionId: string | undefined;
       let restoredWorktreePath: string | undefined;
+      let restoredLastActivity: number | undefined;
       if (store) {
         const persisted = store.load();
         const entry = persisted.get(projectKey);
         if (entry?.sessionId) {
           restoredSessionId = entry.sessionId;
           restoredWorktreePath = entry.worktreePath;
+          restoredLastActivity = entry.lastActivity;
         }
       }
 
@@ -264,7 +266,7 @@ export function createSessionManager(defaults: {
             restoredSessionId,
             projectKey,
             effectiveCwd,
-            Date.now() - (store?.load().get(projectKey)?.lastActivity ?? Date.now()),
+            Date.now() - (restoredLastActivity ?? Date.now()),
           );
         } else {
           pulseEmitter.sessionStart(
