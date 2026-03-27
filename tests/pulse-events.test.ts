@@ -99,4 +99,34 @@ describe('PulseEmitter', () => {
       emitter.sessionStart('sess-1', 'project-a', '/tmp/project', { triggerSource: 'discord' });
     }).not.toThrow();
   });
+
+  it('emits message_completed event with usage data', () => {
+    const emitter = createPulseEmitter(filePath);
+    emitter.messageCompleted('sess-1', 'project-a', '/tmp/project', {
+      input_tokens: 100,
+      output_tokens: 50,
+      cache_creation_input_tokens: 5000,
+      cache_read_input_tokens: 12000,
+      total_cost_usd: 0.045,
+      duration_ms: 3200,
+      duration_api_ms: 3100,
+      num_turns: 1,
+      model: 'claude-opus-4-6[1m]',
+    }, { agentTarget: 'engineer' });
+
+    const event = JSON.parse(readFileSync(filePath, 'utf-8').trim());
+    expect(event.event_type).toBe('message_completed');
+    expect(event.session_id).toBe('sess-1');
+    expect(event.project_key).toBe('project-a');
+    expect(event.input_tokens).toBe(100);
+    expect(event.output_tokens).toBe(50);
+    expect(event.cache_creation_input_tokens).toBe(5000);
+    expect(event.cache_read_input_tokens).toBe(12000);
+    expect(event.total_cost_usd).toBe(0.045);
+    expect(event.duration_ms).toBe(3200);
+    expect(event.duration_api_ms).toBe(3100);
+    expect(event.num_turns).toBe(1);
+    expect(event.model).toBe('claude-opus-4-6[1m]');
+    expect(event.agent_target).toBe('engineer');
+  });
 });

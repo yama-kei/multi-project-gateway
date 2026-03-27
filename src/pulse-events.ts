@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
+import type { ClaudeUsage } from './claude-cli.js';
 
 export interface PulseEmitter {
   sessionStart(sessionId: string, projectKey: string, projectDir: string, opts?: { agentName?: string; triggerSource?: string }): void;
@@ -8,6 +9,7 @@ export interface PulseEmitter {
   sessionIdle(sessionId: string, projectKey: string, projectDir: string, durationMs: number, messageCount: number): void;
   sessionResume(sessionId: string, projectKey: string, projectDir: string, idleDurationMs: number): void;
   messageRouted(sessionId: string, projectKey: string, projectDir: string, opts?: { agentTarget?: string; queueDepth?: number }): void;
+  messageCompleted(sessionId: string, projectKey: string, projectDir: string, usage: ClaudeUsage, opts?: { agentTarget?: string }): void;
 }
 
 const DEFAULT_PATH = join(homedir(), '.pulse', 'events', 'mpg-sessions.jsonl');
@@ -76,6 +78,22 @@ export function createPulseEmitter(filePath?: string): PulseEmitter {
         ...baseEvent('message_routed', sessionId, projectKey, projectDir),
         agent_target: opts?.agentTarget,
         queue_depth: opts?.queueDepth ?? 0,
+      });
+    },
+
+    messageCompleted(sessionId, projectKey, projectDir, usage, opts) {
+      emit({
+        ...baseEvent('message_completed', sessionId, projectKey, projectDir),
+        agent_target: opts?.agentTarget,
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cache_creation_input_tokens: usage.cache_creation_input_tokens,
+        cache_read_input_tokens: usage.cache_read_input_tokens,
+        total_cost_usd: usage.total_cost_usd,
+        duration_ms: usage.duration_ms,
+        duration_api_ms: usage.duration_api_ms,
+        num_turns: usage.num_turns,
+        model: usage.model,
       });
     },
   };
