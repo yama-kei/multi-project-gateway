@@ -32,6 +32,56 @@ describe('parseClaudeJsonOutput', () => {
   it('throws on invalid JSON', () => {
     expect(() => parseClaudeJsonOutput('not json')).toThrow();
   });
+
+  it('extracts usage data when present in CLI output', () => {
+    const json = JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: 'Done.',
+      session_id: 'sess-1',
+      total_cost_usd: 0.0553,
+      duration_ms: 2282,
+      duration_api_ms: 2270,
+      num_turns: 1,
+      usage: {
+        input_tokens: 100,
+        output_tokens: 50,
+        cache_creation_input_tokens: 7912,
+        cache_read_input_tokens: 11587,
+      },
+      modelUsage: {
+        'claude-opus-4-6[1m]': {
+          inputTokens: 100,
+          outputTokens: 50,
+          costUSD: 0.0553,
+        },
+      },
+    });
+    const parsed = parseClaudeJsonOutput(json);
+    expect(parsed.usage).toBeDefined();
+    expect(parsed.usage!.input_tokens).toBe(100);
+    expect(parsed.usage!.output_tokens).toBe(50);
+    expect(parsed.usage!.cache_creation_input_tokens).toBe(7912);
+    expect(parsed.usage!.cache_read_input_tokens).toBe(11587);
+    expect(parsed.usage!.total_cost_usd).toBe(0.0553);
+    expect(parsed.usage!.duration_ms).toBe(2282);
+    expect(parsed.usage!.duration_api_ms).toBe(2270);
+    expect(parsed.usage!.num_turns).toBe(1);
+    expect(parsed.usage!.model).toBe('claude-opus-4-6[1m]');
+  });
+
+  it('returns undefined usage when CLI output has no usage fields', () => {
+    const json = JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: 'Hello',
+      session_id: 'sess-1',
+    });
+    const parsed = parseClaudeJsonOutput(json);
+    expect(parsed.usage).toBeUndefined();
+  });
 });
 
 describe('buildClaudeArgs', () => {
