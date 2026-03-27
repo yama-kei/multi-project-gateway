@@ -148,11 +148,13 @@ export function createSessionManager(defaults: {
       const effectiveArgs = item.extraArgs ? [...defaults.claudeArgs, ...item.extraArgs] : defaults.claudeArgs;
       await acquireSlot();
       if (pulseEmitter) {
+        // Session keys are "threadId:agentName" for agent sessions, "threadId" for default
+        const agentTarget = session.projectKey.includes(':') ? session.projectKey.split(':').pop() : undefined;
         pulseEmitter.messageRouted(
           session.sessionId ?? session.projectKey,
           session.projectKey,
           session.cwd,
-          { agentTarget: undefined, queueDepth: session.queue.length },
+          { agentTarget, queueDepth: session.queue.length },
         );
       }
       try {
