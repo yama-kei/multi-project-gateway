@@ -225,7 +225,10 @@ function refresh() {
         });
       }
 
-      // Sessions table
+      // Sessions table — sort by most recent last activity first
+      d.sessions.sort(function(a, b) {
+        return (b.lastActivity || 0) - (a.lastActivity || 0);
+      });
       var st = document.getElementById('sessions-table');
       if (d.sessions.length === 0) {
         st.innerHTML = '<div class="empty">No active sessions</div>';
