@@ -71,6 +71,7 @@ function buildDashboardHtml(): string {
 <div class="tabs">
   <button class="tab active" onclick="switchTab('overview')">Overview</button>
   <button class="tab" onclick="switchTab('activity')">Activity</button>
+  <button class="tab" onclick="switchTab('timeline')">Timeline</button>
 </div>
 
 <div id="tab-overview">
@@ -119,7 +120,6 @@ function buildDashboardHtml(): string {
     <div class="summary-card"><div class="summary-value" id="total-messages">0</div><div class="summary-label">Messages</div></div>
     <div class="summary-card"><div class="summary-value" id="avg-duration">0m</div><div class="summary-label">Avg Duration</div></div>
   </div>
-  <div class="chart-card" style="margin-bottom:16px"><h3>Session Timeline</h3><canvas id="timeline-chart"></canvas></div>
   <div class="chart-grid">
     <div class="chart-card"><h3>Messages Over Time</h3><canvas id="messages-chart"></canvas></div>
     <div class="chart-card"><h3>Cost Over Time</h3><canvas id="cost-chart"></canvas></div>
@@ -135,6 +135,15 @@ function buildDashboardHtml(): string {
   <div id="session-table"></div>
   <h3 style="margin:16px 0 8px">Cache Efficiency</h3>
   <div id="cache-table"></div>
+</div>
+
+<div id="tab-timeline" style="display:none">
+  <div class="range-selector timeline-range">
+    <button class="tl-range-btn range-btn active" data-range="24h">24h</button>
+    <button class="tl-range-btn range-btn" data-range="7d">7d</button>
+    <button class="tl-range-btn range-btn" data-range="30d">30d</button>
+  </div>
+  <div class="chart-card"><h3>Session Timeline</h3><canvas id="timeline-chart"></canvas></div>
 </div>
 
 <script>
@@ -270,6 +279,7 @@ setInterval(refresh, 5000);
 
 var chartInstances = {};
 var currentRange = '7d';
+var timelineRange = '24h';
 var CHART_COLORS = ['#58a6ff', '#3fb950', '#d29922', '#f85149', '#bc8cff', '#79c0ff'];
 
 function switchTab(tab) {
@@ -279,15 +289,26 @@ function switchTab(tab) {
   });
   document.getElementById('tab-overview').style.display = tab === 'overview' ? '' : 'none';
   document.getElementById('tab-activity').style.display = tab === 'activity' ? '' : 'none';
+  document.getElementById('tab-timeline').style.display = tab === 'timeline' ? '' : 'none';
   if (tab === 'activity') refreshActivity();
+  if (tab === 'timeline') refreshTimeline();
 }
 
-document.querySelectorAll('.range-btn').forEach(function(btn) {
+document.querySelectorAll('#tab-activity .range-btn').forEach(function(btn) {
   btn.addEventListener('click', function() {
-    document.querySelectorAll('.range-btn').forEach(function(b) { b.classList.remove('active'); });
+    document.querySelectorAll('#tab-activity .range-btn').forEach(function(b) { b.classList.remove('active'); });
     btn.classList.add('active');
     currentRange = btn.dataset.range;
     refreshActivity();
+  });
+});
+
+document.querySelectorAll('.tl-range-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('.tl-range-btn').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    timelineRange = btn.dataset.range;
+    refreshTimeline();
   });
 });
 
@@ -322,7 +343,13 @@ function formatSegmentDuration(startIso, endIso) {
 }
 
 function refreshTimeline() {
-  fetch('/api/activity/timeline?range=' + currentRange)
+  var RANGE_MS = { '24h': 86400000, '7d': 604800000, '30d': 2592000000 };
+  var now = Date.now();
+  var rangeMs = RANGE_MS[timelineRange] || RANGE_MS['24h'];
+  var xMin = now - rangeMs;
+  var xMax = now;
+
+  fetch('/api/activity/timeline?range=' + timelineRange)
     .then(function(r) { return r.json(); })
     .then(function(sessions) {
       destroyChart('timeline');
@@ -337,7 +364,6 @@ function refreshTimeline() {
       }
       var labels = sessions.map(function(s) { return s.label; });
       var datasets = [];
-      // Find max segments across all sessions
       var maxSegs = 0;
       sessions.forEach(function(s) { if (s.segments.length > maxSegs) maxSegs = s.segments.length; });
       for (var si = 0; si < maxSegs; si++) {
@@ -346,7 +372,10 @@ function refreshTimeline() {
           data: sessions.map(function(s) {
             var seg = s.segments[si];
             if (!seg) return null;
-            return [new Date(seg.start).getTime(), new Date(seg.end).getTime()];
+            var segStart = Math.max(new Date(seg.start).getTime(), xMin);
+            var segEnd = Math.min(new Date(seg.end).getTime(), xMax);
+            if (segStart >= segEnd) return null;
+            return [segStart, segEnd];
           }),
           backgroundColor: sessions.map(function(s) {
             var seg = s.segments[si];
@@ -371,6 +400,8 @@ function refreshTimeline() {
             x: {
               type: 'linear',
               position: 'top',
+              min: xMin,
+              max: xMax,
               ticks: {
                 color: '#8b949e',
                 callback: function(value) {
@@ -408,7 +439,6 @@ function refreshTimeline() {
           }
         }
       });
-      // Set canvas height based on session count
       var canvas = document.getElementById('timeline-chart');
       var minH = Math.max(120, sessions.length * 36 + 60);
       canvas.parentElement.style.minHeight = minH + 'px';
@@ -420,7 +450,6 @@ function refreshTimeline() {
 
 function refreshActivity() {
   var isHourBucket = currentRange === '24h';
-  refreshTimeline();
   fetch('/api/activity/summary?range=' + currentRange)
     .then(function(r) { return r.json(); })
     .then(function(d) {
@@ -543,6 +572,9 @@ function refreshActivity() {
 setInterval(function() {
   if (document.getElementById('tab-activity').style.display !== 'none') {
     refreshActivity();
+  }
+  if (document.getElementById('tab-timeline').style.display !== 'none') {
+    refreshTimeline();
   }
 }, 30000);
 </script>
