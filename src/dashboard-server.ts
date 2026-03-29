@@ -407,6 +407,7 @@ function refreshTimeline() {
               position: 'top',
               min: xMin,
               max: xMax,
+              stacked: true,
               ticks: {
                 color: '#8b949e',
                 callback: function(value) {
@@ -420,6 +421,7 @@ function refreshTimeline() {
               grid: { color: '#30363d' }
             },
             y: {
+              stacked: true,
               ticks: { color: '#8b949e', font: { family: 'monospace', size: 12 } },
               grid: { display: false }
             }
@@ -445,7 +447,7 @@ function refreshTimeline() {
         }
       });
       var canvas = document.getElementById('timeline-chart');
-      var minH = Math.max(150, sessions.length * 48 + 60);
+      var minH = Math.max(120, sessions.length * 28 + 60);
       canvas.parentElement.style.minHeight = minH + 'px';
       canvas.style.height = minH + 'px';
       chartInstances['timeline'].resize();
