@@ -1,16 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createSessionManager, type SessionManager } from '../src/session-manager.js';
 import type { SessionStore, PersistedSession } from '../src/session-store.js';
-
-vi.mock('../src/claude-cli.js', () => ({
-  runClaude: vi.fn().mockResolvedValue({
-    text: 'Mock response',
-    sessionId: 'mock-session-id',
-    isError: false,
-  }),
-  parseClaudeJsonOutput: vi.fn(),
-  buildClaudeArgs: vi.fn(),
-}));
+import type { AgentRuntime, SpawnOpts } from '../src/agent-runtime.js';
+import type { ClaudeResult } from '../src/claude-cli.js';
 
 vi.mock('../src/worktree.js', () => ({
   createWorktree: vi.fn().mockReturnValue('/tmp/a/.worktrees/thread-1'),
@@ -18,6 +10,21 @@ vi.mock('../src/worktree.js', () => ({
   listWorktrees: vi.fn().mockReturnValue([]),
   worktreePath: vi.fn((dir: string, key: string) => `${dir}/.worktrees/${key}`),
 }));
+
+/** Spy-able mock runtime that wraps a vi.fn() for spawn. */
+function createMockRuntime(): AgentRuntime & { spawn: ReturnType<typeof vi.fn<(opts: SpawnOpts) => Promise<ClaudeResult>>> } {
+  return {
+    name: 'mock',
+    canResume: false,
+    spawn: vi.fn<(opts: SpawnOpts) => Promise<ClaudeResult>>().mockResolvedValue({
+      text: 'Mock response',
+      sessionId: 'mock-session-id',
+      isError: false,
+    }),
+    async listOrphanedSessions() { return []; },
+    async reattach() { throw new Error('not implemented'); },
+  };
+}
 
 const defaults = {
   idleTimeoutMs: 500,
@@ -44,20 +51,15 @@ function createMockStore(initial: PersistedSession[] = []): SessionStore & { sav
 
 describe('SessionManager', () => {
   let manager: SessionManager;
+  let mockRuntime: ReturnType<typeof createMockRuntime>;
 
   beforeEach(async () => {
-    const { runClaude } = await import('../src/claude-cli.js');
-    vi.mocked(runClaude).mockReset();
-    vi.mocked(runClaude).mockResolvedValue({
-      text: 'Mock response',
-      sessionId: 'mock-session-id',
-      isError: false,
-    });
+    mockRuntime = createMockRuntime();
     const { createWorktree, removeWorktree } = await import('../src/worktree.js');
     vi.mocked(createWorktree).mockReset();
     vi.mocked(createWorktree).mockReturnValue('/tmp/a/.worktrees/thread-1');
     vi.mocked(removeWorktree).mockReset();
-    manager = createSessionManager(defaults);
+    manager = createSessionManager(defaults, mockRuntime);
   });
 
   afterEach(() => {
@@ -78,12 +80,9 @@ describe('SessionManager', () => {
   });
 
   it('queues concurrent messages to the same project', async () => {
-    const { runClaude } = await import('../src/claude-cli.js');
-    const mockRun = vi.mocked(runClaude);
-
     let resolveFirst: (v: any) => void;
-    mockRun.mockImplementationOnce(() => new Promise(r => { resolveFirst = r; }));
-    mockRun.mockResolvedValueOnce({ text: 'Second', sessionId: 'sid-2', isError: false });
+    mockRuntime.spawn.mockImplementationOnce(() => new Promise(r => { resolveFirst = r; }));
+    mockRuntime.spawn.mockResolvedValueOnce({ text: 'Second', sessionId: 'sid-2', isError: false });
 
     const first = manager.send('project-a', '/tmp/a', 'First');
     const second = manager.send('project-a', '/tmp/a', 'Second');
@@ -108,15 +107,12 @@ describe('SessionManager', () => {
   });
 
   it('retries without session ID when resume fails', async () => {
-    const { runClaude } = await import('../src/claude-cli.js');
-    const mockRun = vi.mocked(runClaude);
-
-    mockRun.mockResolvedValueOnce({ text: 'First', sessionId: 'sid-1', isError: false });
+    mockRuntime.spawn.mockResolvedValueOnce({ text: 'First', sessionId: 'sid-1', isError: false });
     await manager.send('project-a', '/tmp/a', 'Hello');
     expect(manager.getSession('project-a')?.sessionId).toBe('sid-1');
 
-    mockRun.mockRejectedValueOnce(new Error('claude exited with code 1'));
-    mockRun.mockResolvedValueOnce({ text: 'Recovered', sessionId: 'sid-2', isError: false });
+    mockRuntime.spawn.mockRejectedValueOnce(new Error('claude exited with code 1'));
+    mockRuntime.spawn.mockResolvedValueOnce({ text: 'Recovered', sessionId: 'sid-2', isError: false });
 
     const result = await manager.send('project-a', '/tmp/a', 'Try again');
     expect(result.text).toBe('Recovered');
@@ -125,11 +121,8 @@ describe('SessionManager', () => {
   });
 
   it('enforces global concurrency limit', async () => {
-    const { runClaude } = await import('../src/claude-cli.js');
-    const mockRun = vi.mocked(runClaude);
-
     const resolvers: Array<(v: any) => void> = [];
-    mockRun.mockImplementation(() => new Promise(r => { resolvers.push(r); }));
+    mockRuntime.spawn.mockImplementation(() => new Promise(r => { resolvers.push(r); }));
 
     const p1 = manager.send('project-a', '/tmp/a', 'A');
     const p2 = manager.send('project-b', '/tmp/b', 'B');
@@ -153,15 +146,12 @@ describe('SessionManager', () => {
   });
 
   it('detects silent session ID change', async () => {
-    const { runClaude } = await import('../src/claude-cli.js');
-    const mockRun = vi.mocked(runClaude);
-
-    mockRun.mockResolvedValueOnce({ text: 'First', sessionId: 'sid-1', isError: false });
+    mockRuntime.spawn.mockResolvedValueOnce({ text: 'First', sessionId: 'sid-1', isError: false });
     await manager.send('project-a', '/tmp/a', 'Hello');
     expect(manager.getSession('project-a')?.sessionId).toBe('sid-1');
 
     // Claude returns a different session ID without erroring
-    mockRun.mockResolvedValueOnce({ text: 'Different context', sessionId: 'sid-2', isError: false });
+    mockRuntime.spawn.mockResolvedValueOnce({ text: 'Different context', sessionId: 'sid-2', isError: false });
     const result = await manager.send('project-a', '/tmp/a', 'Continue');
     expect(result.sessionChanged).toBe(true);
     expect(result.text).toBe('Different context');
@@ -169,13 +159,10 @@ describe('SessionManager', () => {
   });
 
   it('does not flag sessionChanged when session ID stays the same', async () => {
-    const { runClaude } = await import('../src/claude-cli.js');
-    const mockRun = vi.mocked(runClaude);
-
-    mockRun.mockResolvedValueOnce({ text: 'First', sessionId: 'sid-1', isError: false });
+    mockRuntime.spawn.mockResolvedValueOnce({ text: 'First', sessionId: 'sid-1', isError: false });
     await manager.send('project-a', '/tmp/a', 'Hello');
 
-    mockRun.mockResolvedValueOnce({ text: 'Second', sessionId: 'sid-1', isError: false });
+    mockRuntime.spawn.mockResolvedValueOnce({ text: 'Second', sessionId: 'sid-1', isError: false });
     const result = await manager.send('project-a', '/tmp/a', 'Continue');
     expect(result.sessionChanged).toBeUndefined();
   });
@@ -205,20 +192,18 @@ describe('SessionManager', () => {
     expect(manager.clearSession('no-such-project')).toBe(false);
   });
 
-  it('passes system prompt to runClaude', async () => {
-    const { runClaude } = await import('../src/claude-cli.js');
-    const mockRun = vi.mocked(runClaude);
-
-    const sm = createSessionManager(defaults, undefined);
+  it('passes system prompt to runtime.spawn', async () => {
+    const rt = createMockRuntime();
+    const sm = createSessionManager(defaults, rt);
     await sm.send('proj-1', '/tmp/proj', 'hello', { systemPrompt: 'You are a PM.' });
-    expect(mockRun).toHaveBeenCalledWith(
-      '/tmp/proj',
-      defaults.claudeArgs,
-      'hello',
-      undefined,
-      'You are a PM.',
-      undefined,
-    );
+    expect(rt.spawn).toHaveBeenCalledWith({
+      cwd: '/tmp/proj',
+      baseArgs: defaults.claudeArgs,
+      prompt: 'hello',
+      sessionId: undefined,
+      systemPrompt: 'You are a PM.',
+      timeoutMs: undefined,
+    });
     sm.shutdown();
   });
 
@@ -236,7 +221,7 @@ describe('SessionManager', () => {
       const store = createMockStore([
         { sessionId: 'restored-sid', projectKey: 'proj-x', cwd: '/tmp/x', lastActivity: Date.now() - 1000 },
       ]);
-      const m = createSessionManager(defaults, store);
+      const m = createSessionManager(defaults, mockRuntime, store);
       const session = m.getSession('proj-x');
       expect(session).toBeDefined();
       expect(session!.sessionId).toBe('restored-sid');
@@ -245,7 +230,7 @@ describe('SessionManager', () => {
 
     it('persists sessions to store after send', async () => {
       const store = createMockStore();
-      const m = createSessionManager(defaults, store);
+      const m = createSessionManager(defaults, mockRuntime, store);
       await m.send('proj-a', '/tmp/a', 'Hello');
       expect(store.saved).not.toBeNull();
       expect(store.saved!.get('proj-a')?.sessionId).toBe('mock-session-id');
@@ -254,7 +239,7 @@ describe('SessionManager', () => {
 
     it('persists sessions on shutdown', async () => {
       const store = createMockStore();
-      const m = createSessionManager(defaults, store);
+      const m = createSessionManager(defaults, mockRuntime, store);
       await m.send('proj-a', '/tmp/a', 'Hello');
       store.saved = null;
       m.shutdown();
@@ -262,22 +247,27 @@ describe('SessionManager', () => {
     });
 
     it('resumes Claude with restored session ID', async () => {
-      const { runClaude } = await import('../src/claude-cli.js');
-      const mockRun = vi.mocked(runClaude);
-
+      const rt = createMockRuntime();
       const store = createMockStore([
         { sessionId: 'old-sid', projectKey: 'proj-a', cwd: '/tmp/a', lastActivity: Date.now() - 1000 },
       ]);
-      const m = createSessionManager(defaults, store);
+      const m = createSessionManager(defaults, rt, store);
 
       await m.send('proj-a', '/tmp/a', 'Continue');
-      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Continue', 'old-sid', undefined, undefined);
+      expect(rt.spawn).toHaveBeenCalledWith({
+        cwd: '/tmp/a',
+        baseArgs: defaults.claudeArgs,
+        prompt: 'Continue',
+        sessionId: 'old-sid',
+        systemPrompt: undefined,
+        timeoutMs: undefined,
+      });
       m.shutdown();
     });
 
     it('keeps session on disk after idle cleanup', async () => {
       const store = createMockStore();
-      const m = createSessionManager(defaults, store);
+      const m = createSessionManager(defaults, mockRuntime, store);
       await m.send('proj-a', '/tmp/a', 'Hello');
 
       // Session is in memory and on disk
@@ -292,14 +282,12 @@ describe('SessionManager', () => {
     });
 
     it('resumes session from disk after idle cleanup', async () => {
-      const { runClaude } = await import('../src/claude-cli.js');
-      const mockRun = vi.mocked(runClaude);
-
+      const rt = createMockRuntime();
       const store = createMockStore();
-      const m = createSessionManager(defaults, store);
+      const m = createSessionManager(defaults, rt, store);
 
       // First message creates session
-      mockRun.mockResolvedValueOnce({ text: 'First', sessionId: 'sid-1', isError: false });
+      rt.spawn.mockResolvedValueOnce({ text: 'First', sessionId: 'sid-1', isError: false });
       await m.send('proj-a', '/tmp/a', 'Hello');
 
       // Wait for idle cleanup
@@ -307,10 +295,17 @@ describe('SessionManager', () => {
       expect(m.getSession('proj-a')).toBeUndefined();
 
       // New message should resume with the persisted session ID
-      mockRun.mockResolvedValueOnce({ text: 'Resumed', sessionId: 'sid-1', isError: false });
+      rt.spawn.mockResolvedValueOnce({ text: 'Resumed', sessionId: 'sid-1', isError: false });
       const result = await m.send('proj-a', '/tmp/a', 'Back again');
       expect(result.text).toBe('Resumed');
-      expect(mockRun).toHaveBeenLastCalledWith('/tmp/a', defaults.claudeArgs, 'Back again', 'sid-1', undefined, undefined);
+      expect(rt.spawn).toHaveBeenLastCalledWith({
+        cwd: '/tmp/a',
+        baseArgs: defaults.claudeArgs,
+        prompt: 'Back again',
+        sessionId: 'sid-1',
+        systemPrompt: undefined,
+        timeoutMs: undefined,
+      });
       m.shutdown();
     });
   });
@@ -318,23 +313,21 @@ describe('SessionManager', () => {
   describe('worktree sessions', () => {
     it('creates a worktree when worktree option is true', async () => {
       const { createWorktree } = await import('../src/worktree.js');
-      const { runClaude } = await import('../src/claude-cli.js');
       const mockCreate = vi.mocked(createWorktree);
-      const mockRun = vi.mocked(runClaude);
 
       mockCreate.mockReturnValue('/tmp/a/.worktrees/thread-1');
 
       await manager.send('thread-1', '/tmp/a', 'Hello', { worktree: true });
 
       expect(mockCreate).toHaveBeenCalledWith('/tmp/a', 'thread-1');
-      expect(mockRun).toHaveBeenCalledWith(
-        '/tmp/a/.worktrees/thread-1',
-        defaults.claudeArgs,
-        'Hello',
-        undefined,
-        undefined,
-        undefined,
-      );
+      expect(mockRuntime.spawn).toHaveBeenCalledWith({
+        cwd: '/tmp/a/.worktrees/thread-1',
+        baseArgs: defaults.claudeArgs,
+        prompt: 'Hello',
+        sessionId: undefined,
+        systemPrompt: undefined,
+        timeoutMs: undefined,
+      });
     });
 
     it('reuses existing worktree for subsequent messages', async () => {
@@ -351,14 +344,19 @@ describe('SessionManager', () => {
 
     it('does not create worktree when option is absent', async () => {
       const { createWorktree } = await import('../src/worktree.js');
-      const { runClaude } = await import('../src/claude-cli.js');
       const mockCreate = vi.mocked(createWorktree);
-      const mockRun = vi.mocked(runClaude);
 
       await manager.send('project-a', '/tmp/a', 'Hello');
 
       expect(mockCreate).not.toHaveBeenCalled();
-      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Hello', undefined, undefined, undefined);
+      expect(mockRuntime.spawn).toHaveBeenCalledWith({
+        cwd: '/tmp/a',
+        baseArgs: defaults.claudeArgs,
+        prompt: 'Hello',
+        sessionId: undefined,
+        systemPrompt: undefined,
+        timeoutMs: undefined,
+      });
     });
 
     it('removes worktree on clearSession', async () => {
@@ -378,7 +376,7 @@ describe('SessionManager', () => {
       vi.mocked(createWorktree).mockReturnValue('/tmp/a/.worktrees/thread-1');
 
       const store = createMockStore();
-      const m = createSessionManager(defaults, store);
+      const m = createSessionManager(defaults, mockRuntime, store);
       await m.send('thread-1', '/tmp/a', 'Hello', { worktree: true });
 
       expect(store.saved!.get('thread-1')?.worktreePath).toBe('/tmp/a/.worktrees/thread-1');
@@ -397,15 +395,10 @@ describe('SessionManager', () => {
     };
     let pulseManager: SessionManager;
 
-    beforeEach(async () => {
-      const { runClaude } = await import('../src/claude-cli.js');
-      vi.mocked(runClaude).mockReset();
-      vi.mocked(runClaude).mockResolvedValue({
-        text: 'Mock response',
-        sessionId: 'mock-session-id',
-        isError: false,
-      });
+    let pulseRuntime: ReturnType<typeof createMockRuntime>;
 
+    beforeEach(() => {
+      pulseRuntime = createMockRuntime();
       pulseEmitter = {
         sessionStart: vi.fn(),
         sessionEnd: vi.fn(),
@@ -414,7 +407,7 @@ describe('SessionManager', () => {
         messageRouted: vi.fn(),
         messageCompleted: vi.fn(),
       };
-      pulseManager = createSessionManager(defaults, undefined, pulseEmitter);
+      pulseManager = createSessionManager(defaults, pulseRuntime, undefined, pulseEmitter);
     });
 
     afterEach(() => {
@@ -470,7 +463,7 @@ describe('SessionManager', () => {
         cwd: '/tmp/a',
         lastActivity: Date.now() - 60000,
       }]);
-      const resumeManager = createSessionManager(defaults, store, pulseEmitter);
+      const resumeManager = createSessionManager(defaults, pulseRuntime, store, pulseEmitter);
       await resumeManager.send('project-a', '/tmp/a', 'Hello');
       expect(pulseEmitter.sessionResume).toHaveBeenCalledOnce();
       expect(pulseEmitter.sessionResume).toHaveBeenCalledWith(
@@ -481,10 +474,8 @@ describe('SessionManager', () => {
       resumeManager.shutdown();
     });
 
-    it('emits message_completed after successful runClaude with usage data', async () => {
-      const { runClaude } = await import('../src/claude-cli.js');
-      vi.mocked(runClaude).mockReset();
-      vi.mocked(runClaude).mockResolvedValue({
+    it('emits message_completed after successful spawn with usage data', async () => {
+      pulseRuntime.spawn.mockResolvedValue({
         text: 'Mock response',
         sessionId: 'mock-session-id',
         isError: false,
@@ -529,7 +520,7 @@ describe('SessionManager', () => {
         { sessionId: 'fresh', projectKey: 'fresh', cwd: '/tmp/a', lastActivity: now - 1000 },
         { sessionId: 'stale', projectKey: 'stale', cwd: '/tmp/b', lastActivity: now - 8 * 24 * 60 * 60 * 1000 },
       ]);
-      const m = createSessionManager({ ...defaults, sessionTtlMs: 7 * 24 * 60 * 60 * 1000 }, store);
+      const m = createSessionManager({ ...defaults, sessionTtlMs: 7 * 24 * 60 * 60 * 1000 }, mockRuntime, store);
       expect(m.getSession('fresh')).toBeDefined();
       expect(m.getSession('stale')).toBeUndefined();
       expect(store.saved!.has('stale')).toBe(false);
@@ -545,7 +536,7 @@ describe('SessionManager', () => {
         lastActivity: now - (5 - i) * 1000, // proj-0 oldest, proj-4 newest
       }));
       const store = createMockStore(entries);
-      const m = createSessionManager({ ...defaults, maxPersistedSessions: 3 }, store);
+      const m = createSessionManager({ ...defaults, maxPersistedSessions: 3 }, mockRuntime, store);
       // Should keep the 3 newest: proj-2, proj-3, proj-4
       expect(m.getSession('proj-0')).toBeUndefined();
       expect(m.getSession('proj-1')).toBeUndefined();
@@ -560,7 +551,7 @@ describe('SessionManager', () => {
       const store = createMockStore([
         { sessionId: 'old', projectKey: 'old-proj', cwd: '/tmp/old', lastActivity: now - 8 * 24 * 60 * 60 * 1000 },
       ]);
-      const m = createSessionManager({ ...defaults, sessionTtlMs: 7 * 24 * 60 * 60 * 1000 }, store);
+      const m = createSessionManager({ ...defaults, sessionTtlMs: 7 * 24 * 60 * 60 * 1000 }, mockRuntime, store);
       // The stale entry was pruned on startup; now send a message to trigger persistSessions
       await m.send('new-proj', '/tmp/new', 'Hello');
       expect(store.saved!.has('old-proj')).toBe(false);
