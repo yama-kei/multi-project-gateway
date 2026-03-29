@@ -366,43 +366,50 @@ function refreshTimeline() {
         });
         return;
       }
-      var labels = sessions.map(function(s) { return s.label; });
-      // Build one dataset per segment index; all share the same stack
-      // so Chart.js renders them on a single row per session.
-      var datasets = [];
-      var maxSegs = 0;
-      sessions.forEach(function(s) { if (s.segments.length > maxSegs) maxSegs = s.segments.length; });
-      for (var si = 0; si < maxSegs; si++) {
-        datasets.push({
-          label: 'Segment ' + si,
-          data: sessions.map(function(s) {
-            var seg = s.segments[si];
-            if (!seg) return null;
-            var segStart = Math.max(new Date(seg.start).getTime(), xMin);
-            var segEnd = Math.min(new Date(seg.end).getTime(), xMax);
-            if (segStart >= segEnd) return null;
-            return [segStart, segEnd];
-          }),
-          backgroundColor: sessions.map(function(s) {
-            var seg = s.segments[si];
-            if (!seg) return 'transparent';
-            return seg.state === 'processing' ? '#3fb950' : '#484f58';
-          }),
-          borderWidth: 0,
-          borderSkipped: false,
-          barThickness: 18,
-          stack: 'timeline',
-          _segments: sessions.map(function(s) { return s.segments[si] || null; }),
-          _labels: labels,
+      // Filter to sessions that have at least one visible segment
+      var visibleSessions = sessions.filter(function(s) {
+        return s.segments.some(function(seg) {
+          var start = Math.max(new Date(seg.start).getTime(), xMin);
+          var end = Math.min(new Date(seg.end).getTime(), xMax);
+          return end > start;
         });
-      }
+      });
+      var labels = visibleSessions.map(function(s) { return s.label; });
+
+      // Use a single dummy dataset (one point per session) so Chart.js
+      // lays out the y-axis labels. A custom plugin draws the real bars.
+      var dummyData = visibleSessions.map(function() { return [xMin, xMin]; });
+      var timelinePlugin = {
+        id: 'timelineSegments',
+        afterDatasetsDraw: function(chart) {
+          var ctx = chart.ctx;
+          var yScale = chart.scales.y;
+          var xScale = chart.scales.x;
+          var barH = Math.max(6, Math.min(18, yScale.height / visibleSessions.length * 0.7));
+          visibleSessions.forEach(function(session, i) {
+            var yCenter = yScale.getPixelForValue(i);
+            session.segments.forEach(function(seg) {
+              var start = Math.max(new Date(seg.start).getTime(), xMin);
+              var end = Math.min(new Date(seg.end).getTime(), xMax);
+              if (start >= end) return;
+              var x1 = xScale.getPixelForValue(start);
+              var x2 = xScale.getPixelForValue(end);
+              var w = Math.max(x2 - x1, 2); // min 2px so short segments are visible
+              ctx.fillStyle = seg.state === 'processing' ? '#3fb950' : '#484f58';
+              ctx.fillRect(x1, yCenter - barH / 2, w, barH);
+            });
+          });
+        }
+      };
+
       chartInstances['timeline'] = new Chart(document.getElementById('timeline-chart'), {
         type: 'bar',
-        data: { labels: labels, datasets: datasets },
+        data: { labels: labels, datasets: [{ data: dummyData, backgroundColor: 'transparent', borderWidth: 0, barThickness: 1 }] },
         options: {
           indexAxis: 'y',
           responsive: true,
           maintainAspectRatio: false,
+          animation: false,
           scales: {
             x: {
               type: 'linear',
@@ -422,32 +429,19 @@ function refreshTimeline() {
               grid: { color: '#30363d' }
             },
             y: {
-              ticks: { color: '#8b949e', font: { family: 'monospace', size: 12 } },
+              ticks: { color: '#8b949e', font: { family: 'monospace', size: 11 } },
               grid: { display: false }
             }
           },
           plugins: {
             legend: { display: false },
-            tooltip: {
-              callbacks: {
-                title: function(items) {
-                  if (!items.length) return '';
-                  var ds = items[0].dataset;
-                  return ds._labels[items[0].dataIndex];
-                },
-                label: function(item) {
-                  var seg = item.dataset._segments[item.dataIndex];
-                  if (!seg) return '';
-                  var state = seg.state.charAt(0).toUpperCase() + seg.state.slice(1);
-                  return state + ': ' + formatSegmentDuration(seg.start, seg.end);
-                }
-              }
-            }
+            tooltip: { enabled: false }
           }
-        }
+        },
+        plugins: [timelinePlugin]
       });
       var canvas = document.getElementById('timeline-chart');
-      var minH = Math.max(120, sessions.length * 32 + 60);
+      var minH = Math.max(120, visibleSessions.length * 24 + 60);
       canvas.parentElement.style.minHeight = minH + 'px';
       canvas.style.height = minH + 'px';
       chartInstances['timeline'].resize();
