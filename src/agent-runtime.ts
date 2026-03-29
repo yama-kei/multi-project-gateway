@@ -32,4 +32,7 @@ export interface AgentRuntime {
 
   /** Re-attach to an orphaned session and resume output capture. */
   reattach(sessionId: string): Promise<ClaudeResult>;
+
+  /** Clean up resources (tmux session, temp files) for a finished session. */
+  cleanup?(sessionKey: string): void;
 }

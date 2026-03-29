@@ -417,4 +417,27 @@ describe('loadConfig', () => {
     });
     expect(config2.projects['ch-1'].rateLimitPerUser).toBeUndefined();
   });
+
+  // --- persistence ---
+
+  it('defaults persistence to direct', () => {
+    const config = loadConfig({ projects: { 'ch-1': { directory: '/tmp/a' } } });
+    expect(config.defaults.persistence).toBe('direct');
+  });
+
+  it('accepts persistence: tmux', () => {
+    const config = loadConfig({
+      defaults: { persistence: 'tmux' },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.defaults.persistence).toBe('tmux');
+  });
+
+  it('falls back to direct for invalid persistence value', () => {
+    const config = loadConfig({
+      defaults: { persistence: 'docker' },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.defaults.persistence).toBe('direct');
+  });
 });

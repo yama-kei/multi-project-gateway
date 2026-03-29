@@ -139,6 +139,7 @@ export function createSessionManager(defaults: {
           session.messageCount,
         );
       }
+      if (runtime.cleanup) runtime.cleanup(session.projectKey);
       sessions.delete(session.projectKey);
     }, defaults.idleTimeoutMs);
   }
@@ -392,6 +393,7 @@ export function createSessionManager(defaults: {
       if (session.worktreePath && session.projectDir) {
         gitRemoveWorktree(session.projectDir, session.projectKey);
       }
+      if (runtime.cleanup) runtime.cleanup(projectKey);
       sessions.delete(projectKey);
       persistSessions();
       return true;
@@ -411,6 +413,7 @@ export function createSessionManager(defaults: {
       persistSessions();
       for (const session of sessions.values()) {
         if (session.idleTimer) clearTimeout(session.idleTimer);
+        if (runtime.cleanup) runtime.cleanup(session.projectKey);
       }
       sessions.clear();
     },
