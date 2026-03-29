@@ -111,6 +111,8 @@ export interface ActivityEngine {
       start: string;
       end: string;
       state: 'processing' | 'idle';
+      token_count?: number;
+      token_rate?: number;
     }>;
   }>;
 }
@@ -237,6 +239,16 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
       const TIMELINE_TYPES = new Set(['session_start', 'message_routed', 'message_completed', 'session_end', 'session_idle']);
       const relevant = events.filter(e => TIMELINE_TYPES.has(e.event_type));
 
+      // Collect message_completed events indexed by session for token enrichment
+      const completedBySession = new Map<string, PulseEvent[]>();
+      for (const e of events) {
+        if (e.event_type === 'message_completed') {
+          const list = completedBySession.get(e.session_id);
+          if (list) list.push(e);
+          else completedBySession.set(e.session_id, [e]);
+        }
+      }
+
       // Group by session_id
       const sessionMap = new Map<string, PulseEvent[]>();
       for (const e of relevant) {
@@ -245,10 +257,11 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
         else sessionMap.set(e.session_id, [e]);
       }
 
+      type Segment = { start: string; end: string; state: 'processing' | 'idle'; token_count?: number; token_rate?: number };
       const result: Array<{
         session_id: string;
         label: string;
-        segments: Array<{ start: string; end: string; state: 'processing' | 'idle' }>;
+        segments: Segment[];
       }> = [];
 
       for (const [sessionId, sessionEvents] of sessionMap) {
@@ -271,7 +284,7 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
         const label = `mpg/${shortId}/${persona}`;
 
         // Build segments by walking through events
-        const segments: Array<{ start: string; end: string; state: 'processing' | 'idle' }> = [];
+        const segments: Segment[] = [];
         let currentState: 'processing' | 'idle' = 'idle';
         let segmentStart = sessionEvents[0].timestamp;
 
@@ -304,6 +317,26 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
               segments.push({ start: segmentStart, end: lastEvent.timestamp, state: currentState });
             }
           }
+        }
+
+        // Enrich processing segments with token data
+        const completed = completedBySession.get(sessionId) || [];
+        for (const seg of segments) {
+          if (seg.state !== 'processing') continue;
+          const segStartMs = new Date(seg.start).getTime();
+          const segEndMs = new Date(seg.end).getTime();
+          const durationSec = (segEndMs - segStartMs) / 1000;
+
+          let tokenCount = 0;
+          for (const ev of completed) {
+            const evMs = new Date(ev.timestamp).getTime();
+            if (evMs >= segStartMs && evMs <= segEndMs) {
+              tokenCount += (Number(ev.input_tokens) || 0) + (Number(ev.output_tokens) || 0);
+            }
+          }
+
+          seg.token_count = tokenCount;
+          seg.token_rate = durationSec > 0 ? Math.round(tokenCount / durationSec) : 0;
         }
 
         result.push({ session_id: sessionId, label, segments });

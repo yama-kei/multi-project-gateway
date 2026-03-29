@@ -391,7 +391,8 @@ function refreshTimeline() {
         return;
       }
 
-      var totalH = HEADER_H + activeSessions.length * ROW_H + FOOTER_H;
+      var LEGEND_H = 28;
+      var totalH = HEADER_H + activeSessions.length * ROW_H + FOOTER_H + LEGEND_H;
       canvas.width = Math.floor(chartW * dpr);
       canvas.height = Math.floor(totalH * dpr);
       canvas.style.width = chartW + 'px';
@@ -434,6 +435,26 @@ function refreshTimeline() {
 
       _tlHitRects = [];
 
+      // Compute maxTokenRate across all visible processing segments for normalization
+      var maxTokenRate = 0;
+      for (var mi = 0; mi < activeSessions.length; mi++) {
+        for (var mj = 0; mj < activeSessions[mi].segments.length; mj++) {
+          var mseg = activeSessions[mi].segments[mj];
+          if (mseg.state === 'processing' && mseg.token_rate > maxTokenRate) {
+            maxTokenRate = mseg.token_rate;
+          }
+        }
+      }
+
+      function tokenRateColor(rate) {
+        if (!maxTokenRate || !rate) return 'hsl(130, 30%, 55%)';
+        var t = Math.min(rate / maxTokenRate, 1);
+        // Interpolate: low rate → light/desaturated green, high rate → dark/saturated green
+        var sat = 30 + t * 50;   // 30% → 80%
+        var light = 55 - t * 25; // 55% → 30%
+        return 'hsl(130, ' + sat + '%, ' + light + '%)';
+      }
+
       for (var ri = 0; ri < activeSessions.length; ri++) {
         var sess = activeSessions[ri];
         var rowY = HEADER_H + ri * ROW_H;
@@ -465,11 +486,41 @@ function refreshTimeline() {
           var x2 = timeToX(segEnd);
           var w = Math.max(x2 - x1, 1);
 
-          ctx.fillStyle = seg.state === 'processing' ? '#3fb950' : '#484f58';
+          ctx.fillStyle = seg.state === 'processing' ? tokenRateColor(seg.token_rate || 0) : '#484f58';
           ctx.fillRect(x1, barY, w, barH);
 
-          _tlHitRects.push({ x: x1, y: barY, w: w, h: barH, label: sess.label, state: seg.state, start: seg.start, end: seg.end });
+          _tlHitRects.push({ x: x1, y: barY, w: w, h: barH, label: sess.label, state: seg.state, start: seg.start, end: seg.end, token_count: seg.token_count || 0, token_rate: seg.token_rate || 0 });
         }
+      }
+
+      // Draw intensity legend below the chart
+      if (maxTokenRate > 0) {
+        var lgX = plotLeft;
+        var lgY = totalH - LEGEND_H + 4;
+        var lgW = 120;
+        var lgH = 10;
+
+        ctx.fillStyle = '#8b949e';
+        ctx.font = '10px -apple-system, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText('Token rate:', lgX, lgY + 9);
+
+        var gradX = lgX + 68;
+        // Draw gradient bar
+        for (var gi = 0; gi < lgW; gi++) {
+          var gt = gi / lgW;
+          var gSat = 30 + gt * 50;
+          var gLight = 55 - gt * 25;
+          ctx.fillStyle = 'hsl(130, ' + gSat + '%, ' + gLight + '%)';
+          ctx.fillRect(gradX + gi, lgY + 1, 1, lgH);
+        }
+
+        ctx.fillStyle = '#8b949e';
+        ctx.font = '9px -apple-system, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText('0', gradX, lgY + 22);
+        ctx.textAlign = 'right';
+        ctx.fillText(compactTokens(maxTokenRate) + '/s', gradX + lgW, lgY + 22);
       }
     })
     .catch(function(err) { console.error('Timeline fetch error:', err); });
@@ -491,7 +542,11 @@ function refreshTimeline() {
     }
     if (hit) {
       var state = hit.state.charAt(0).toUpperCase() + hit.state.slice(1);
-      tooltip.innerHTML = '<strong>' + hit.label + '</strong><br>' + state + ': ' + formatSegmentDuration(hit.start, hit.end);
+      var tokenInfo = '';
+      if (hit.state === 'processing' && hit.token_count > 0) {
+        tokenInfo = '<br>Tokens: ' + compactTokens(hit.token_count) + ' (' + compactTokens(hit.token_rate) + ' tok/s)';
+      }
+      tooltip.innerHTML = '<strong>' + hit.label + '</strong><br>' + state + ': ' + formatSegmentDuration(hit.start, hit.end) + tokenInfo;
       tooltip.style.display = 'block';
       tooltip.style.left = (e.clientX + 12) + 'px';
       tooltip.style.top = (e.clientY - 10) + 'px';
