@@ -104,6 +104,15 @@ export interface ActivityEngine {
     cache_read_tokens: number;
     cache_hit_ratio: number;
   };
+  sessionTimeline(range: TimeRange): Array<{
+    session_id: string;
+    label: string;
+    segments: Array<{
+      start: string;
+      end: string;
+      state: 'processing' | 'idle';
+    }>;
+  }>;
 }
 
 export function createActivityEngine(filePath?: string): ActivityEngine {
@@ -221,6 +230,86 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
         cache_read_tokens: cacheRead,
         cache_hit_ratio: denominator > 0 ? cacheRead / denominator : 0,
       };
+    },
+
+    sessionTimeline(range) {
+      const events = readEvents(target, range);
+      const TIMELINE_TYPES = new Set(['session_start', 'message_routed', 'message_completed', 'session_end', 'session_idle']);
+      const relevant = events.filter(e => TIMELINE_TYPES.has(e.event_type));
+
+      // Group by session_id
+      const sessionMap = new Map<string, PulseEvent[]>();
+      for (const e of relevant) {
+        const list = sessionMap.get(e.session_id);
+        if (list) list.push(e);
+        else sessionMap.set(e.session_id, [e]);
+      }
+
+      const result: Array<{
+        session_id: string;
+        label: string;
+        segments: Array<{ start: string; end: string; state: 'processing' | 'idle' }>;
+      }> = [];
+
+      for (const [sessionId, sessionEvents] of sessionMap) {
+        // Sort by timestamp
+        sessionEvents.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+
+        // Determine persona: prefer agent_name from session_start, then agent_target from message_routed
+        let persona = 'default';
+        const startEvent = sessionEvents.find(e => e.event_type === 'session_start');
+        if (startEvent && startEvent.agent_name) {
+          persona = String(startEvent.agent_name);
+        } else {
+          const routedEvent = sessionEvents.find(e => e.event_type === 'message_routed');
+          if (routedEvent && routedEvent.agent_target) {
+            persona = String(routedEvent.agent_target);
+          }
+        }
+
+        const shortId = sessionId.substring(0, 8);
+        const label = `mpg/${shortId}/${persona}`;
+
+        // Build segments by walking through events
+        const segments: Array<{ start: string; end: string; state: 'processing' | 'idle' }> = [];
+        let currentState: 'processing' | 'idle' = 'idle';
+        let segmentStart = sessionEvents[0].timestamp;
+
+        for (let i = 1; i < sessionEvents.length; i++) {
+          const e = sessionEvents[i];
+
+          if (e.event_type === 'message_routed' && currentState === 'idle') {
+            // End idle segment, start processing
+            segments.push({ start: segmentStart, end: e.timestamp, state: 'idle' });
+            segmentStart = e.timestamp;
+            currentState = 'processing';
+          } else if (e.event_type === 'message_completed' && currentState === 'processing') {
+            // End processing segment, back to idle
+            segments.push({ start: segmentStart, end: e.timestamp, state: 'processing' });
+            segmentStart = e.timestamp;
+            currentState = 'idle';
+          } else if (e.event_type === 'session_end' || e.event_type === 'session_idle') {
+            // End whatever current state is
+            segments.push({ start: segmentStart, end: e.timestamp, state: currentState });
+            segmentStart = e.timestamp;
+          }
+        }
+
+        // If session has no end event but had activity, close the last segment
+        const lastEvent = sessionEvents[sessionEvents.length - 1];
+        if (lastEvent.event_type !== 'session_end' && lastEvent.event_type !== 'session_idle') {
+          if (segmentStart !== lastEvent.timestamp || segments.length === 0) {
+            // Only add if there's actually a segment to close
+            if (segments.length > 0 || sessionEvents.length > 1) {
+              segments.push({ start: segmentStart, end: lastEvent.timestamp, state: currentState });
+            }
+          }
+        }
+
+        result.push({ session_id: sessionId, label, segments });
+      }
+
+      return result;
     },
   };
 }
