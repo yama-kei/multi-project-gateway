@@ -243,12 +243,16 @@ function refresh() {
       if (d.sessions.length === 0) {
         st.innerHTML = '<div class="empty">No active sessions</div>';
       } else {
-        var h = '<table><tr><th>Project</th><th>Session ID</th><th>Status</th><th>Duration</th><th>Last Activity</th></tr>';
+        var h = '<table><tr><th>Session</th><th>Status</th><th>Duration</th><th>Last Activity</th></tr>';
         for (var i = 0; i < d.sessions.length; i++) {
           var s = d.sessions[i];
           var sid = s.sessionId || '';
-          var shortSid = sid ? sid.slice(0, 12) + '...' : '—';
-          h += '<tr><td>' + escapeHtml(resolveProjectName(s.projectKey, projectNameMap)) + '</td><td><span class="clickable-id" style="cursor:pointer;text-decoration:underline dotted" title="Click to copy: ' + escapeHtml(sid) + '" onclick="copyToClipboard(\\'' + escapeHtml(sid) + '\\', this)">' + escapeHtml(shortSid) + '</span></td><td>' + sessionStatus(s) + '</td><td>' + formatDuration(s.createdAt) + '</td><td>' + formatAgo(s.lastActivity) + '</td></tr>';
+          var shortId = sid ? sid.slice(0, 8) : '';
+          var pkParts = (s.projectKey || '').split(':');
+          var projName = (projectNameMap && projectNameMap[pkParts[0]]) ? projectNameMap[pkParts[0]] : pkParts[0];
+          var role = pkParts.length > 1 ? pkParts[1] : '';
+          var sessionLabel = projName && shortId ? (role ? projName + '/' + shortId + '/' + role : projName + '/' + shortId) : (shortId || '—');
+          h += '<tr><td><span class="clickable-id" style="cursor:pointer;text-decoration:underline dotted" title="Click to copy: ' + escapeHtml(sid) + '" onclick="copyToClipboard(\\'' + escapeHtml(sid) + '\\', this)">' + escapeHtml(sessionLabel) + '</span></td><td>' + sessionStatus(s) + '</td><td>' + formatDuration(s.createdAt) + '</td><td>' + formatAgo(s.lastActivity) + '</td></tr>';
         }
         h += '</table>';
         st.innerHTML = h;
