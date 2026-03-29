@@ -366,18 +366,34 @@ function refreshTimeline() {
         });
         return;
       }
-      // Filter to sessions that have at least one visible segment
+      // Only show sessions that had processing activity (idle-only rows aren't useful)
       var visibleSessions = sessions.filter(function(s) {
         return s.segments.some(function(seg) {
+          if (seg.state !== 'processing') return false;
           var start = Math.max(new Date(seg.start).getTime(), xMin);
           var end = Math.min(new Date(seg.end).getTime(), xMax);
           return end > start;
         });
       });
+      if (visibleSessions.length === 0) {
+        var ctx = document.getElementById('timeline-chart');
+        chartInstances['timeline'] = new Chart(ctx, {
+          type: 'bar',
+          data: { labels: [], datasets: [] },
+          options: { indexAxis: 'y', plugins: { legend: { display: false }, title: { display: true, text: 'No active sessions in range', color: '#8b949e' } } }
+        });
+        return;
+      }
       var labels = visibleSessions.map(function(s) { return s.label; });
 
-      // Use a single dummy dataset (one point per session) so Chart.js
-      // lays out the y-axis labels. A custom plugin draws the real bars.
+      // Set canvas height BEFORE creating chart to avoid visual expansion
+      var canvas = document.getElementById('timeline-chart');
+      var ROW_H = 24;
+      var minH = Math.max(120, visibleSessions.length * ROW_H + 60);
+      canvas.parentElement.style.minHeight = minH + 'px';
+      canvas.style.height = minH + 'px';
+
+      // Single dummy dataset for y-axis labels; custom plugin draws the real bars
       var dummyData = visibleSessions.map(function() { return [xMin, xMin]; });
       var timelinePlugin = {
         id: 'timelineSegments',
@@ -385,7 +401,7 @@ function refreshTimeline() {
           var ctx = chart.ctx;
           var yScale = chart.scales.y;
           var xScale = chart.scales.x;
-          var barH = Math.max(6, Math.min(18, yScale.height / visibleSessions.length * 0.7));
+          var barH = Math.max(6, Math.min(16, yScale.height / visibleSessions.length * 0.65));
           visibleSessions.forEach(function(session, i) {
             var yCenter = yScale.getPixelForValue(i);
             session.segments.forEach(function(seg) {
@@ -394,7 +410,7 @@ function refreshTimeline() {
               if (start >= end) return;
               var x1 = xScale.getPixelForValue(start);
               var x2 = xScale.getPixelForValue(end);
-              var w = Math.max(x2 - x1, 2); // min 2px so short segments are visible
+              var w = Math.max(x2 - x1, 2);
               ctx.fillStyle = seg.state === 'processing' ? '#3fb950' : '#484f58';
               ctx.fillRect(x1, yCenter - barH / 2, w, barH);
             });
@@ -402,7 +418,7 @@ function refreshTimeline() {
         }
       };
 
-      chartInstances['timeline'] = new Chart(document.getElementById('timeline-chart'), {
+      chartInstances['timeline'] = new Chart(canvas, {
         type: 'bar',
         data: { labels: labels, datasets: [{ data: dummyData, backgroundColor: 'transparent', borderWidth: 0, barThickness: 1 }] },
         options: {
@@ -440,11 +456,6 @@ function refreshTimeline() {
         },
         plugins: [timelinePlugin]
       });
-      var canvas = document.getElementById('timeline-chart');
-      var minH = Math.max(120, visibleSessions.length * 24 + 60);
-      canvas.parentElement.style.minHeight = minH + 'px';
-      canvas.style.height = minH + 'px';
-      chartInstances['timeline'].resize();
     })
     .catch(function(err) { console.error('Timeline fetch error:', err); });
 }
