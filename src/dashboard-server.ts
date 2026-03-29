@@ -384,11 +384,12 @@ function refreshTimeline() {
           backgroundColor: sessions.map(function(s) {
             var seg = s.segments[si];
             if (!seg) return 'transparent';
-            return seg.state === 'processing' ? '#3fb950' : '#30363d';
+            return seg.state === 'processing' ? '#3fb950' : '#484f58';
           }),
           borderWidth: 0,
           borderSkipped: false,
-          barPercentage: 0.6,
+          barPercentage: 0.85,
+          categoryPercentage: 0.9,
           _segments: sessions.map(function(s) { return s.segments[si] || null; }),
           _labels: labels,
         });
@@ -419,7 +420,7 @@ function refreshTimeline() {
               grid: { color: '#30363d' }
             },
             y: {
-              ticks: { color: '#8b949e', font: { family: 'monospace', size: 11 } },
+              ticks: { color: '#8b949e', font: { family: 'monospace', size: 12 } },
               grid: { display: false }
             }
           },
@@ -444,7 +445,7 @@ function refreshTimeline() {
         }
       });
       var canvas = document.getElementById('timeline-chart');
-      var minH = Math.max(120, sessions.length * 36 + 60);
+      var minH = Math.max(150, sessions.length * 48 + 60);
       canvas.parentElement.style.minHeight = minH + 'px';
       canvas.style.height = minH + 'px';
       chartInstances['timeline'].resize();
