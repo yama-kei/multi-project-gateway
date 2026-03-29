@@ -475,6 +475,11 @@ For detailed architecture documentation — message lifecycle, session managemen
 - **Local only** — the gateway runs on the same machine as the project directories
 - **Optional Discord access control** — per-project `allowedRoles` restricts usage to specific Discord roles; `rateLimitPerUser` throttles per-user message rate. Without these, any user in a mapped channel can send prompts
 
+## Background reading
+
+- [From tmux to Discord: Building a Multi-Project Gateway for Claude Code](https://yamakei.info/essays/from-tmux-to-discord-building-a-multi-project-gateway-for-claude-code) — what motivated this project
+- [From Message Router to Agent Team: How MPG Learned to Coordinate](https://yamakei.info/essays/from-message-router-to-agent-team-how-mpg-learned-to-coordinate) — how the architecture evolved from simple routing to multi-agent coordination
+
 ## License
 
 MIT
