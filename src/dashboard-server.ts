@@ -143,7 +143,7 @@ function buildDashboardHtml(): string {
     <button class="tl-range-btn range-btn" data-range="7d">7d</button>
     <button class="tl-range-btn range-btn" data-range="30d">30d</button>
   </div>
-  <div class="chart-card"><h3>Session Timeline</h3><canvas id="timeline-chart"></canvas></div>
+  <div class="chart-card"><h3>Session Timeline</h3><canvas id="timeline-chart"></canvas><div id="timeline-tooltip" style="display:none;position:fixed;background:#161b22;border:1px solid #30363d;border-radius:6px;padding:8px 12px;color:#e1e4e8;font-size:12px;pointer-events:none;z-index:100;white-space:nowrap"></div></div>
 </div>
 
 <script>
@@ -346,6 +346,8 @@ function formatSegmentDuration(startIso, endIso) {
   return h + 'h ' + m + 'm';
 }
 
+var _tlHitRects = [];
+
 function refreshTimeline() {
   var RANGE_MS = { '24h': 86400000, '7d': 604800000, '30d': 2592000000 };
   var now = Date.now();
@@ -356,109 +358,151 @@ function refreshTimeline() {
   fetch('/api/activity/timeline?range=' + timelineRange)
     .then(function(r) { return r.json(); })
     .then(function(sessions) {
-      destroyChart('timeline');
-      if (!sessions || sessions.length === 0) {
-        var ctx = document.getElementById('timeline-chart');
-        chartInstances['timeline'] = new Chart(ctx, {
-          type: 'bar',
-          data: { labels: [], datasets: [] },
-          options: { indexAxis: 'y', plugins: { legend: { display: false }, title: { display: true, text: 'No session data', color: '#8b949e' } } }
-        });
-        return;
-      }
-      // Only show sessions that had processing activity (idle-only rows aren't useful)
-      var visibleSessions = sessions.filter(function(s) {
-        return s.segments.some(function(seg) {
-          if (seg.state !== 'processing') return false;
-          var start = Math.max(new Date(seg.start).getTime(), xMin);
-          var end = Math.min(new Date(seg.end).getTime(), xMax);
-          return end > start;
-        });
-      });
-      if (visibleSessions.length === 0) {
-        var ctx = document.getElementById('timeline-chart');
-        chartInstances['timeline'] = new Chart(ctx, {
-          type: 'bar',
-          data: { labels: [], datasets: [] },
-          options: { indexAxis: 'y', plugins: { legend: { display: false }, title: { display: true, text: 'No active sessions in range', color: '#8b949e' } } }
-        });
-        return;
-      }
-      var labels = visibleSessions.map(function(s) { return s.label; });
-
-      // Set canvas height BEFORE creating chart to avoid visual expansion
       var canvas = document.getElementById('timeline-chart');
-      var ROW_H = 24;
-      var minH = Math.max(120, visibleSessions.length * ROW_H + 60);
-      canvas.parentElement.style.minHeight = minH + 'px';
-      canvas.style.height = minH + 'px';
+      var dpr = window.devicePixelRatio || 1;
+      var containerW = canvas.parentElement.clientWidth - 32;
 
-      // Single dummy dataset for y-axis labels; custom plugin draws the real bars
-      var dummyData = visibleSessions.map(function() { return [xMin, xMin]; });
-      var timelinePlugin = {
-        id: 'timelineSegments',
-        afterDatasetsDraw: function(chart) {
-          var ctx = chart.ctx;
-          var yScale = chart.scales.y;
-          var xScale = chart.scales.x;
-          var barH = Math.max(6, Math.min(16, yScale.height / visibleSessions.length * 0.65));
-          visibleSessions.forEach(function(session, i) {
-            var yCenter = yScale.getPixelForValue(i);
-            session.segments.forEach(function(seg) {
-              var start = Math.max(new Date(seg.start).getTime(), xMin);
-              var end = Math.min(new Date(seg.end).getTime(), xMax);
-              if (start >= end) return;
-              var x1 = xScale.getPixelForValue(start);
-              var x2 = xScale.getPixelForValue(end);
-              var w = Math.max(x2 - x1, 2);
-              ctx.fillStyle = seg.state === 'processing' ? '#3fb950' : '#484f58';
-              ctx.fillRect(x1, yCenter - barH / 2, w, barH);
-            });
-          });
+      // Filter out sessions with only idle segments (no processing)
+      var activeSessions = sessions ? sessions.filter(function(s) {
+        return s.segments.some(function(seg) { return seg.state === 'processing'; });
+      }) : [];
+
+      var LABEL_W = 160;
+      var ROW_H = 32;
+      var HEADER_H = 28;
+      var FOOTER_H = 8;
+      var chartW = containerW;
+
+      if (!activeSessions.length) {
+        var h = 60;
+        canvas.width = Math.floor(chartW * dpr);
+        canvas.height = Math.floor(h * dpr);
+        canvas.style.width = chartW + 'px';
+        canvas.style.height = h + 'px';
+        var c = canvas.getContext('2d');
+        c.setTransform(dpr, 0, 0, dpr, 0, 0);
+        c.fillStyle = '#0d1117';
+        c.fillRect(0, 0, chartW, h);
+        c.fillStyle = '#8b949e';
+        c.font = '13px -apple-system, sans-serif';
+        c.textAlign = 'center';
+        c.fillText('No active sessions in range', chartW / 2, h / 2 + 4);
+        _tlHitRects = [];
+        return;
+      }
+
+      var totalH = HEADER_H + activeSessions.length * ROW_H + FOOTER_H;
+      canvas.width = Math.floor(chartW * dpr);
+      canvas.height = Math.floor(totalH * dpr);
+      canvas.style.width = chartW + 'px';
+      canvas.style.height = totalH + 'px';
+      var ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      // Background
+      ctx.fillStyle = '#0d1117';
+      ctx.fillRect(0, 0, chartW, totalH);
+
+      var plotLeft = LABEL_W;
+      var plotRight = chartW - 12;
+      var plotW = plotRight - plotLeft;
+
+      function timeToX(t) {
+        return plotLeft + ((t - xMin) / (xMax - xMin)) * plotW;
+      }
+
+      // X-axis time labels at top
+      ctx.fillStyle = '#8b949e';
+      ctx.font = '10px -apple-system, sans-serif';
+      ctx.textAlign = 'center';
+      var tickCount = Math.max(2, Math.min(8, Math.floor(plotW / 90)));
+      for (var ti = 0; ti <= tickCount; ti++) {
+        var t = xMin + (ti / tickCount) * (xMax - xMin);
+        var tx = timeToX(t);
+        var d = new Date(t);
+        var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        var lbl = months[d.getMonth()] + ' ' + d.getDate() + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+        ctx.fillText(lbl, tx, 14);
+        // Grid line
+        ctx.strokeStyle = '#30363d';
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(tx, HEADER_H);
+        ctx.lineTo(tx, totalH - FOOTER_H);
+        ctx.stroke();
+      }
+
+      _tlHitRects = [];
+
+      for (var ri = 0; ri < activeSessions.length; ri++) {
+        var sess = activeSessions[ri];
+        var rowY = HEADER_H + ri * ROW_H;
+        var barY = rowY + 6;
+        var barH = ROW_H - 12;
+
+        // Y-axis label
+        ctx.fillStyle = '#8b949e';
+        ctx.font = '11px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText(sess.label, LABEL_W - 8, rowY + ROW_H / 2 + 4);
+
+        // Row separator
+        ctx.strokeStyle = '#21262d';
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(plotLeft, rowY + ROW_H);
+        ctx.lineTo(plotRight, rowY + ROW_H);
+        ctx.stroke();
+
+        // Draw segments
+        for (var si = 0; si < sess.segments.length; si++) {
+          var seg = sess.segments[si];
+          var segStart = Math.max(new Date(seg.start).getTime(), xMin);
+          var segEnd = Math.min(new Date(seg.end).getTime(), xMax);
+          if (segStart >= segEnd) continue;
+
+          var x1 = timeToX(segStart);
+          var x2 = timeToX(segEnd);
+          var w = Math.max(x2 - x1, 1);
+
+          ctx.fillStyle = seg.state === 'processing' ? '#3fb950' : '#484f58';
+          ctx.fillRect(x1, barY, w, barH);
+
+          _tlHitRects.push({ x: x1, y: barY, w: w, h: barH, label: sess.label, state: seg.state, start: seg.start, end: seg.end });
         }
-      };
-
-      chartInstances['timeline'] = new Chart(canvas, {
-        type: 'bar',
-        data: { labels: labels, datasets: [{ data: dummyData, backgroundColor: 'transparent', borderWidth: 0, barThickness: 1 }] },
-        options: {
-          indexAxis: 'y',
-          responsive: true,
-          maintainAspectRatio: false,
-          animation: false,
-          scales: {
-            x: {
-              type: 'linear',
-              position: 'top',
-              min: xMin,
-              max: xMax,
-              ticks: {
-                color: '#8b949e',
-                callback: function(value) {
-                  var d = new Date(value);
-                  var hh = String(d.getHours()).padStart(2, '0');
-                  var mm = String(d.getMinutes()).padStart(2, '0');
-                  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-                  return months[d.getMonth()] + ' ' + d.getDate() + ' ' + hh + ':' + mm;
-                }
-              },
-              grid: { color: '#30363d' }
-            },
-            y: {
-              ticks: { color: '#8b949e', font: { family: 'monospace', size: 11 } },
-              grid: { display: false }
-            }
-          },
-          plugins: {
-            legend: { display: false },
-            tooltip: { enabled: false }
-          }
-        },
-        plugins: [timelinePlugin]
-      });
+      }
     })
     .catch(function(err) { console.error('Timeline fetch error:', err); });
 }
+
+// Timeline tooltip via mousemove
+(function() {
+  var canvas = document.getElementById('timeline-chart');
+  var tooltip = document.getElementById('timeline-tooltip');
+  canvas.addEventListener('mousemove', function(e) {
+    var rect = canvas.getBoundingClientRect();
+    var dpr = window.devicePixelRatio || 1;
+    var mx = (e.clientX - rect.left);
+    var my = (e.clientY - rect.top);
+    var hit = null;
+    for (var i = _tlHitRects.length - 1; i >= 0; i--) {
+      var r = _tlHitRects[i];
+      if (mx >= r.x && mx <= r.x + r.w && my >= r.y && my <= r.y + r.h) { hit = r; break; }
+    }
+    if (hit) {
+      var state = hit.state.charAt(0).toUpperCase() + hit.state.slice(1);
+      tooltip.innerHTML = '<strong>' + hit.label + '</strong><br>' + state + ': ' + formatSegmentDuration(hit.start, hit.end);
+      tooltip.style.display = 'block';
+      tooltip.style.left = (e.clientX + 12) + 'px';
+      tooltip.style.top = (e.clientY - 10) + 'px';
+    } else {
+      tooltip.style.display = 'none';
+    }
+  });
+  canvas.addEventListener('mouseleave', function() {
+    tooltip.style.display = 'none';
+  });
+})();
 
 function refreshActivity() {
   var isHourBucket = currentRange === '24h';
