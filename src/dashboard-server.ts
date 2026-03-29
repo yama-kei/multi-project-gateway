@@ -340,22 +340,32 @@ function refreshTimeline() {
       // Find max segments across all sessions
       var maxSegs = 0;
       sessions.forEach(function(s) { if (s.segments.length > maxSegs) maxSegs = s.segments.length; });
+
+      // Compute x-axis range based on selected time period
+      var rangeMs = { '24h': 86400000, '7d': 604800000, '30d': 2592000000 };
+      var xMax = Date.now();
+      var xMin = xMax - (rangeMs[currentRange] || rangeMs['7d']);
+
       for (var si = 0; si < maxSegs; si++) {
         datasets.push({
           label: 'Segment ' + si,
           data: sessions.map(function(s) {
             var seg = s.segments[si];
             if (!seg) return null;
-            return [new Date(seg.start).getTime(), new Date(seg.end).getTime()];
+            var start = Math.max(new Date(seg.start).getTime(), xMin);
+            var end = Math.min(new Date(seg.end).getTime(), xMax);
+            if (start >= end) return null;
+            return [start, end];
           }),
           backgroundColor: sessions.map(function(s) {
             var seg = s.segments[si];
             if (!seg) return 'transparent';
-            return seg.state === 'processing' ? '#3fb950' : '#30363d';
+            return seg.state === 'processing' ? '#3fb950' : '#484f58';
           }),
           borderWidth: 0,
           borderSkipped: false,
-          barPercentage: 0.6,
+          barPercentage: 0.85,
+          categoryPercentage: 0.9,
           _segments: sessions.map(function(s) { return s.segments[si] || null; }),
           _labels: labels,
         });
@@ -371,6 +381,8 @@ function refreshTimeline() {
             x: {
               type: 'linear',
               position: 'top',
+              min: xMin,
+              max: xMax,
               ticks: {
                 color: '#8b949e',
                 callback: function(value) {
@@ -384,7 +396,7 @@ function refreshTimeline() {
               grid: { color: '#30363d' }
             },
             y: {
-              ticks: { color: '#8b949e', font: { family: 'monospace', size: 11 } },
+              ticks: { color: '#8b949e', font: { family: 'monospace', size: 12 } },
               grid: { display: false }
             }
           },
@@ -408,9 +420,9 @@ function refreshTimeline() {
           }
         }
       });
-      // Set canvas height based on session count
+      // Set canvas height based on session count (taller rows for visibility)
       var canvas = document.getElementById('timeline-chart');
-      var minH = Math.max(120, sessions.length * 36 + 60);
+      var minH = Math.max(150, sessions.length * 48 + 60);
       canvas.parentElement.style.minHeight = minH + 'px';
       canvas.style.height = minH + 'px';
       chartInstances['timeline'].resize();
