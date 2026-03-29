@@ -367,6 +367,8 @@ function refreshTimeline() {
         return;
       }
       var labels = sessions.map(function(s) { return s.label; });
+      // Build one dataset per segment index; all share the same stack
+      // so Chart.js renders them on a single row per session.
       var datasets = [];
       var maxSegs = 0;
       sessions.forEach(function(s) { if (s.segments.length > maxSegs) maxSegs = s.segments.length; });
@@ -388,8 +390,8 @@ function refreshTimeline() {
           }),
           borderWidth: 0,
           borderSkipped: false,
-          barPercentage: 1.0,
-          categoryPercentage: 1.0,
+          barThickness: 18,
+          stack: 'timeline',
           _segments: sessions.map(function(s) { return s.segments[si] || null; }),
           _labels: labels,
         });
@@ -407,7 +409,6 @@ function refreshTimeline() {
               position: 'top',
               min: xMin,
               max: xMax,
-              stacked: true,
               ticks: {
                 color: '#8b949e',
                 callback: function(value) {
@@ -421,7 +422,6 @@ function refreshTimeline() {
               grid: { color: '#30363d' }
             },
             y: {
-              stacked: true,
               ticks: { color: '#8b949e', font: { family: 'monospace', size: 12 } },
               grid: { display: false }
             }
@@ -447,7 +447,7 @@ function refreshTimeline() {
         }
       });
       var canvas = document.getElementById('timeline-chart');
-      var minH = Math.max(120, sessions.length * 28 + 60);
+      var minH = Math.max(120, sessions.length * 32 + 60);
       canvas.parentElement.style.minHeight = minH + 'px';
       canvas.style.height = minH + 'px';
       chartInstances['timeline'].resize();
