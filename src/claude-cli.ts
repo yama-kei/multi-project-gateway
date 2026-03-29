@@ -128,7 +128,6 @@ export function runClaude(
   sessionId: string | undefined,
   systemPrompt?: string,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
-  earlyLivenessMs?: number,
 ): Promise<ClaudeResult> {
   return new Promise((resolve, reject) => {
     const args = buildClaudeArgs(baseArgs, prompt, sessionId, systemPrompt);
@@ -140,7 +139,6 @@ export function runClaude(
     let stdout = '';
     let stderr = '';
     let settled = false;
-    let receivedOutput = false;
 
     const timer = setTimeout(() => {
       if (!settled) {
@@ -150,38 +148,17 @@ export function runClaude(
       }
     }, timeoutMs);
 
-    let livenessTimer: ReturnType<typeof setTimeout> | undefined;
-    if (earlyLivenessMs) {
-      livenessTimer = setTimeout(() => {
-        if (!settled && !receivedOutput) {
-          settled = true;
-          clearTimeout(timer);
-          proc.kill('SIGTERM');
-          reject(new Error(`Session produced no output within ${earlyLivenessMs / 1000}s — likely stuck`));
-        }
-      }, earlyLivenessMs);
-    }
-
-    function onOutput() {
-      if (!receivedOutput) {
-        receivedOutput = true;
-        if (livenessTimer) clearTimeout(livenessTimer);
-      }
-    }
-
     proc.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
-      onOutput();
     });
 
     proc.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString();
-      onOutput();
     });
 
     proc.on('close', (code) => {
       clearTimeout(timer);
-      if (livenessTimer) clearTimeout(livenessTimer);
+
       if (settled) return;
       settled = true;
       if (code !== 0) {
@@ -198,7 +175,7 @@ export function runClaude(
 
     proc.on('error', (err) => {
       clearTimeout(timer);
-      if (livenessTimer) clearTimeout(livenessTimer);
+
       if (settled) return;
       settled = true;
       reject(new Error(`Failed to spawn claude: ${err.message}`));
