@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
-import { runClaude, type ClaudeResult } from './claude-cli.js';
+import type { ClaudeResult } from './claude-cli.js';
+import type { AgentRuntime } from './agent-runtime.js';
 import type { SessionStore, PersistedSession } from './session-store.js';
 import type { PulseEmitter } from './pulse-events.js';
 import { createWorktree as gitCreateWorktree, removeWorktree as gitRemoveWorktree } from './worktree.js';
@@ -51,7 +52,7 @@ export function createSessionManager(defaults: {
   sessionTtlMs?: number;
   maxPersistedSessions?: number;
   claudeArgs: string[];
-}, store?: SessionStore, pulseEmitter?: PulseEmitter): SessionManager {
+}, runtime: AgentRuntime, store?: SessionStore, pulseEmitter?: PulseEmitter): SessionManager {
   const sessions = new Map<string, InternalSession>();
   const sessionTtlMs = defaults.sessionTtlMs ?? 7 * 24 * 60 * 60 * 1000;
   const maxPersistedSessions = defaults.maxPersistedSessions ?? 50;
@@ -138,6 +139,7 @@ export function createSessionManager(defaults: {
           session.messageCount,
         );
       }
+      if (runtime.cleanup) runtime.cleanup(session.projectKey);
       sessions.delete(session.projectKey);
     }, defaults.idleTimeoutMs);
   }
@@ -161,14 +163,14 @@ export function createSessionManager(defaults: {
         );
       }
       try {
-        const result = await runClaude(
-          session.cwd,
-          effectiveArgs,
-          item.prompt,
-          session.sessionId,
-          item.systemPrompt,
-          item.timeoutMs,
-        );
+        const result = await runtime.spawn({
+          cwd: session.cwd,
+          baseArgs: effectiveArgs,
+          prompt: item.prompt,
+          sessionId: session.sessionId,
+          systemPrompt: item.systemPrompt,
+          timeoutMs: item.timeoutMs,
+        });
         const sessionChanged = !!(
           session.sessionId &&
           result.sessionId &&
@@ -198,7 +200,7 @@ export function createSessionManager(defaults: {
         if (session.sessionId) {
           session.sessionId = undefined;
           try {
-            const result = await runClaude(session.cwd, effectiveArgs, item.prompt, undefined, item.systemPrompt, item.timeoutMs);
+            const result = await runtime.spawn({ cwd: session.cwd, baseArgs: effectiveArgs, prompt: item.prompt, sessionId: undefined, systemPrompt: item.systemPrompt, timeoutMs: item.timeoutMs });
             session.sessionId = result.sessionId || undefined;
             session.lastActivity = Date.now();
             session.messageCount++;
@@ -391,6 +393,7 @@ export function createSessionManager(defaults: {
       if (session.worktreePath && session.projectDir) {
         gitRemoveWorktree(session.projectDir, session.projectKey);
       }
+      if (runtime.cleanup) runtime.cleanup(projectKey);
       sessions.delete(projectKey);
       persistSessions();
       return true;
@@ -410,6 +413,7 @@ export function createSessionManager(defaults: {
       persistSessions();
       for (const session of sessions.values()) {
         if (session.idleTimer) clearTimeout(session.idleTimer);
+        if (runtime.cleanup) runtime.cleanup(session.projectKey);
       }
       sessions.clear();
     },

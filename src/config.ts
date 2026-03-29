@@ -34,6 +34,8 @@ export const DEFAULT_ALLOWED_TOOLS: string[] = [
   'TodoWrite',
 ];
 
+export type RuntimePersistence = 'direct' | 'tmux';
+
 export interface GatewayDefaults {
   idleTimeoutMs: number;
   maxConcurrentSessions: number;
@@ -47,6 +49,7 @@ export interface GatewayDefaults {
   stuckNotifyMs: number;
   httpPort: number | false;
   logLevel: LogLevel;
+  persistence: RuntimePersistence;
 }
 
 export interface GatewayConfig {
@@ -158,6 +161,7 @@ export function loadConfig(raw: unknown): GatewayConfig {
       stuckNotifyMs: typeof defaults.stuckNotifyMs === 'number' ? defaults.stuckNotifyMs : 300_000,
       httpPort: defaults.httpPort === false ? false : (typeof defaults.httpPort === 'number' ? defaults.httpPort : 3100),
       logLevel: isValidLogLevel(defaults.logLevel) ? defaults.logLevel : 'info',
+      persistence: defaults.persistence === 'tmux' ? 'tmux' : 'direct',
     },
     projects: validated,
   };
