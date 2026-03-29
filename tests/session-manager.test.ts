@@ -218,6 +218,7 @@ describe('SessionManager', () => {
       undefined,
       'You are a PM.',
       undefined,
+      undefined,
     );
     sm.shutdown();
   });
@@ -271,7 +272,7 @@ describe('SessionManager', () => {
       const m = createSessionManager(defaults, store);
 
       await m.send('proj-a', '/tmp/a', 'Continue');
-      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Continue', 'old-sid', undefined, undefined);
+      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Continue', 'old-sid', undefined, undefined, undefined);
       m.shutdown();
     });
 
@@ -310,7 +311,7 @@ describe('SessionManager', () => {
       mockRun.mockResolvedValueOnce({ text: 'Resumed', sessionId: 'sid-1', isError: false });
       const result = await m.send('proj-a', '/tmp/a', 'Back again');
       expect(result.text).toBe('Resumed');
-      expect(mockRun).toHaveBeenLastCalledWith('/tmp/a', defaults.claudeArgs, 'Back again', 'sid-1', undefined, undefined);
+      expect(mockRun).toHaveBeenLastCalledWith('/tmp/a', defaults.claudeArgs, 'Back again', 'sid-1', undefined, undefined, undefined);
       m.shutdown();
     });
   });
@@ -334,6 +335,7 @@ describe('SessionManager', () => {
         undefined,
         undefined,
         undefined,
+        120_000,
       );
     });
 
@@ -358,7 +360,7 @@ describe('SessionManager', () => {
       await manager.send('project-a', '/tmp/a', 'Hello');
 
       expect(mockCreate).not.toHaveBeenCalled();
-      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Hello', undefined, undefined, undefined);
+      expect(mockRun).toHaveBeenCalledWith('/tmp/a', defaults.claudeArgs, 'Hello', undefined, undefined, undefined, undefined);
     });
 
     it('removes worktree on clearSession', async () => {
@@ -383,6 +385,44 @@ describe('SessionManager', () => {
 
       expect(store.saved!.get('thread-1')?.worktreePath).toBe('/tmp/a/.worktrees/thread-1');
       m.shutdown();
+    });
+  });
+
+  describe('worktree liveness check', () => {
+    it('passes earlyLivenessMs to runClaude for worktree sessions', async () => {
+      const { runClaude } = await import('../src/claude-cli.js');
+      const { createWorktree } = await import('../src/worktree.js');
+      const mockRun = vi.mocked(runClaude);
+      vi.mocked(createWorktree).mockReturnValue('/tmp/a/.worktrees/thread-1');
+
+      await manager.send('thread-1', '/tmp/a', 'Hello', { worktree: true });
+
+      expect(mockRun).toHaveBeenCalledWith(
+        '/tmp/a/.worktrees/thread-1',
+        defaults.claudeArgs,
+        'Hello',
+        undefined,
+        undefined,
+        undefined,
+        120_000,
+      );
+    });
+
+    it('does not pass earlyLivenessMs for non-worktree sessions', async () => {
+      const { runClaude } = await import('../src/claude-cli.js');
+      const mockRun = vi.mocked(runClaude);
+
+      await manager.send('project-a', '/tmp/a', 'Hello');
+
+      expect(mockRun).toHaveBeenCalledWith(
+        '/tmp/a',
+        defaults.claudeArgs,
+        'Hello',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+      );
     });
   });
 

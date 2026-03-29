@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { runClaude, type ClaudeResult } from './claude-cli.js';
 import type { SessionStore, PersistedSession } from './session-store.js';
 import type { PulseEmitter } from './pulse-events.js';
@@ -159,6 +160,7 @@ export function createSessionManager(defaults: {
           { agentTarget, queueDepth: session.queue.length },
         );
       }
+      const earlyLivenessMs = session.worktreePath ? 120_000 : undefined;
       try {
         const result = await runClaude(
           session.cwd,
@@ -167,6 +169,7 @@ export function createSessionManager(defaults: {
           session.sessionId,
           item.systemPrompt,
           item.timeoutMs,
+          earlyLivenessMs,
         );
         const sessionChanged = !!(
           session.sessionId &&
@@ -197,7 +200,7 @@ export function createSessionManager(defaults: {
         if (session.sessionId) {
           session.sessionId = undefined;
           try {
-            const result = await runClaude(session.cwd, effectiveArgs, item.prompt, undefined, item.systemPrompt, item.timeoutMs);
+            const result = await runClaude(session.cwd, effectiveArgs, item.prompt, undefined, item.systemPrompt, item.timeoutMs, earlyLivenessMs);
             session.sessionId = result.sessionId || undefined;
             session.lastActivity = Date.now();
             session.messageCount++;
@@ -255,7 +258,10 @@ export function createSessionManager(defaults: {
       }
 
       let effectiveCwd = cwd;
-      let worktreePath: string | undefined = restoredWorktreePath;
+      let worktreePath: string | undefined =
+        restoredWorktreePath && existsSync(restoredWorktreePath)
+          ? restoredWorktreePath
+          : undefined;
       let projectDir: string | undefined;
 
       if (useWorktree && !worktreePath) {

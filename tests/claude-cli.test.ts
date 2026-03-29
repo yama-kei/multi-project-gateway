@@ -285,3 +285,11 @@ describe('runClaude timeout', () => {
     await expect(result).rejects.toThrow(/timed out/i);
   }, 5_000);
 });
+
+describe('runClaude early liveness check', () => {
+  it('rejects with liveness error when no output within earlyLivenessMs', async () => {
+    // 'sleep 10' produces no output — liveness timer should fire first
+    const result = runClaude('/tmp', [], 'test', undefined, undefined, 10_000, 200);
+    await expect(result).rejects.toThrow(/no output.*stuck/i);
+  }, 5_000);
+});
