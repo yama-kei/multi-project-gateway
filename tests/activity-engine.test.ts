@@ -154,6 +154,27 @@ describe('ActivityEngine', () => {
       const total = buckets.reduce((sum, b) => sum + b.value, 0);
       expect(total).toBeCloseTo(0.08);
     });
+
+    it('15min bucket groups events into 15-minute intervals', () => {
+      const base = new Date();
+      base.setMinutes(2, 0, 0);  // :02
+      const t1 = new Date(base);
+      const t2 = new Date(base.getTime() + 5 * 60 * 1000);  // :07 — same 15min bucket as t1 (0-14)
+      const t3 = new Date(base.getTime() + 20 * 60 * 1000); // :22 — next 15min bucket (15-29)
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', timestamp: t1.toISOString() }),
+        makeEvent({ event_type: 'session_start', timestamp: t2.toISOString() }),
+        makeEvent({ event_type: 'session_start', timestamp: t3.toISOString() }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const buckets = engine.bucketed('3h', '15min', 'session_start');
+      const total = buckets.reduce((sum, b) => sum + b.value, 0);
+      expect(total).toBe(3);
+      // t1 and t2 should be in the same bucket, t3 in a different one
+      expect(buckets.length).toBe(2);
+      expect(buckets[0].value).toBe(2);
+      expect(buckets[1].value).toBe(1);
+    });
   });
 
   describe('modelBreakdown', () => {
