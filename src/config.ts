@@ -44,6 +44,7 @@ export interface GatewayDefaults {
   disallowedTools: string[];
   maxTurnsPerAgent: number;
   agentTimeoutMs: number;
+  stuckNotifyMs: number;
   httpPort: number | false;
   logLevel: LogLevel;
 }
@@ -154,6 +155,7 @@ export function loadConfig(raw: unknown): GatewayConfig {
       disallowedTools: defaultDisallowed,
       maxTurnsPerAgent: typeof defaults.maxTurnsPerAgent === 'number' ? defaults.maxTurnsPerAgent : 5,
       agentTimeoutMs: typeof defaults.agentTimeoutMs === 'number' ? defaults.agentTimeoutMs : 3 * 60 * 1000,
+      stuckNotifyMs: typeof defaults.stuckNotifyMs === 'number' ? defaults.stuckNotifyMs : 300_000,
       httpPort: defaults.httpPort === false ? false : (typeof defaults.httpPort === 'number' ? defaults.httpPort : 3100),
       logLevel: isValidLogLevel(defaults.logLevel) ? defaults.logLevel : 'info',
     },

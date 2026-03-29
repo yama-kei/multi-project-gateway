@@ -314,6 +314,18 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
     }, 7_000);
     replyChannel.sendTyping().catch(() => {});
 
+    // Periodic status notifications for long-running worktree sessions (#90)
+    const stuckNotifyMs = config.defaults.stuckNotifyMs;
+    const isWorktreeSession = replyChannel.isThread();
+    const sendStartTime = Date.now();
+    let stuckNotifyInterval: ReturnType<typeof setInterval> | null = null;
+    if (stuckNotifyMs > 0 && isWorktreeSession) {
+      stuckNotifyInterval = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - sendStartTime) / 60_000);
+        replyChannel.send(`⏳ Still working… (${elapsed}m elapsed)`).catch(() => {});
+      }, stuckNotifyMs);
+    }
+
     // Look up agents for the project (use parent channel ID for threads)
     const projectChannelId = parentId || resolved.channelId;
     const project = config.projects[projectChannelId];
@@ -469,6 +481,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
       );
     } finally {
       clearInterval(typingInterval);
+      if (stuckNotifyInterval) clearInterval(stuckNotifyInterval);
     }
   });
 
