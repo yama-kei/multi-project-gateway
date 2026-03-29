@@ -223,6 +223,167 @@ describe('ActivityEngine', () => {
     });
   });
 
+  describe('sessionTimeline', () => {
+    it('returns empty array for missing file', () => {
+      const engine = createActivityEngine(join(dir, 'nonexistent.jsonl'));
+      const timeline = engine.sessionTimeline('7d');
+      expect(timeline).toEqual([]);
+    });
+
+    it('reconstructs processing and idle segments from pulse events', () => {
+      const t0 = new Date('2026-03-29T10:00:00Z');
+      const t1 = new Date('2026-03-29T10:01:00Z');
+      const t2 = new Date('2026-03-29T10:05:00Z');
+      const t3 = new Date('2026-03-29T10:06:00Z');
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-abc12345xyz', timestamp: t0.toISOString(), agent_name: 'engineer' }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-abc12345xyz', timestamp: t1.toISOString(), agent_target: 'engineer' }),
+        makeEvent({ event_type: 'message_completed', session_id: 'sess-abc12345xyz', timestamp: t2.toISOString(), agent_target: 'engineer' }),
+        makeEvent({ event_type: 'session_end', session_id: 'sess-abc12345xyz', timestamp: t3.toISOString(), duration_ms: 360000 }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const timeline = engine.sessionTimeline('7d');
+      expect(timeline).toHaveLength(1);
+      expect(timeline[0].session_id).toBe('sess-abc12345xyz');
+      expect(timeline[0].label).toBe('mpg/sess-abc/engineer');
+      expect(timeline[0].segments).toHaveLength(3);
+      // idle: session_start → message_routed
+      expect(timeline[0].segments[0]).toEqual({
+        start: t0.toISOString(),
+        end: t1.toISOString(),
+        state: 'idle',
+      });
+      // processing: message_routed → message_completed
+      expect(timeline[0].segments[1]).toEqual({
+        start: t1.toISOString(),
+        end: t2.toISOString(),
+        state: 'processing',
+      });
+      // idle: message_completed → session_end
+      expect(timeline[0].segments[2]).toEqual({
+        start: t2.toISOString(),
+        end: t3.toISOString(),
+        state: 'idle',
+      });
+    });
+
+    it('handles multiple processing bursts in a single session', () => {
+      const t0 = new Date('2026-03-29T10:00:00Z');
+      const t1 = new Date('2026-03-29T10:01:00Z');
+      const t2 = new Date('2026-03-29T10:02:00Z');
+      const t3 = new Date('2026-03-29T10:03:00Z');
+      const t4 = new Date('2026-03-29T10:04:00Z');
+      const t5 = new Date('2026-03-29T10:05:00Z');
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-multi000', timestamp: t0.toISOString(), agent_name: 'pm' }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-multi000', timestamp: t1.toISOString(), agent_target: 'pm' }),
+        makeEvent({ event_type: 'message_completed', session_id: 'sess-multi000', timestamp: t2.toISOString() }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-multi000', timestamp: t3.toISOString(), agent_target: 'pm' }),
+        makeEvent({ event_type: 'message_completed', session_id: 'sess-multi000', timestamp: t4.toISOString() }),
+        makeEvent({ event_type: 'session_end', session_id: 'sess-multi000', timestamp: t5.toISOString() }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const timeline = engine.sessionTimeline('7d');
+      expect(timeline).toHaveLength(1);
+      expect(timeline[0].segments).toHaveLength(5);
+      expect(timeline[0].segments.map(s => s.state)).toEqual([
+        'idle', 'processing', 'idle', 'processing', 'idle',
+      ]);
+    });
+
+    it('uses agent_name from session_start for label, falls back to agent_target', () => {
+      const t0 = new Date('2026-03-29T10:00:00Z');
+      const t1 = new Date('2026-03-29T10:01:00Z');
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-noagent0', timestamp: t0.toISOString() }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-noagent0', timestamp: t0.toISOString(), agent_target: 'designer' }),
+        makeEvent({ event_type: 'session_end', session_id: 'sess-noagent0', timestamp: t1.toISOString() }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const timeline = engine.sessionTimeline('7d');
+      expect(timeline[0].label).toBe('mpg/sess-noa/designer');
+    });
+
+    it('falls back to "default" when no agent info available', () => {
+      const t0 = new Date('2026-03-29T10:00:00Z');
+      const t1 = new Date('2026-03-29T10:01:00Z');
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-bare0000', timestamp: t0.toISOString() }),
+        makeEvent({ event_type: 'session_end', session_id: 'sess-bare0000', timestamp: t1.toISOString() }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const timeline = engine.sessionTimeline('7d');
+      expect(timeline[0].label).toBe('mpg/sess-bar/default');
+    });
+
+    it('handles session_idle as session end', () => {
+      const t0 = new Date('2026-03-29T10:00:00Z');
+      const t1 = new Date('2026-03-29T10:05:00Z');
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-idle0000', timestamp: t0.toISOString() }),
+        makeEvent({ event_type: 'session_idle', session_id: 'sess-idle0000', timestamp: t1.toISOString() }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const timeline = engine.sessionTimeline('7d');
+      expect(timeline).toHaveLength(1);
+      expect(timeline[0].segments).toHaveLength(1);
+      expect(timeline[0].segments[0].state).toBe('idle');
+      expect(timeline[0].segments[0].end).toBe(t1.toISOString());
+    });
+
+    it('handles multiple sessions', () => {
+      const t0 = new Date('2026-03-29T10:00:00Z');
+      const t1 = new Date('2026-03-29T10:01:00Z');
+      const t2 = new Date('2026-03-29T10:02:00Z');
+      const t3 = new Date('2026-03-29T10:03:00Z');
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-aaaa0000', timestamp: t0.toISOString(), agent_name: 'pm' }),
+        makeEvent({ event_type: 'session_start', session_id: 'sess-bbbb0000', timestamp: t1.toISOString(), agent_name: 'engineer' }),
+        makeEvent({ event_type: 'session_end', session_id: 'sess-aaaa0000', timestamp: t2.toISOString() }),
+        makeEvent({ event_type: 'session_end', session_id: 'sess-bbbb0000', timestamp: t3.toISOString() }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const timeline = engine.sessionTimeline('7d');
+      expect(timeline).toHaveLength(2);
+      const labels = timeline.map(t => t.label);
+      expect(labels).toContain('mpg/sess-aaa/pm');
+      expect(labels).toContain('mpg/sess-bbb/engineer');
+    });
+
+    it('filters by time range', () => {
+      const old = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+      const recent = new Date();
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-old00000', timestamp: old.toISOString() }),
+        makeEvent({ event_type: 'session_end', session_id: 'sess-old00000', timestamp: old.toISOString() }),
+        makeEvent({ event_type: 'session_start', session_id: 'sess-new00000', timestamp: recent.toISOString() }),
+        makeEvent({ event_type: 'session_end', session_id: 'sess-new00000', timestamp: recent.toISOString() }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      expect(engine.sessionTimeline('7d')).toHaveLength(1);
+      expect(engine.sessionTimeline('30d')).toHaveLength(2);
+    });
+
+    it('handles session with no end event (uses last event timestamp)', () => {
+      const t0 = new Date('2026-03-29T10:00:00Z');
+      const t1 = new Date('2026-03-29T10:01:00Z');
+      const t2 = new Date('2026-03-29T10:05:00Z');
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-noend000', timestamp: t0.toISOString(), agent_name: 'pm' }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-noend000', timestamp: t1.toISOString(), agent_target: 'pm' }),
+        makeEvent({ event_type: 'message_completed', session_id: 'sess-noend000', timestamp: t2.toISOString() }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const timeline = engine.sessionTimeline('7d');
+      expect(timeline).toHaveLength(1);
+      // Should still have segments up to last known event
+      expect(timeline[0].segments).toHaveLength(2);
+      expect(timeline[0].segments[0].state).toBe('idle');
+      expect(timeline[0].segments[1].state).toBe('processing');
+      expect(timeline[0].segments[1].end).toBe(t2.toISOString());
+    });
+  });
+
   it('skips malformed JSONL lines without crashing', () => {
     writeFileSync(filePath, '{"event_type":"session_start","timestamp":"' + new Date().toISOString() + '","session_id":"s","project_key":"p","project_dir":"d"}\nNOT JSON\n');
     const engine = createActivityEngine(filePath);

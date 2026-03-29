@@ -119,6 +119,7 @@ function buildDashboardHtml(): string {
     <div class="summary-card"><div class="summary-value" id="total-messages">0</div><div class="summary-label">Messages</div></div>
     <div class="summary-card"><div class="summary-value" id="avg-duration">0m</div><div class="summary-label">Avg Duration</div></div>
   </div>
+  <div class="chart-card" style="margin-bottom:16px"><h3>Session Timeline</h3><canvas id="timeline-chart"></canvas></div>
   <div class="chart-grid">
     <div class="chart-card"><h3>Messages Over Time</h3><canvas id="messages-chart"></canvas></div>
     <div class="chart-card"><h3>Cost Over Time</h3><canvas id="cost-chart"></canvas></div>
@@ -307,8 +308,119 @@ function timeAxisOptions(isHourBucket) {
   };
 }
 
+function formatSegmentDuration(startIso, endIso) {
+  var ms = new Date(endIso).getTime() - new Date(startIso).getTime();
+  if (ms < 1000) return ms + 'ms';
+  var s = Math.floor(ms / 1000);
+  if (s < 60) return s + 's';
+  var m = Math.floor(s / 60);
+  s = s % 60;
+  if (m < 60) return m + 'm ' + s + 's';
+  var h = Math.floor(m / 60);
+  m = m % 60;
+  return h + 'h ' + m + 'm';
+}
+
+function refreshTimeline() {
+  fetch('/api/activity/timeline?range=' + currentRange)
+    .then(function(r) { return r.json(); })
+    .then(function(sessions) {
+      destroyChart('timeline');
+      if (!sessions || sessions.length === 0) {
+        var ctx = document.getElementById('timeline-chart');
+        chartInstances['timeline'] = new Chart(ctx, {
+          type: 'bar',
+          data: { labels: [], datasets: [] },
+          options: { indexAxis: 'y', plugins: { legend: { display: false }, title: { display: true, text: 'No session data', color: '#8b949e' } } }
+        });
+        return;
+      }
+      var labels = sessions.map(function(s) { return s.label; });
+      var datasets = [];
+      // Find max segments across all sessions
+      var maxSegs = 0;
+      sessions.forEach(function(s) { if (s.segments.length > maxSegs) maxSegs = s.segments.length; });
+      for (var si = 0; si < maxSegs; si++) {
+        datasets.push({
+          label: 'Segment ' + si,
+          data: sessions.map(function(s) {
+            var seg = s.segments[si];
+            if (!seg) return null;
+            return [new Date(seg.start).getTime(), new Date(seg.end).getTime()];
+          }),
+          backgroundColor: sessions.map(function(s) {
+            var seg = s.segments[si];
+            if (!seg) return 'transparent';
+            return seg.state === 'processing' ? '#3fb950' : '#30363d';
+          }),
+          borderWidth: 0,
+          borderSkipped: false,
+          barPercentage: 0.6,
+          _segments: sessions.map(function(s) { return s.segments[si] || null; }),
+          _labels: labels,
+        });
+      }
+      chartInstances['timeline'] = new Chart(document.getElementById('timeline-chart'), {
+        type: 'bar',
+        data: { labels: labels, datasets: datasets },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: {
+              type: 'linear',
+              position: 'top',
+              ticks: {
+                color: '#8b949e',
+                callback: function(value) {
+                  var d = new Date(value);
+                  var hh = String(d.getHours()).padStart(2, '0');
+                  var mm = String(d.getMinutes()).padStart(2, '0');
+                  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                  return months[d.getMonth()] + ' ' + d.getDate() + ' ' + hh + ':' + mm;
+                }
+              },
+              grid: { color: '#30363d' }
+            },
+            y: {
+              ticks: { color: '#8b949e', font: { family: 'monospace', size: 11 } },
+              grid: { display: false }
+            }
+          },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                title: function(items) {
+                  if (!items.length) return '';
+                  var ds = items[0].dataset;
+                  return ds._labels[items[0].dataIndex];
+                },
+                label: function(item) {
+                  var seg = item.dataset._segments[item.dataIndex];
+                  if (!seg) return '';
+                  var state = seg.state.charAt(0).toUpperCase() + seg.state.slice(1);
+                  return state + ': ' + formatSegmentDuration(seg.start, seg.end);
+                }
+              }
+            }
+          }
+        }
+      });
+      // Set canvas height based on session count
+      var canvas = document.getElementById('timeline-chart');
+      var minH = Math.max(120, sessions.length * 36 + 60);
+      canvas.parentElement.style.minHeight = minH + 'px';
+      canvas.style.height = minH + 'px';
+      chartInstances['timeline'].resize();
+    })
+    .catch(function(err) { console.error('Timeline fetch error:', err); });
+}
+
 function refreshActivity() {
   var isHourBucket = currentRange === '24h';
+  refreshTimeline();
   fetch('/api/activity/summary?range=' + currentRange)
     .then(function(r) { return r.json(); })
     .then(function(d) {
@@ -510,6 +622,31 @@ export function createDashboardServer(
       });
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(body);
+      return;
+    }
+
+    if (pathname === '/api/activity/timeline') {
+      const url = new URL(req.url ?? '/', `http://localhost`);
+      const rangeParam = url.searchParams.get('range') || '7d';
+      if (rangeParam !== '24h' && rangeParam !== '7d' && rangeParam !== '30d') {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid range. Must be 24h, 7d, or 30d' }));
+        return;
+      }
+      const engine = options?.activityEngine;
+      if (!engine) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify([]));
+        return;
+      }
+      try {
+        const data = engine.sessionTimeline(rangeParam as TimeRange);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(data));
+      } catch {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Failed to compute timeline data' }));
+      }
       return;
     }
 
