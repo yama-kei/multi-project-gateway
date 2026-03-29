@@ -388,8 +388,8 @@ function refreshTimeline() {
           }),
           borderWidth: 0,
           borderSkipped: false,
-          barPercentage: 0.85,
-          categoryPercentage: 0.9,
+          barPercentage: 1.0,
+          categoryPercentage: 1.0,
           _segments: sessions.map(function(s) { return s.segments[si] || null; }),
           _labels: labels,
         });
