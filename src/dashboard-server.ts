@@ -282,7 +282,7 @@ refresh();
 setInterval(refresh, 5000);
 
 var chartInstances = {};
-var currentRange = '7d';
+var currentRange = '24h';
 var timelineRange = '24h';
 var CHART_COLORS = ['#58a6ff', '#3fb950', '#d29922', '#f85149', '#bc8cff', '#79c0ff'];
 
