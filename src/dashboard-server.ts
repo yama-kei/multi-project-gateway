@@ -139,7 +139,9 @@ function buildDashboardHtml(): string {
 
 <div id="tab-timeline" style="display:none">
   <div class="range-selector timeline-range">
-    <button class="tl-range-btn range-btn active" data-range="24h">24h</button>
+    <button class="tl-range-btn range-btn active" data-range="3h">3h</button>
+    <button class="tl-range-btn range-btn" data-range="12h">12h</button>
+    <button class="tl-range-btn range-btn" data-range="24h">24h</button>
     <button class="tl-range-btn range-btn" data-range="7d">7d</button>
     <button class="tl-range-btn range-btn" data-range="30d">30d</button>
   </div>
@@ -283,7 +285,7 @@ setInterval(refresh, 5000);
 
 var chartInstances = {};
 var currentRange = '7d';
-var timelineRange = '24h';
+var timelineRange = '3h';
 var CHART_COLORS = ['#58a6ff', '#3fb950', '#d29922', '#f85149', '#bc8cff', '#79c0ff'];
 
 function switchTab(tab) {
@@ -349,9 +351,9 @@ function formatSegmentDuration(startIso, endIso) {
 var _tlHitRects = [];
 
 function refreshTimeline() {
-  var RANGE_MS = { '24h': 86400000, '7d': 604800000, '30d': 2592000000 };
+  var RANGE_MS = { '3h': 10800000, '12h': 43200000, '24h': 86400000, '7d': 604800000, '30d': 2592000000 };
   var now = Date.now();
-  var rangeMs = RANGE_MS[timelineRange] || RANGE_MS['24h'];
+  var rangeMs = RANGE_MS[timelineRange] || RANGE_MS['3h'];
   var xMin = now - rangeMs;
   var xMax = now;
 
@@ -716,9 +718,9 @@ export function createDashboardServer(
     if (pathname === '/api/activity/timeline') {
       const url = new URL(req.url ?? '/', `http://localhost`);
       const rangeParam = url.searchParams.get('range') || '7d';
-      if (rangeParam !== '24h' && rangeParam !== '7d' && rangeParam !== '30d') {
+      if (rangeParam !== '3h' && rangeParam !== '12h' && rangeParam !== '24h' && rangeParam !== '7d' && rangeParam !== '30d') {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Invalid range. Must be 24h, 7d, or 30d' }));
+        res.end(JSON.stringify({ error: 'Invalid range. Must be 3h, 12h, 24h, 7d, or 30d' }));
         return;
       }
       const engine = options?.activityEngine;
@@ -746,7 +748,7 @@ export function createDashboardServer(
         res.end(JSON.stringify({ error: 'Invalid range. Must be 24h, 7d, or 30d' }));
         return;
       }
-      const range: TimeRange = rangeParam;
+      const range = rangeParam as TimeRange;
       const bucket: Bucket = range === '24h' ? 'hour' : 'day';
       const engine = options?.activityEngine;
 

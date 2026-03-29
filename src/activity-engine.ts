@@ -2,12 +2,14 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
-export type TimeRange = '24h' | '7d' | '30d';
-export type Bucket = 'hour' | 'day';
+export type TimeRange = '3h' | '12h' | '24h' | '7d' | '30d';
+export type Bucket = '15min' | 'hour' | 'day';
 
 const DEFAULT_PATH = join(homedir(), '.pulse', 'events', 'mpg-sessions.jsonl');
 
 const RANGE_MS: Record<TimeRange, number> = {
+  '3h': 3 * 60 * 60 * 1000,
+  '12h': 12 * 60 * 60 * 1000,
   '24h': 24 * 60 * 60 * 1000,
   '7d': 7 * 24 * 60 * 60 * 1000,
   '30d': 30 * 24 * 60 * 60 * 1000,
@@ -48,7 +50,9 @@ function readEvents(filePath: string, range: TimeRange): PulseEvent[] {
 
 function bucketKey(timestamp: string, bucket: Bucket): string {
   const d = new Date(timestamp);
-  if (bucket === 'hour') {
+  if (bucket === '15min') {
+    d.setMinutes(Math.floor(d.getMinutes() / 15) * 15, 0, 0);
+  } else if (bucket === 'hour') {
     d.setMinutes(0, 0, 0);
   } else {
     d.setHours(0, 0, 0, 0);

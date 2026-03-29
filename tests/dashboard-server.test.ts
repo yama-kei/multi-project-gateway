@@ -379,11 +379,42 @@ describe('createDashboardServer', () => {
       expect(JSON.parse(res.body)).toEqual([]);
     });
 
+    it('accepts 3h range and passes it to engine', async () => {
+      const port = getPort();
+      const engine = makeMockEngine();
+      server = await createDashboardServer(port, makeSessionManager(), makeBot(), makeConfig(), {
+        activityEngine: engine,
+      });
+      const res = await httpGet(port, '/api/activity/timeline?range=3h');
+      expect(res.status).toBe(200);
+      expect(engine.sessionTimeline).toHaveBeenCalledWith('3h');
+    });
+
+    it('accepts 12h range and passes it to engine', async () => {
+      const port = getPort();
+      const engine = makeMockEngine();
+      server = await createDashboardServer(port, makeSessionManager(), makeBot(), makeConfig(), {
+        activityEngine: engine,
+      });
+      const res = await httpGet(port, '/api/activity/timeline?range=12h');
+      expect(res.status).toBe(200);
+      expect(engine.sessionTimeline).toHaveBeenCalledWith('12h');
+    });
+
     it('returns 400 for invalid range', async () => {
       const port = getPort();
       server = await createDashboardServer(port, makeSessionManager(), makeBot(), makeConfig());
       const res = await httpGet(port, '/api/activity/timeline?range=1y');
       expect(res.status).toBe(400);
+    });
+
+    it('rejects 3h and 12h on summary endpoint (activity tab unchanged)', async () => {
+      const port = getPort();
+      server = await createDashboardServer(port, makeSessionManager(), makeBot(), makeConfig());
+      const res3h = await httpGet(port, '/api/activity/summary?range=3h');
+      expect(res3h.status).toBe(400);
+      const res12h = await httpGet(port, '/api/activity/summary?range=12h');
+      expect(res12h.status).toBe(400);
     });
   });
 
