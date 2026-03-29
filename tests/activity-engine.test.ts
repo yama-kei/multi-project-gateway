@@ -253,11 +253,13 @@ describe('ActivityEngine', () => {
         end: t1.toISOString(),
         state: 'idle',
       });
-      // processing: message_routed → message_completed
+      // processing: message_routed → message_completed (with token enrichment)
       expect(timeline[0].segments[1]).toEqual({
         start: t1.toISOString(),
         end: t2.toISOString(),
         state: 'processing',
+        token_count: 0,
+        token_rate: 0,
       });
       // idle: message_completed → session_end
       expect(timeline[0].segments[2]).toEqual({
@@ -381,6 +383,42 @@ describe('ActivityEngine', () => {
       expect(timeline[0].segments[0].state).toBe('idle');
       expect(timeline[0].segments[1].state).toBe('processing');
       expect(timeline[0].segments[1].end).toBe(t2.toISOString());
+    });
+
+    it('enriches processing segments with token_count and token_rate', () => {
+      const t0 = new Date('2026-03-29T10:00:00Z');
+      const t1 = new Date('2026-03-29T10:01:00Z'); // routed
+      const t2 = new Date('2026-03-29T10:05:00Z'); // completed (4 min = 240s processing)
+      const t3 = new Date('2026-03-29T10:06:00Z'); // session end
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-tok00000', timestamp: t0.toISOString(), agent_name: 'engineer' }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-tok00000', timestamp: t1.toISOString(), agent_target: 'engineer' }),
+        makeEvent({ event_type: 'message_completed', session_id: 'sess-tok00000', timestamp: t2.toISOString(), input_tokens: 5000, output_tokens: 3000 }),
+        makeEvent({ event_type: 'session_end', session_id: 'sess-tok00000', timestamp: t3.toISOString() }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const timeline = engine.sessionTimeline('7d');
+      expect(timeline).toHaveLength(1);
+      const processingSegment = timeline[0].segments.find(s => s.state === 'processing');
+      expect(processingSegment).toBeDefined();
+      // 5000 + 3000 = 8000 tokens over 240 seconds = 33 tok/s (rounded)
+      expect(processingSegment!.token_count).toBe(8000);
+      expect(processingSegment!.token_rate).toBe(Math.round(8000 / 240));
+    });
+
+    it('idle segments have no token fields', () => {
+      const t0 = new Date('2026-03-29T10:00:00Z');
+      const t1 = new Date('2026-03-29T10:01:00Z');
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-idl00000', timestamp: t0.toISOString() }),
+        makeEvent({ event_type: 'session_end', session_id: 'sess-idl00000', timestamp: t1.toISOString() }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const timeline = engine.sessionTimeline('7d');
+      const idleSegment = timeline[0].segments[0];
+      expect(idleSegment.state).toBe('idle');
+      expect(idleSegment.token_count).toBeUndefined();
+      expect(idleSegment.token_rate).toBeUndefined();
     });
   });
 
