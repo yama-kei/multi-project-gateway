@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { Collection } from 'discord.js';
-import { downloadAttachments, buildAttachmentPrompt, cleanupAttachments, DEFAULT_ATTACHMENT_CONFIG, type AttachmentConfig } from '../src/attachments.js';
+import { downloadAttachments, buildAttachmentPrompt, cleanupAttachments, reconcileAttachments, DEFAULT_ATTACHMENT_CONFIG, type AttachmentConfig } from '../src/attachments.js';
 
 const TEST_DIR = join(import.meta.dirname ?? __dirname, '.tmp-attachments-test');
 
@@ -179,6 +179,30 @@ describe('cleanupAttachments', () => {
 
   it('does not throw if directory does not exist', async () => {
     await expect(cleanupAttachments(join(TEST_DIR, 'nonexistent'))).resolves.toBeUndefined();
+  });
+});
+
+describe('reconcileAttachments', () => {
+  beforeEach(async () => {
+    await mkdir(TEST_DIR, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(TEST_DIR, { recursive: true, force: true });
+  });
+
+  it('removes orphaned .mpg-attachments directory and returns true', async () => {
+    const dir = join(TEST_DIR, '.mpg-attachments', 'old-msg');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'file.txt'), 'orphan');
+    const removed = await reconcileAttachments(TEST_DIR);
+    expect(removed).toBe(true);
+    expect(existsSync(join(TEST_DIR, '.mpg-attachments'))).toBe(false);
+  });
+
+  it('returns false when no .mpg-attachments directory exists', async () => {
+    const removed = await reconcileAttachments(TEST_DIR);
+    expect(removed).toBe(false);
   });
 });
 

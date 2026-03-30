@@ -17,6 +17,7 @@ import { createTurnCounter } from './turn-counter.js';
 import { runInit } from './init.js';
 import { runHealthChecks } from './health.js';
 import { reconcileWorktrees } from './worktree.js';
+import { reconcileAttachments } from './attachments.js';
 import { checkPidFile, writePid, removePid } from './pid.js';
 import { createFileWriter } from './file-logger.js';
 import { daemonInstall, daemonUninstall, daemonStatus, daemonLogs } from './daemon.js';
@@ -197,6 +198,16 @@ function start() {
   }
   for (const [projectDir, keys] of knownKeysByProject) {
     reconcileWorktrees(projectDir, keys);
+  }
+
+  // Remove orphaned attachment directories from all project directories (#117)
+  const seenDirs = new Set<string>();
+  for (const project of Object.values(config.projects)) {
+    if (seenDirs.has(project.directory)) continue;
+    seenDirs.add(project.directory);
+    reconcileAttachments(project.directory).then((removed) => {
+      if (removed) log.info(`Removed orphaned attachments in ${project.directory}`);
+    }).catch(() => {});
   }
 
   const turnCounter = createTurnCounter();
