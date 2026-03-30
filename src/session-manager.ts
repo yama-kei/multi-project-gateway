@@ -440,13 +440,20 @@ export function createSessionManager(defaults: {
 
       console.log(`Discovered ${orphanedKeys.length} orphaned tmux session(s)`);
 
-      // Cross-reference with persisted sessions
+      // Cross-reference with persisted sessions.
+      // Tmux session names are sanitized (e.g. "threadId:agent" → "threadId-agent"),
+      // so build a reverse lookup from sanitized key → persisted entry.
       const persisted = store ? store.load() : new Map<string, PersistedSession>();
+      const sanitizedLookup = new Map<string, PersistedSession>();
+      for (const [key, entry] of persisted) {
+        const sanitized = key.replace(/[^a-zA-Z0-9_-]/g, '-');
+        sanitizedLookup.set(sanitized, entry);
+      }
 
       const reattachPromises: Promise<void>[] = [];
 
       for (const key of orphanedKeys) {
-        const entry = persisted.get(key);
+        const entry = sanitizedLookup.get(key);
         if (!entry) {
           // No persisted record — stale orphan, clean it up
           console.log(`Cleaning up unmatched orphan: ${key}`);
