@@ -5,6 +5,10 @@ import { loadConfig } from './config.js';
 import { createRouter } from './router.js';
 import { createSessionManager } from './session-manager.js';
 import { createFileSessionStore } from './session-store.js';
+import { ClaudeCliRuntime } from './runtimes/claude-cli-runtime.js';
+import { TmuxRuntime } from './runtimes/tmux-runtime.js';
+import type { AgentRuntime } from './agent-runtime.js';
+import { listSessions, killSession } from './tmux.js';
 import { createDiscordBot } from './discord.js';
 import { createPulseEmitter } from './pulse-events.js';
 import { createActivityEngine } from './activity-engine.js';
@@ -156,7 +160,27 @@ function start() {
   const sessionsPath = resolveSessionsPath(configPath);
   const sessionStore = createFileSessionStore(sessionsPath);
   const pulseEmitter = createPulseEmitter();
-  const sessionManager = createSessionManager(config.defaults, sessionStore, pulseEmitter);
+  let runtime: AgentRuntime;
+  if (config.defaults.persistence === 'tmux') {
+    runtime = new TmuxRuntime();
+    log.info('Using tmux-based persistent runtime');
+  } else {
+    runtime = new ClaudeCliRuntime();
+
+    // Sweep stale tmux sessions from a previous tmux-mode run
+    try {
+      const stale = listSessions('mpg-');
+      for (const name of stale) {
+        killSession(name);
+      }
+      if (stale.length > 0) {
+        log.info(`Cleaned up ${stale.length} stale tmux session(s)`);
+      }
+    } catch {
+      // tmux not installed — nothing to sweep
+    }
+  }
+  const sessionManager = createSessionManager(config.defaults, runtime, sessionStore, pulseEmitter);
 
   // Reconcile orphaned worktrees from crashed sessions
   const persistedSessions = sessionStore.load();
@@ -204,6 +228,15 @@ function start() {
           log.warn(`Dashboard server failed to start on port ${config.defaults.httpPort}: ${err}`);
         }
       }
+
+      // Recover orphaned tmux sessions after Discord is connected
+      sessionManager.recoverOrphanedSessions((projectKey, result) => {
+        bot.deliverOrphanResult(projectKey, result).catch((err) => {
+          log.error(`Failed to deliver orphan result for ${projectKey}: ${err}`);
+        });
+      }).catch((err) => {
+        log.error(`Orphan session recovery failed: ${err}`);
+      });
     })
     .catch((err) => {
       log.error(`Failed to start bot: ${err}`);

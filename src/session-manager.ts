@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
-import { runClaude, type ClaudeResult } from './claude-cli.js';
+import type { ClaudeResult } from './claude-cli.js';
+import type { AgentRuntime } from './agent-runtime.js';
 import type { SessionStore, PersistedSession } from './session-store.js';
 import type { PulseEmitter } from './pulse-events.js';
 import { createWorktree as gitCreateWorktree, removeWorktree as gitRemoveWorktree } from './worktree.js';
@@ -14,6 +15,9 @@ export interface SessionInfo {
   processing: boolean;
 }
 
+/** Callback invoked when an orphaned tmux session produces a result on startup recovery. */
+export type OrphanResultCallback = (projectKey: string, result: ClaudeResult) => void;
+
 export interface SessionManager {
   send(projectKey: string, cwd: string, prompt: string, opts?: { worktree?: boolean; systemPrompt?: string; timeoutMs?: number; extraArgs?: string[] }): Promise<ClaudeResult>;
   getSession(projectKey: string): SessionInfo | undefined;
@@ -21,6 +25,8 @@ export interface SessionManager {
   clearSession(projectKey: string): boolean;
   restartSession(projectKey: string): boolean;
   shutdown(): void;
+  /** Discover orphaned tmux sessions and reattach to them. Call after Discord bot is ready. */
+  recoverOrphanedSessions(onResult: OrphanResultCallback): Promise<void>;
 }
 
 interface InternalSession {
@@ -52,7 +58,7 @@ export function createSessionManager(defaults: {
   sessionTtlMs?: number;
   maxPersistedSessions?: number;
   claudeArgs: string[];
-}, store?: SessionStore, pulseEmitter?: PulseEmitter): SessionManager {
+}, runtime: AgentRuntime, store?: SessionStore, pulseEmitter?: PulseEmitter): SessionManager {
   const sessions = new Map<string, InternalSession>();
   const sessionTtlMs = defaults.sessionTtlMs ?? 7 * 24 * 60 * 60 * 1000;
   const maxPersistedSessions = defaults.maxPersistedSessions ?? 50;
@@ -141,6 +147,7 @@ export function createSessionManager(defaults: {
       }
       // Clean up attachment files for the session's working directory (#110)
       cleanupAttachments(session.projectDir ?? session.cwd).catch(() => {});
+      if (runtime.cleanup) runtime.cleanup(session.projectKey);
       sessions.delete(session.projectKey);
     }, defaults.idleTimeoutMs);
   }
@@ -164,14 +171,14 @@ export function createSessionManager(defaults: {
         );
       }
       try {
-        const result = await runClaude(
-          session.cwd,
-          effectiveArgs,
-          item.prompt,
-          session.sessionId,
-          item.systemPrompt,
-          item.timeoutMs,
-        );
+        const result = await runtime.spawn({
+          cwd: session.cwd,
+          baseArgs: effectiveArgs,
+          prompt: item.prompt,
+          sessionId: session.sessionId,
+          systemPrompt: item.systemPrompt,
+          timeoutMs: item.timeoutMs,
+        });
         const sessionChanged = !!(
           session.sessionId &&
           result.sessionId &&
@@ -201,7 +208,7 @@ export function createSessionManager(defaults: {
         if (session.sessionId) {
           session.sessionId = undefined;
           try {
-            const result = await runClaude(session.cwd, effectiveArgs, item.prompt, undefined, item.systemPrompt, item.timeoutMs);
+            const result = await runtime.spawn({ cwd: session.cwd, baseArgs: effectiveArgs, prompt: item.prompt, sessionId: undefined, systemPrompt: item.systemPrompt, timeoutMs: item.timeoutMs });
             session.sessionId = result.sessionId || undefined;
             session.lastActivity = Date.now();
             session.messageCount++;
@@ -396,6 +403,7 @@ export function createSessionManager(defaults: {
       }
       // Clean up attachment files (#110)
       cleanupAttachments(session.projectDir ?? session.cwd).catch(() => {});
+      if (runtime.cleanup) runtime.cleanup(projectKey);
       sessions.delete(projectKey);
       persistSessions();
       return true;
@@ -411,10 +419,66 @@ export function createSessionManager(defaults: {
       return true;
     },
 
+    async recoverOrphanedSessions(onResult: OrphanResultCallback): Promise<void> {
+      if (!runtime.canResume) return;
+
+      let orphanedKeys: string[];
+      try {
+        orphanedKeys = await runtime.listOrphanedSessions();
+      } catch (err) {
+        console.error('Failed to list orphaned sessions:', err);
+        return;
+      }
+      if (orphanedKeys.length === 0) return;
+
+      console.log(`Discovered ${orphanedKeys.length} orphaned tmux session(s)`);
+
+      // Cross-reference with persisted sessions
+      const persisted = store ? store.load() : new Map<string, PersistedSession>();
+
+      const reattachPromises: Promise<void>[] = [];
+
+      for (const key of orphanedKeys) {
+        const entry = persisted.get(key);
+        if (!entry) {
+          // No persisted record — stale orphan, clean it up
+          console.log(`Cleaning up unmatched orphan: ${key}`);
+          if (runtime.cleanup) runtime.cleanup(key);
+          continue;
+        }
+
+        // Matched — reattach and deliver result
+        reattachPromises.push(
+          (async () => {
+            try {
+              if (pulseEmitter) {
+                pulseEmitter.sessionResume(
+                  entry.sessionId,
+                  entry.projectKey,
+                  entry.cwd,
+                  Date.now() - entry.lastActivity,
+                );
+              }
+              const result = await runtime.reattach(key);
+              console.log(`Reattached orphan ${key}: ${result.text.length} chars`);
+              onResult(entry.projectKey, result);
+            } catch (err) {
+              console.error(`Failed to reattach orphan ${key}:`, err);
+            } finally {
+              if (runtime.cleanup) runtime.cleanup(key);
+            }
+          })(),
+        );
+      }
+
+      await Promise.all(reattachPromises);
+    },
+
     shutdown() {
       persistSessions();
       for (const session of sessions.values()) {
         if (session.idleTimer) clearTimeout(session.idleTimer);
+        if (runtime.cleanup) runtime.cleanup(session.projectKey);
       }
       sessions.clear();
     },

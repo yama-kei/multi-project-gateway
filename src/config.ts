@@ -37,6 +37,8 @@ export const DEFAULT_ALLOWED_TOOLS: string[] = [
   'TodoWrite',
 ];
 
+export type RuntimePersistence = 'direct' | 'tmux';
+
 export interface GatewayDefaults {
   idleTimeoutMs: number;
   maxConcurrentSessions: number;
@@ -53,6 +55,7 @@ export interface GatewayDefaults {
   maxAttachmentSizeMb: number;
   allowedMimeTypes: string[];
   maxAttachmentsPerMessage: number;
+  persistence: RuntimePersistence;
 }
 
 export interface GatewayConfig {
@@ -170,6 +173,7 @@ export function loadConfig(raw: unknown): GatewayConfig {
       maxAttachmentSizeMb: typeof defaults.maxAttachmentSizeMb === 'number' ? defaults.maxAttachmentSizeMb : 10,
       allowedMimeTypes: Array.isArray(defaults.allowedMimeTypes) ? (defaults.allowedMimeTypes as string[]) : ['image/*', 'text/*', 'application/pdf', 'application/json'],
       maxAttachmentsPerMessage: typeof defaults.maxAttachmentsPerMessage === 'number' ? defaults.maxAttachmentsPerMessage : 5,
+      persistence: defaults.persistence === 'tmux' ? 'tmux' : 'direct',
     },
     projects: validated,
   };
