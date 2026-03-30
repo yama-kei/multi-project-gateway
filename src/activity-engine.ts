@@ -120,6 +120,7 @@ export interface ActivityEngine {
   };
   sessionTimeline(range: TimeRange, projectNameMap?: Record<string, string>, dirToNameMap?: Record<string, string>): Array<{
     session_id: string;
+    thread_id: string;
     label: string;
     segments: Array<{
       start: string;
@@ -288,6 +289,7 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
       type Segment = { start: string; end: string; state: 'processing' | 'idle'; token_count?: number; token_rate?: number };
       const result: Array<{
         session_id: string;
+        thread_id: string;
         label: string;
         segments: Segment[];
       }> = [];
@@ -308,7 +310,6 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
           }
         }
 
-        const shortId = sessionId.substring(0, 8);
         // Resolve project name: try directory-based lookup first, then channel ID, then fallback
         const projectDir = sessionEvents[0].project_dir;
         const projectKey = sessionEvents[0].project_key;
@@ -316,6 +317,8 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
         const projectName = resolveNameFromDir(projectDir, dirToNameMap)
           ?? (projectNameMap && channelId ? projectNameMap[channelId] : undefined)
           ?? 'unknown';
+        // Use thread/channel ID as short identifier so sessions from the same thread share it
+        const shortId = channelId ? channelId.slice(-8) : sessionId.substring(0, 8);
         const label = `${projectName}/${shortId}/${persona}`;
 
         // Build segments by walking through events
@@ -374,7 +377,7 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
           seg.token_rate = durationSec > 0 ? Math.round(tokenCount / durationSec) : 0;
         }
 
-        result.push({ session_id: sessionId, label, segments });
+        result.push({ session_id: sessionId, thread_id: channelId ?? '', label, segments });
       }
 
       return result;
