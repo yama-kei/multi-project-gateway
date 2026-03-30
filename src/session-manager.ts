@@ -486,6 +486,7 @@ export function createSessionManager(defaults: {
       for (const session of sessions.values()) {
         if (session.idleTimer) clearTimeout(session.idleTimer);
         if (runtime.cleanup) runtime.cleanup(session.projectKey);
+        cleanupAttachments(session.projectDir ?? session.cwd).catch(() => {});
       }
       sessions.clear();
     },

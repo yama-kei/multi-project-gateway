@@ -124,6 +124,21 @@ export function buildAttachmentPrompt(attachments: DownloadedAttachment[]): stri
 }
 
 /**
+ * Remove orphaned `.mpg-attachments/` directories at startup.
+ * After a restart, any leftover attachment dirs are orphans.
+ * Returns true if an orphaned directory was removed.
+ */
+export async function reconcileAttachments(projectDir: string): Promise<boolean> {
+  const dir = join(projectDir, '.mpg-attachments');
+  try {
+    await rm(dir, { recursive: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Remove the attachment directory for a given base dir.
  * Called during session cleanup.
  */
