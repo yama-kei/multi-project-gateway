@@ -492,7 +492,9 @@ export function createSessionManager(defaults: {
       persistSessions();
       for (const session of sessions.values()) {
         if (session.idleTimer) clearTimeout(session.idleTimer);
-        if (runtime.cleanup) runtime.cleanup(session.projectKey);
+        // Only clean up tmux sessions if the runtime does NOT support resume.
+        // Resumable runtimes leave sessions alive for recovery after restart.
+        if (!runtime.canResume && runtime.cleanup) runtime.cleanup(session.projectKey);
         cleanupAttachments(session.projectDir ?? session.cwd).catch(() => {});
       }
       sessions.clear();
