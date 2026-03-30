@@ -47,7 +47,7 @@ export class TmuxRuntime implements AgentRuntime {
 
   async spawn(opts: SpawnOpts): Promise<ClaudeResult> {
     const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const sessionKey = opts.sessionId ?? `spawn-${Date.now()}`;
+    const sessionKey = opts.projectKey ?? opts.sessionId ?? `spawn-${Date.now()}`;
     const tmuxName = SESSION_PREFIX + sanitizeSessionName(sessionKey);
 
     // Prepare output directory
