@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { mkdir, writeFile, rm, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { Collection } from 'discord.js';
 import { downloadAttachments, buildAttachmentPrompt, cleanupAttachments, DEFAULT_ATTACHMENT_CONFIG, type AttachmentConfig } from '../src/attachments.js';
 
@@ -32,7 +32,7 @@ describe('buildAttachmentPrompt', () => {
 
   it('formats single attachment', () => {
     const result = buildAttachmentPrompt([{ path: '/tmp/file.png', name: 'file.png' }]);
-    expect(result).toBe('[Attached files: /tmp/file.png]\n\n');
+    expect(result).toBe('[Attached files — use the Read tool to view these:\n  /tmp/file.png]\n\n');
   });
 
   it('formats multiple attachments', () => {
@@ -40,7 +40,7 @@ describe('buildAttachmentPrompt', () => {
       { path: '/tmp/a.png', name: 'a.png' },
       { path: '/tmp/b.pdf', name: 'b.pdf' },
     ]);
-    expect(result).toBe('[Attached files: /tmp/a.png, /tmp/b.pdf]\n\n');
+    expect(result).toBe('[Attached files — use the Read tool to view these:\n  /tmp/a.png\n  /tmp/b.pdf]\n\n');
   });
 });
 
@@ -130,6 +130,26 @@ describe('downloadAttachments', () => {
     const col = makeCollection(makeAttachment({ contentType: 'application/json', name: 'data.json' }));
     const result = await downloadAttachments(col, 'msg7', TEST_DIR, DEFAULT_ATTACHMENT_CONFIG);
     expect(result.downloaded).toHaveLength(1);
+  });
+
+  it('sanitizes path traversal in filenames', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(4)),
+    }));
+    const col = makeCollection(makeAttachment({ name: '../../.env', contentType: 'text/plain' }));
+    const result = await downloadAttachments(col, 'msg-traversal', TEST_DIR, DEFAULT_ATTACHMENT_CONFIG);
+    // Should still download but with sanitized filename (basename strips ../)
+    expect(result.downloaded).toHaveLength(1);
+    expect(result.downloaded[0].name).toBe('env');
+    expect(result.downloaded[0].path).toBe(join(TEST_DIR, '.mpg-attachments', 'msg-traversal', 'env'));
+  });
+
+  it('rejects attachments from untrusted URL hosts', async () => {
+    const col = makeCollection(makeAttachment({ url: 'http://internal-server.local/secret.txt', contentType: 'text/plain' }));
+    const result = await downloadAttachments(col, 'msg-ssrf', TEST_DIR, DEFAULT_ATTACHMENT_CONFIG);
+    expect(result.downloaded).toHaveLength(0);
+    expect(result.warnings[0]).toContain('untrusted URL host');
   });
 
   it('rejects null content type', async () => {

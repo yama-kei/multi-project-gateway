@@ -1,5 +1,5 @@
 import { mkdir, writeFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import type { Collection, Attachment } from 'discord.js';
 
 export interface AttachmentConfig {
@@ -63,7 +63,9 @@ export async function downloadAttachments(
   let dirCreated = false;
 
   for (const att of toProcess) {
-    const name = att.name ?? `attachment-${att.id}`;
+    const rawName = att.name ?? `attachment-${att.id}`;
+    // Sanitize filename to prevent path traversal (e.g. "../../.env")
+    const name = basename(rawName).replace(/^\.+/, '') || `attachment-${att.id}`;
 
     if (att.size > maxBytes) {
       warnings.push(`Skipped \`${name}\` — exceeds ${config.maxAttachmentSizeMb}MB limit.`);
@@ -76,6 +78,13 @@ export async function downloadAttachments(
     }
 
     try {
+      // Validate URL host to prevent SSRF against internal services
+      const parsedUrl = new URL(att.url);
+      if (!parsedUrl.hostname.endsWith('.discordapp.com') && !parsedUrl.hostname.endsWith('.discord.com')) {
+        warnings.push(`Skipped \`${name}\` — untrusted URL host.`);
+        continue;
+      }
+
       const response = await fetch(att.url);
       if (!response.ok) {
         warnings.push(`Failed to download \`${name}\` — HTTP ${response.status}.`);
@@ -89,6 +98,11 @@ export async function downloadAttachments(
 
       const buffer = Buffer.from(await response.arrayBuffer());
       const filePath = join(dir, name);
+      // Double-check resolved path stays within the attachment directory
+      if (!resolve(filePath).startsWith(resolve(dir) + '/')) {
+        warnings.push(`Skipped \`${rawName}\` — unsafe filename.`);
+        continue;
+      }
       await writeFile(filePath, buffer);
       downloaded.push({ path: filePath, name });
     } catch (err) {
@@ -105,8 +119,8 @@ export async function downloadAttachments(
  */
 export function buildAttachmentPrompt(attachments: DownloadedAttachment[]): string {
   if (attachments.length === 0) return '';
-  const paths = attachments.map((a) => a.path).join(', ');
-  return `[Attached files: ${paths}]\n\n`;
+  const paths = attachments.map((a) => a.path).join('\n  ');
+  return `[Attached files — use the Read tool to view these:\n  ${paths}]\n\n`;
 }
 
 /**
