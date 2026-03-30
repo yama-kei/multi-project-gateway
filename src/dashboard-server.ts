@@ -449,12 +449,13 @@ function refreshTimeline() {
       }
 
       function tokenRateColor(rate) {
-        if (!maxTokenRate || !rate) return 'hsl(130, 30%, 55%)';
+        if (!maxTokenRate || !rate) return 'hsl(220, 40%, 55%)';
         var t = Math.min(rate / maxTokenRate, 1);
-        // Interpolate: low rate → light/desaturated green, high rate → dark/saturated green
-        var sat = 30 + t * 50;   // 30% → 80%
-        var light = 55 - t * 25; // 55% → 30%
-        return 'hsl(130, ' + sat + '%, ' + light + '%)';
+        // Interpolate: low rate → cool blue, high rate → warm orange
+        var hue = 220 - t * 190;   // 220 (blue) → 30 (orange)
+        var sat = 40 + t * 40;     // 40% → 80%
+        var light = 55 - t * 15;   // 55% → 40%
+        return 'hsl(' + hue + ', ' + sat + '%, ' + light + '%)';
       }
 
       for (var ri = 0; ri < activeSessions.length; ri++) {
@@ -511,9 +512,10 @@ function refreshTimeline() {
         // Draw gradient bar
         for (var gi = 0; gi < lgW; gi++) {
           var gt = gi / lgW;
-          var gSat = 30 + gt * 50;
-          var gLight = 55 - gt * 25;
-          ctx.fillStyle = 'hsl(130, ' + gSat + '%, ' + gLight + '%)';
+          var gHue = 220 - gt * 190;   // blue → orange
+          var gSat = 40 + gt * 40;
+          var gLight = 55 - gt * 15;
+          ctx.fillStyle = 'hsl(' + gHue + ', ' + gSat + '%, ' + gLight + '%)';
           ctx.fillRect(gradX + gi, lgY + 1, 1, lgH);
         }
 
@@ -523,6 +525,15 @@ function refreshTimeline() {
         ctx.fillText('0', gradX, lgY + 22);
         ctx.textAlign = 'right';
         ctx.fillText(compactTokens(maxTokenRate) + '/s', gradX + lgW, lgY + 22);
+
+        // Idle swatch
+        var idleX = gradX + lgW + 16;
+        ctx.fillStyle = '#484f58';
+        ctx.fillRect(idleX, lgY + 1, lgH, lgH);
+        ctx.fillStyle = '#8b949e';
+        ctx.font = '9px -apple-system, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText('Idle', idleX + lgH + 4, lgY + 9);
       }
     })
     .catch(function(err) { console.error('Timeline fetch error:', err); });
