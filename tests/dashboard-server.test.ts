@@ -368,7 +368,7 @@ describe('createDashboardServer', () => {
       expect(body).toHaveLength(1);
       expect(body[0].label).toBe('mpg/sess-123/engineer');
       expect(body[0].segments).toHaveLength(2);
-      expect(engine.sessionTimeline).toHaveBeenCalledWith('24h');
+      expect(engine.sessionTimeline).toHaveBeenCalledWith('24h', { 'ch-1': 'My Project', 'ch-2': 'Other Project' });
     });
 
     it('returns empty array when no engine provided', async () => {
@@ -387,7 +387,7 @@ describe('createDashboardServer', () => {
       });
       const res = await httpGet(port, '/api/activity/timeline?range=3h');
       expect(res.status).toBe(200);
-      expect(engine.sessionTimeline).toHaveBeenCalledWith('3h');
+      expect(engine.sessionTimeline).toHaveBeenCalledWith('3h', { 'ch-1': 'My Project', 'ch-2': 'Other Project' });
     });
 
     it('accepts 12h range and passes it to engine', async () => {
@@ -398,7 +398,7 @@ describe('createDashboardServer', () => {
       });
       const res = await httpGet(port, '/api/activity/timeline?range=12h');
       expect(res.status).toBe(200);
-      expect(engine.sessionTimeline).toHaveBeenCalledWith('12h');
+      expect(engine.sessionTimeline).toHaveBeenCalledWith('12h', { 'ch-1': 'My Project', 'ch-2': 'Other Project' });
     });
 
     it('returns 400 for invalid range', async () => {
