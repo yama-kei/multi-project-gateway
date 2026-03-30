@@ -178,6 +178,7 @@ export function createSessionManager(defaults: {
           sessionId: session.sessionId,
           systemPrompt: item.systemPrompt,
           timeoutMs: item.timeoutMs,
+          projectKey: session.projectKey,
         });
         const sessionChanged = !!(
           session.sessionId &&
@@ -208,7 +209,7 @@ export function createSessionManager(defaults: {
         if (session.sessionId) {
           session.sessionId = undefined;
           try {
-            const result = await runtime.spawn({ cwd: session.cwd, baseArgs: effectiveArgs, prompt: item.prompt, sessionId: undefined, systemPrompt: item.systemPrompt, timeoutMs: item.timeoutMs });
+            const result = await runtime.spawn({ cwd: session.cwd, baseArgs: effectiveArgs, prompt: item.prompt, sessionId: undefined, systemPrompt: item.systemPrompt, timeoutMs: item.timeoutMs, projectKey: session.projectKey });
             session.sessionId = result.sessionId || undefined;
             session.lastActivity = Date.now();
             session.messageCount++;

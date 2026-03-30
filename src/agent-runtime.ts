@@ -8,6 +8,9 @@ export interface SpawnOpts {
   sessionId: string | undefined;
   systemPrompt?: string;
   timeoutMs?: number;
+  /** Project key used by the session manager (e.g. threadId or threadId:agentName).
+   *  Used by tmux runtime to name sessions so they can be matched on recovery. */
+  projectKey?: string;
 }
 
 /**

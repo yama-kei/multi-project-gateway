@@ -170,10 +170,12 @@ describe('ActivityEngine', () => {
       const buckets = engine.bucketed('3h', '15min', 'session_start');
       const total = buckets.reduce((sum, b) => sum + b.value, 0);
       expect(total).toBe(3);
-      // t1 and t2 should be in the same bucket, t3 in a different one
-      expect(buckets.length).toBe(2);
-      expect(buckets[0].value).toBe(2);
-      expect(buckets[1].value).toBe(1);
+      // All 15min slots in 3h range are present (including zero-filled ones)
+      expect(buckets.length).toBeGreaterThanOrEqual(2);
+      const nonZero = buckets.filter(b => b.value > 0);
+      expect(nonZero.length).toBe(2);
+      expect(nonZero[0].value).toBe(2);
+      expect(nonZero[1].value).toBe(1);
     });
   });
 

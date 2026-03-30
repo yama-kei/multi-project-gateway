@@ -223,6 +223,7 @@ describe('SessionManager', () => {
       sessionId: undefined,
       systemPrompt: 'You are a PM.',
       timeoutMs: undefined,
+      projectKey: 'proj-1',
     });
     sm.shutdown();
   });
@@ -281,6 +282,7 @@ describe('SessionManager', () => {
         sessionId: 'old-sid',
         systemPrompt: undefined,
         timeoutMs: undefined,
+        projectKey: 'proj-a',
       });
       m.shutdown();
     });
@@ -325,6 +327,7 @@ describe('SessionManager', () => {
         sessionId: 'sid-1',
         systemPrompt: undefined,
         timeoutMs: undefined,
+        projectKey: 'proj-a',
       });
       m.shutdown();
     });
@@ -347,6 +350,7 @@ describe('SessionManager', () => {
         sessionId: undefined,
         systemPrompt: undefined,
         timeoutMs: undefined,
+        projectKey: 'thread-1',
       });
     });
 
@@ -376,6 +380,7 @@ describe('SessionManager', () => {
         sessionId: undefined,
         systemPrompt: undefined,
         timeoutMs: undefined,
+        projectKey: 'project-a',
       });
     });
 
