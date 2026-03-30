@@ -83,21 +83,51 @@ describe('ActivityEngine', () => {
   });
 
   describe('tokensByProject', () => {
-    it('groups message_completed events by project_key', () => {
+    it('groups by project_key when no dirToNameMap provided', () => {
       writeEvents(filePath, [
-        makeEvent({ event_type: 'message_completed', project_key: 'proj-a', input_tokens: 10000, output_tokens: 2000, cache_read_input_tokens: 5000, total_cost_usd: 0.03 }),
-        makeEvent({ event_type: 'message_completed', project_key: 'proj-a', input_tokens: 8000, output_tokens: 1500, cache_read_input_tokens: 3000, total_cost_usd: 0.02 }),
-        makeEvent({ event_type: 'message_completed', project_key: 'proj-b', input_tokens: 5000, output_tokens: 1000, cache_read_input_tokens: 2000, total_cost_usd: 0.01 }),
+        makeEvent({ event_type: 'message_completed', project_key: 'proj-a', project_dir: '/tmp/a', input_tokens: 10000, output_tokens: 2000, cache_read_input_tokens: 5000, total_cost_usd: 0.03 }),
+        makeEvent({ event_type: 'message_completed', project_key: 'proj-a', project_dir: '/tmp/a', input_tokens: 8000, output_tokens: 1500, cache_read_input_tokens: 3000, total_cost_usd: 0.02 }),
+        makeEvent({ event_type: 'message_completed', project_key: 'proj-b', project_dir: '/tmp/b', input_tokens: 5000, output_tokens: 1000, cache_read_input_tokens: 2000, total_cost_usd: 0.01 }),
       ]);
       const engine = createActivityEngine(filePath);
       const rows = engine.tokensByProject('7d');
       expect(rows).toHaveLength(2);
-      const a = rows.find(r => r.project_key === 'proj-a')!;
+      const a = rows.find(r => r.project_name === 'proj-a')!;
       expect(a.input_tokens).toBe(18000);
       expect(a.output_tokens).toBe(3500);
       expect(a.cache_read_input_tokens).toBe(8000);
       expect(a.cost_usd).toBeCloseTo(0.05);
       expect(a.message_count).toBe(2);
+    });
+
+    it('aggregates by resolved project name from dirToNameMap', () => {
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'message_completed', project_key: 'chan-1:engineer', project_dir: '/home/user/my-project', input_tokens: 10000, output_tokens: 2000, cache_read_input_tokens: 0, total_cost_usd: 0.03 }),
+        makeEvent({ event_type: 'message_completed', project_key: 'chan-1:pm', project_dir: '/home/user/my-project', input_tokens: 5000, output_tokens: 1000, cache_read_input_tokens: 0, total_cost_usd: 0.01 }),
+        makeEvent({ event_type: 'message_completed', project_key: 'chan-2:engineer', project_dir: '/home/user/other-project', input_tokens: 3000, output_tokens: 500, cache_read_input_tokens: 0, total_cost_usd: 0.005 }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const dirMap = { '/home/user/my-project': 'cool-project', '/home/user/other-project': 'other-project' };
+      const rows = engine.tokensByProject('7d', dirMap);
+      expect(rows).toHaveLength(2);
+      const cool = rows.find(r => r.project_name === 'cool-project')!;
+      expect(cool.input_tokens).toBe(15000);
+      expect(cool.output_tokens).toBe(3000);
+      expect(cool.cost_usd).toBeCloseTo(0.04);
+      expect(cool.message_count).toBe(2);
+    });
+
+    it('resolves worktree subdirectories via dirToNameMap', () => {
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'message_completed', project_key: 'chan-1:engineer', project_dir: '/home/user/project/.worktrees/chan-1-engineer', input_tokens: 10000, output_tokens: 2000, cache_read_input_tokens: 0, total_cost_usd: 0.03 }),
+        makeEvent({ event_type: 'message_completed', project_key: 'chan-1:pm', project_dir: '/home/user/project', input_tokens: 5000, output_tokens: 1000, cache_read_input_tokens: 0, total_cost_usd: 0.01 }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const dirMap = { '/home/user/project': 'my-project' };
+      const rows = engine.tokensByProject('7d', dirMap);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].project_name).toBe('my-project');
+      expect(rows[0].input_tokens).toBe(15000);
     });
   });
 
@@ -268,7 +298,7 @@ describe('ActivityEngine', () => {
       const timeline = engine.sessionTimeline('7d');
       expect(timeline).toHaveLength(1);
       expect(timeline[0].session_id).toBe('sess-abc12345xyz');
-      expect(timeline[0].label).toBe('mpg/sess-abc/engineer');
+      expect(timeline[0].label).toBe('unknown/sess-abc/engineer');
       expect(timeline[0].segments).toHaveLength(3);
       // idle: session_start → message_routed
       expect(timeline[0].segments[0]).toEqual({
@@ -326,7 +356,7 @@ describe('ActivityEngine', () => {
       ]);
       const engine = createActivityEngine(filePath);
       const timeline = engine.sessionTimeline('7d');
-      expect(timeline[0].label).toBe('mpg/sess-noa/designer');
+      expect(timeline[0].label).toBe('unknown/sess-noa/designer');
     });
 
     it('falls back to "default" when no agent info available', () => {
@@ -338,7 +368,7 @@ describe('ActivityEngine', () => {
       ]);
       const engine = createActivityEngine(filePath);
       const timeline = engine.sessionTimeline('7d');
-      expect(timeline[0].label).toBe('mpg/sess-bar/default');
+      expect(timeline[0].label).toBe('unknown/sess-bar/default');
     });
 
     it('resolves project name from projectNameMap', () => {
@@ -351,6 +381,42 @@ describe('ActivityEngine', () => {
       const engine = createActivityEngine(filePath);
       const timeline = engine.sessionTimeline('7d', { '123456789': 'my-cool-project' });
       expect(timeline[0].label).toBe('my-cool-project/sess-pro/engineer');
+    });
+
+    it('resolves project name from dirToNameMap via project_dir', () => {
+      const t0 = new Date('2026-03-29T10:00:00Z');
+      const t1 = new Date('2026-03-29T10:01:00Z');
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-dir00000', timestamp: t0.toISOString(), project_key: '999', project_dir: '/home/user/my-project', agent_name: 'engineer' }),
+        makeEvent({ event_type: 'session_end', session_id: 'sess-dir00000', timestamp: t1.toISOString(), project_key: '999', project_dir: '/home/user/my-project' }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const timeline = engine.sessionTimeline('7d', {}, { '/home/user/my-project': 'cool-project' });
+      expect(timeline[0].label).toBe('cool-project/sess-dir/engineer');
+    });
+
+    it('resolves project name from dirToNameMap for worktree subdirectories', () => {
+      const t0 = new Date('2026-03-29T10:00:00Z');
+      const t1 = new Date('2026-03-29T10:01:00Z');
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-wt000000', timestamp: t0.toISOString(), project_key: '999:engineer', project_dir: '/home/user/project/.worktrees/999-engineer', agent_name: 'engineer' }),
+        makeEvent({ event_type: 'session_end', session_id: 'sess-wt000000', timestamp: t1.toISOString(), project_key: '999:engineer', project_dir: '/home/user/project/.worktrees/999-engineer' }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const timeline = engine.sessionTimeline('7d', {}, { '/home/user/project': 'my-project' });
+      expect(timeline[0].label).toBe('my-project/sess-wt0/engineer');
+    });
+
+    it('prefers dirToNameMap over channelId lookup', () => {
+      const t0 = new Date('2026-03-29T10:00:00Z');
+      const t1 = new Date('2026-03-29T10:01:00Z');
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-pref0000', timestamp: t0.toISOString(), project_key: '123456789', project_dir: '/home/user/project', agent_name: 'pm' }),
+        makeEvent({ event_type: 'session_end', session_id: 'sess-pref0000', timestamp: t1.toISOString(), project_key: '123456789', project_dir: '/home/user/project' }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const timeline = engine.sessionTimeline('7d', { '123456789': 'channel-name' }, { '/home/user/project': 'dir-name' });
+      expect(timeline[0].label).toBe('dir-name/sess-pre/pm');
     });
 
     it('resolves project name when project_key contains agent suffix', () => {
@@ -395,8 +461,8 @@ describe('ActivityEngine', () => {
       const timeline = engine.sessionTimeline('7d');
       expect(timeline).toHaveLength(2);
       const labels = timeline.map(t => t.label);
-      expect(labels).toContain('mpg/sess-aaa/pm');
-      expect(labels).toContain('mpg/sess-bbb/engineer');
+      expect(labels).toContain('unknown/sess-aaa/pm');
+      expect(labels).toContain('unknown/sess-bbb/engineer');
     });
 
     it('filters by time range', () => {

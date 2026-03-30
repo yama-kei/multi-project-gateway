@@ -204,6 +204,15 @@ function resolveProjectName(key, nameMap) {
   var name = (nameMap && nameMap[channelId]) ? nameMap[channelId] : channelId;
   return agent ? name + ':' + agent : name;
 }
+function resolveProjectNameFromDir(dir, dirMap) {
+  if (!dir || !dirMap) return null;
+  if (dirMap[dir]) return dirMap[dir];
+  var keys = Object.keys(dirMap);
+  for (var i = 0; i < keys.length; i++) {
+    if (dir.indexOf(keys[i] + '/') === 0) return dirMap[keys[i]];
+  }
+  return null;
+}
 function copyToClipboard(text, el) {
   navigator.clipboard.writeText(text).then(function() {
     var orig = el.textContent;
@@ -230,10 +239,12 @@ function refresh() {
       discordEl.textContent = d.health.discord;
       discordEl.className = 'card-value ' + statusClass(d.health.discord);
 
-      // Build name map from projects list
+      // Build name maps from projects list
+      var dirToNameMap = {};
       if (d.projects) {
         d.projects.forEach(function(p) {
           if (p.channelId && p.name) projectNameMap[p.channelId] = p.name;
+          if (p.directory && p.name) dirToNameMap[p.directory] = p.name;
         });
       }
 
@@ -251,7 +262,7 @@ function refresh() {
           var sid = s.sessionId || '';
           var shortId = sid ? sid.slice(0, 8) : '';
           var pkParts = (s.projectKey || '').split(':');
-          var projName = (projectNameMap && projectNameMap[pkParts[0]]) ? projectNameMap[pkParts[0]] : pkParts[0];
+          var projName = resolveProjectNameFromDir(s.projectDir || s.cwd, dirToNameMap) || (projectNameMap && projectNameMap[pkParts[0]] ? projectNameMap[pkParts[0]] : null) || pkParts[0];
           var role = pkParts.length > 1 ? pkParts[1] : '';
           var sessionLabel = projName && shortId ? (role ? projName + '/' + shortId + '/' + role : projName + '/' + shortId) : (shortId || '—');
           h += '<tr><td><span class="clickable-id" style="cursor:pointer;text-decoration:underline dotted" title="Click to copy: ' + escapeHtml(sid) + '" onclick="copyToClipboard(\\'' + escapeHtml(sid) + '\\', this)">' + escapeHtml(sessionLabel) + '</span></td><td>' + sessionStatus(s) + '</td><td>' + formatDuration(s.createdAt) + '</td><td>' + formatAgo(s.lastActivity) + '</td></tr>';
@@ -669,7 +680,7 @@ function refreshActivity() {
       if (d.tokens_by_project.length === 0) { pt.innerHTML = '<div class="empty">No data</div>'; }
       else {
         var h = '<table><tr><th>Project</th><th>Input</th><th>Output</th><th>Cache Read</th><th>Cost</th><th>Messages</th></tr>';
-        d.tokens_by_project.forEach(function(p) { h += '<tr><td>' + escapeHtml(resolveProjectName(p.project_key, nameMap)) + '</td><td>' + compactTokens(p.input_tokens) + '</td><td>' + compactTokens(p.output_tokens) + '</td><td>' + compactTokens(p.cache_read_input_tokens) + '</td><td>$' + p.cost_usd.toFixed(3) + '</td><td>' + p.message_count + '</td></tr>'; });
+        d.tokens_by_project.forEach(function(p) { h += '<tr><td>' + escapeHtml(p.project_name || 'unknown') + '</td><td>' + compactTokens(p.input_tokens) + '</td><td>' + compactTokens(p.output_tokens) + '</td><td>' + compactTokens(p.cache_read_input_tokens) + '</td><td>$' + p.cost_usd.toFixed(3) + '</td><td>' + p.message_count + '</td></tr>'; });
         pt.innerHTML = h + '</table>';
       }
 
@@ -797,12 +808,14 @@ export function createDashboardServer(
       }
       try {
         const projectNameMap: Record<string, string> = {};
+        const dirToNameMap: Record<string, string> = {};
         if (config) {
           for (const [channelId, project] of Object.entries(config.projects)) {
             projectNameMap[channelId] = project.name;
+            dirToNameMap[project.directory] = project.name;
           }
         }
-        const data = engine.sessionTimeline(rangeParam as TimeRange, projectNameMap);
+        const data = engine.sessionTimeline(rangeParam as TimeRange, projectNameMap, dirToNameMap);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(data));
       } catch {
@@ -834,6 +847,7 @@ export function createDashboardServer(
           session_durations: [], model_breakdown: [], persona_breakdown: [],
           cache_efficiency: { total_input_tokens: 0, cache_read_tokens: 0, cache_hit_ratio: 0 },
           project_name_map: {},
+          dir_to_name_map: {},
         }));
         return;
       }
@@ -841,15 +855,17 @@ export function createDashboardServer(
       try {
         // Build channel ID → project name map from config
         const projectNameMap: Record<string, string> = {};
+        const dirToNameMap: Record<string, string> = {};
         if (config) {
           for (const [channelId, project] of Object.entries(config.projects)) {
             projectNameMap[channelId] = project.name;
+            dirToNameMap[project.directory] = project.name;
           }
         }
 
         const data = {
           summary: engine.computeSummary(range),
-          tokens_by_project: engine.tokensByProject(range),
+          tokens_by_project: engine.tokensByProject(range, dirToNameMap),
           tokens_by_session: engine.tokensBySession(range),
           sessions_over_time: engine.bucketed(range, bucket, 'session_start'),
           messages_over_time: engine.bucketed(range, bucket, 'message_completed'),
@@ -862,6 +878,7 @@ export function createDashboardServer(
           persona_breakdown: engine.personaBreakdown(range),
           cache_efficiency: engine.cacheEfficiency(range),
           project_name_map: projectNameMap,
+          dir_to_name_map: dirToNameMap,
         };
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(data));
