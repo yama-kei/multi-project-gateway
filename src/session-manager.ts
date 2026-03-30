@@ -3,6 +3,7 @@ import { runClaude, type ClaudeResult } from './claude-cli.js';
 import type { SessionStore, PersistedSession } from './session-store.js';
 import type { PulseEmitter } from './pulse-events.js';
 import { createWorktree as gitCreateWorktree, removeWorktree as gitRemoveWorktree } from './worktree.js';
+import { cleanupAttachments } from './attachments.js';
 
 export interface SessionInfo {
   sessionId: string;
@@ -138,6 +139,8 @@ export function createSessionManager(defaults: {
           session.messageCount,
         );
       }
+      // Clean up attachment files for the session's working directory (#110)
+      cleanupAttachments(session.projectDir ?? session.cwd).catch(() => {});
       sessions.delete(session.projectKey);
     }, defaults.idleTimeoutMs);
   }
@@ -391,6 +394,8 @@ export function createSessionManager(defaults: {
       if (session.worktreePath && session.projectDir) {
         gitRemoveWorktree(session.projectDir, session.projectKey);
       }
+      // Clean up attachment files (#110)
+      cleanupAttachments(session.projectDir ?? session.cwd).catch(() => {});
       sessions.delete(projectKey);
       persistSessions();
       return true;

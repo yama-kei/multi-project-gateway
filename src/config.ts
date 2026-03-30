@@ -22,6 +22,9 @@ export interface ProjectConfig {
   agents?: Record<string, AgentConfig>;
   allowedRoles?: string[];
   rateLimitPerUser?: number;
+  maxAttachmentSizeMb?: number;
+  allowedMimeTypes?: string[];
+  maxAttachmentsPerMessage?: number;
 }
 
 export const DEFAULT_ALLOWED_TOOLS: string[] = [
@@ -47,6 +50,9 @@ export interface GatewayDefaults {
   stuckNotifyMs: number;
   httpPort: number | false;
   logLevel: LogLevel;
+  maxAttachmentSizeMb: number;
+  allowedMimeTypes: string[];
+  maxAttachmentsPerMessage: number;
 }
 
 export interface GatewayConfig {
@@ -133,6 +139,9 @@ export function loadConfig(raw: unknown): GatewayConfig {
       ...(agents && { agents }),
       ...(allowedRoles && allowedRoles.length > 0 && { allowedRoles }),
       ...(rateLimitPerUser !== undefined && { rateLimitPerUser }),
+      ...(typeof p.maxAttachmentSizeMb === 'number' && { maxAttachmentSizeMb: p.maxAttachmentSizeMb }),
+      ...(Array.isArray(p.allowedMimeTypes) && { allowedMimeTypes: p.allowedMimeTypes as string[] }),
+      ...(typeof p.maxAttachmentsPerMessage === 'number' && { maxAttachmentsPerMessage: p.maxAttachmentsPerMessage }),
     };
   }
 
@@ -158,6 +167,9 @@ export function loadConfig(raw: unknown): GatewayConfig {
       stuckNotifyMs: typeof defaults.stuckNotifyMs === 'number' ? defaults.stuckNotifyMs : 300_000,
       httpPort: defaults.httpPort === false ? false : (typeof defaults.httpPort === 'number' ? defaults.httpPort : 3100),
       logLevel: isValidLogLevel(defaults.logLevel) ? defaults.logLevel : 'info',
+      maxAttachmentSizeMb: typeof defaults.maxAttachmentSizeMb === 'number' ? defaults.maxAttachmentSizeMb : 10,
+      allowedMimeTypes: Array.isArray(defaults.allowedMimeTypes) ? (defaults.allowedMimeTypes as string[]) : ['image/*', 'text/*', 'application/pdf', 'application/json'],
+      maxAttachmentsPerMessage: typeof defaults.maxAttachmentsPerMessage === 'number' ? defaults.maxAttachmentsPerMessage : 5,
     },
     projects: validated,
   };

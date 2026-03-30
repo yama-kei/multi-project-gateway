@@ -8,6 +8,7 @@ import { sendAgentMessage, buildHandoffEmbed } from './embed-format.js';
 import type { TurnCounter } from './turn-counter.js';
 import { hasAllowedRole } from './role-check.js';
 import { createRateLimiter } from './rate-limiter.js';
+import { downloadAttachments, buildAttachmentPrompt, type AttachmentConfig, DEFAULT_ATTACHMENT_CONFIG } from './attachments.js';
 
 export function chunkMessage(text: string, limit: number): string[] {
   if (text.length <= limit) return [text];
@@ -364,6 +365,26 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
       : undefined;
 
     try {
+      // Download attachments if present (#110)
+      let attachmentPrefix = '';
+      if (message.attachments.size > 0) {
+        const attachmentConfig: AttachmentConfig = {
+          maxAttachmentSizeMb: project?.maxAttachmentSizeMb ?? config.defaults.maxAttachmentSizeMb,
+          allowedMimeTypes: project?.allowedMimeTypes ?? config.defaults.allowedMimeTypes,
+          maxAttachmentsPerMessage: project?.maxAttachmentsPerMessage ?? config.defaults.maxAttachmentsPerMessage,
+        };
+        const attachmentResult = await downloadAttachments(
+          message.attachments,
+          message.id,
+          resolved.directory,
+          attachmentConfig,
+        );
+        if (attachmentResult.warnings.length > 0) {
+          await replyChannel.send(`⚠️ ${attachmentResult.warnings.join('\n')}`);
+        }
+        attachmentPrefix = buildAttachmentPrompt(attachmentResult.downloaded);
+      }
+
       // Prepend thread history when dispatching to an agent in a thread (#49)
       let userPrompt = mention ? mention.prompt : message.content;
       if (activeAgent && message.channel.isThread()) {
@@ -371,7 +392,17 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
         if (history) userPrompt = `${history}${userPrompt}`;
       }
 
-      // Guard against empty prompts (e.g. attachment-only messages, bare @agent mentions)
+      // For attachment-only messages, use a default prompt (#110)
+      if (!userPrompt.trim() && attachmentPrefix) {
+        userPrompt = 'Please review the attached files.';
+      }
+
+      // Prepend attachment file references to the prompt
+      if (attachmentPrefix) {
+        userPrompt = `${attachmentPrefix}${userPrompt}`;
+      }
+
+      // Guard against empty prompts (e.g. bare @agent mentions with no attachments)
       if (!userPrompt.trim()) {
         await replyChannel.send('Please include a message with your request.');
         return;
