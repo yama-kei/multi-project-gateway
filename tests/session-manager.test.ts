@@ -26,6 +26,26 @@ function createMockRuntime(): AgentRuntime & { spawn: ReturnType<typeof vi.fn<(o
   };
 }
 
+/** Mock runtime with canResume=true and spyable reattach/listOrphanedSessions/cleanup. */
+function createResumableRuntime() {
+  return {
+    name: 'mock-tmux',
+    canResume: true,
+    spawn: vi.fn<(opts: SpawnOpts) => Promise<ClaudeResult>>().mockResolvedValue({
+      text: 'Mock response',
+      sessionId: 'mock-session-id',
+      isError: false,
+    }),
+    listOrphanedSessions: vi.fn<() => Promise<string[]>>().mockResolvedValue([]),
+    reattach: vi.fn<(key: string) => Promise<ClaudeResult>>().mockResolvedValue({
+      text: 'Reattached response',
+      sessionId: 'reattached-sid',
+      isError: false,
+    }),
+    cleanup: vi.fn(),
+  };
+}
+
 const defaults = {
   idleTimeoutMs: 500,
   maxConcurrentSessions: 2,
@@ -556,6 +576,108 @@ describe('SessionManager', () => {
       await m.send('new-proj', '/tmp/new', 'Hello');
       expect(store.saved!.has('old-proj')).toBe(false);
       expect(store.saved!.has('new-proj')).toBe(true);
+      m.shutdown();
+    });
+  });
+
+  describe('orphan session recovery', () => {
+    it('skips recovery when runtime does not support resume', async () => {
+      const rt = createMockRuntime(); // canResume=false
+      const m = createSessionManager(defaults, rt);
+      const onResult = vi.fn();
+      await m.recoverOrphanedSessions(onResult);
+      expect(onResult).not.toHaveBeenCalled();
+      m.shutdown();
+    });
+
+    it('cleans up unmatched orphan sessions (no persisted record)', async () => {
+      const rt = createResumableRuntime();
+      rt.listOrphanedSessions.mockResolvedValue(['unknown-key']);
+      const store = createMockStore(); // empty — no persisted sessions
+      const m = createSessionManager(defaults, rt, store);
+      const onResult = vi.fn();
+      await m.recoverOrphanedSessions(onResult);
+      expect(rt.cleanup).toHaveBeenCalledWith('unknown-key');
+      expect(rt.reattach).not.toHaveBeenCalled();
+      expect(onResult).not.toHaveBeenCalled();
+      m.shutdown();
+    });
+
+    it('reattaches matched orphan sessions and delivers result', async () => {
+      const rt = createResumableRuntime();
+      rt.listOrphanedSessions.mockResolvedValue(['thread-123']);
+      rt.reattach.mockResolvedValue({ text: 'Orphan output', sessionId: 'orphan-sid', isError: false });
+      const store = createMockStore([
+        { sessionId: 'old-sid', projectKey: 'thread-123', cwd: '/tmp/proj', lastActivity: Date.now() - 5000 },
+      ]);
+      const m = createSessionManager(defaults, rt, store);
+      const onResult = vi.fn();
+      await m.recoverOrphanedSessions(onResult);
+      expect(rt.reattach).toHaveBeenCalledWith('thread-123');
+      expect(onResult).toHaveBeenCalledWith('thread-123', expect.objectContaining({ text: 'Orphan output' }));
+      expect(rt.cleanup).toHaveBeenCalledWith('thread-123');
+      m.shutdown();
+    });
+
+    it('emits session_resume for reattached orphans', async () => {
+      const rt = createResumableRuntime();
+      rt.listOrphanedSessions.mockResolvedValue(['thread-456']);
+      const store = createMockStore([
+        { sessionId: 'sid-456', projectKey: 'thread-456', cwd: '/tmp/proj', lastActivity: Date.now() - 10000 },
+      ]);
+      const pulseEmitter = {
+        sessionStart: vi.fn(),
+        sessionEnd: vi.fn(),
+        sessionIdle: vi.fn(),
+        sessionResume: vi.fn(),
+        messageRouted: vi.fn(),
+        messageCompleted: vi.fn(),
+      };
+      const m = createSessionManager(defaults, rt, store, pulseEmitter);
+      await m.recoverOrphanedSessions(vi.fn());
+      expect(pulseEmitter.sessionResume).toHaveBeenCalledWith(
+        'sid-456', 'thread-456', '/tmp/proj', expect.any(Number),
+      );
+      m.shutdown();
+    });
+
+    it('handles reattach failure gracefully', async () => {
+      const rt = createResumableRuntime();
+      rt.listOrphanedSessions.mockResolvedValue(['thread-789']);
+      rt.reattach.mockRejectedValue(new Error('output file missing'));
+      const store = createMockStore([
+        { sessionId: 'sid-789', projectKey: 'thread-789', cwd: '/tmp/proj', lastActivity: Date.now() - 5000 },
+      ]);
+      const m = createSessionManager(defaults, rt, store);
+      const onResult = vi.fn();
+      // Should not throw
+      await m.recoverOrphanedSessions(onResult);
+      expect(onResult).not.toHaveBeenCalled();
+      expect(rt.cleanup).toHaveBeenCalledWith('thread-789');
+      m.shutdown();
+    });
+
+    it('processes multiple orphans concurrently', async () => {
+      const rt = createResumableRuntime();
+      rt.listOrphanedSessions.mockResolvedValue(['t-1', 't-2', 't-unknown']);
+      rt.reattach.mockImplementation(async (key: string) => ({
+        text: `Result for ${key}`,
+        sessionId: `sid-${key}`,
+        isError: false,
+      }));
+      const store = createMockStore([
+        { sessionId: 'old-1', projectKey: 't-1', cwd: '/tmp/a', lastActivity: Date.now() - 1000 },
+        { sessionId: 'old-2', projectKey: 't-2', cwd: '/tmp/b', lastActivity: Date.now() - 2000 },
+      ]);
+      const m = createSessionManager(defaults, rt, store);
+      const onResult = vi.fn();
+      await m.recoverOrphanedSessions(onResult);
+      // t-1 and t-2 reattached, t-unknown cleaned up
+      expect(rt.reattach).toHaveBeenCalledTimes(2);
+      expect(onResult).toHaveBeenCalledTimes(2);
+      expect(rt.cleanup).toHaveBeenCalledWith('t-unknown'); // unmatched
+      expect(rt.cleanup).toHaveBeenCalledWith('t-1'); // post-reattach
+      expect(rt.cleanup).toHaveBeenCalledWith('t-2'); // post-reattach
       m.shutdown();
     });
   });

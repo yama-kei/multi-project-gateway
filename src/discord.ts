@@ -48,6 +48,8 @@ export interface DiscordBot {
   start(token: string): Promise<void>;
   stop(): void;
   getStatus(): string;
+  /** Deliver an orphaned session result to the appropriate Discord thread. */
+  deliverOrphanResult(projectKey: string, result: import('./claude-cli.js').ClaudeResult): Promise<void>;
 }
 
 function resolveProjectName(config: GatewayConfig, channelId: string): string {
@@ -508,6 +510,31 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
         [Status.Resuming]: 'resuming',
       };
       return statusMap[ws.status] ?? 'unknown';
+    },
+    async deliverOrphanResult(projectKey: string, result: import('./claude-cli.js').ClaudeResult): Promise<void> {
+      // projectKey is "threadId" or "threadId:agentName"
+      const threadId = projectKey.includes(':') ? projectKey.split(':')[0] : projectKey;
+      const agentName = projectKey.includes(':') ? projectKey.split(':').pop() : undefined;
+
+      try {
+        const channel = await client.channels.fetch(threadId);
+        if (!channel || !('send' in channel)) {
+          console.error(`Cannot deliver orphan result: channel ${threadId} not found or not sendable`);
+          return;
+        }
+
+        // Look up agent role if this was an agent session
+        let agentRole: string | undefined;
+        if (agentName && channel.isThread() && channel.parentId) {
+          const project = config.projects[channel.parentId];
+          agentRole = project?.agents?.[agentName]?.role;
+        }
+
+        await channel.send('🔄 Resumed after gateway restart — here is the pending response:');
+        await sendAgentMessage(channel as TextChannel | ThreadChannel, result.text, agentName, agentRole);
+      } catch (err) {
+        console.error(`Failed to deliver orphan result to ${threadId}:`, err);
+      }
     },
   };
 }
