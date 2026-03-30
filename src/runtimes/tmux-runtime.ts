@@ -78,6 +78,7 @@ export class TmuxRuntime implements AgentRuntime {
 
   async listOrphanedSessions(): Promise<string[]> {
     const sessions = listSessions(SESSION_PREFIX);
+    console.log(`[tmux] listOrphanedSessions: raw tmux sessions with prefix '${SESSION_PREFIX}': ${JSON.stringify(sessions)}`);
     return sessions.map((name) => name.slice(SESSION_PREFIX.length));
   }
 

@@ -427,8 +427,12 @@ export function createSessionManager(defaults: {
     },
 
     async recoverOrphanedSessions(onResult: OrphanResultCallback): Promise<void> {
-      if (!runtime.canResume) return;
+      if (!runtime.canResume) {
+        console.log('[recovery] Skipping: runtime.canResume is false');
+        return;
+      }
 
+      console.log('[recovery] Checking for orphaned tmux sessions...');
       let orphanedKeys: string[];
       try {
         orphanedKeys = await runtime.listOrphanedSessions();
@@ -436,6 +440,7 @@ export function createSessionManager(defaults: {
         console.error('Failed to list orphaned sessions:', err);
         return;
       }
+      console.log(`[recovery] Found ${orphanedKeys.length} orphaned tmux session(s): ${JSON.stringify(orphanedKeys)}`);
       if (orphanedKeys.length === 0) return;
 
       console.log(`Discovered ${orphanedKeys.length} orphaned tmux session(s)`);
@@ -490,6 +495,8 @@ export function createSessionManager(defaults: {
 
     shutdown() {
       persistSessions();
+      const activeKeys = [...sessions.values()].map((s) => s.projectKey);
+      console.log(`[shutdown] Persisted ${activeKeys.length} session(s). canResume=${runtime.canResume}. Keys: ${JSON.stringify(activeKeys.slice(0, 10))}`);
       for (const session of sessions.values()) {
         if (session.idleTimer) clearTimeout(session.idleTimer);
         // Only clean up tmux sessions if the runtime does NOT support resume.
