@@ -14,6 +14,9 @@ export interface SessionInfo {
   processing: boolean;
 }
 
+/** Callback invoked when an orphaned tmux session produces a result on startup recovery. */
+export type OrphanResultCallback = (projectKey: string, result: ClaudeResult) => void;
+
 export interface SessionManager {
   send(projectKey: string, cwd: string, prompt: string, opts?: { worktree?: boolean; systemPrompt?: string; timeoutMs?: number; extraArgs?: string[] }): Promise<ClaudeResult>;
   getSession(projectKey: string): SessionInfo | undefined;
@@ -21,6 +24,8 @@ export interface SessionManager {
   clearSession(projectKey: string): boolean;
   restartSession(projectKey: string): boolean;
   shutdown(): void;
+  /** Discover orphaned tmux sessions and reattach to them. Call after Discord bot is ready. */
+  recoverOrphanedSessions(onResult: OrphanResultCallback): Promise<void>;
 }
 
 interface InternalSession {
@@ -407,6 +412,61 @@ export function createSessionManager(defaults: {
       resetIdleTimer(session);
       persistSessions();
       return true;
+    },
+
+    async recoverOrphanedSessions(onResult: OrphanResultCallback): Promise<void> {
+      if (!runtime.canResume) return;
+
+      let orphanedKeys: string[];
+      try {
+        orphanedKeys = await runtime.listOrphanedSessions();
+      } catch (err) {
+        console.error('Failed to list orphaned sessions:', err);
+        return;
+      }
+      if (orphanedKeys.length === 0) return;
+
+      console.log(`Discovered ${orphanedKeys.length} orphaned tmux session(s)`);
+
+      // Cross-reference with persisted sessions
+      const persisted = store ? store.load() : new Map<string, PersistedSession>();
+
+      const reattachPromises: Promise<void>[] = [];
+
+      for (const key of orphanedKeys) {
+        const entry = persisted.get(key);
+        if (!entry) {
+          // No persisted record — stale orphan, clean it up
+          console.log(`Cleaning up unmatched orphan: ${key}`);
+          if (runtime.cleanup) runtime.cleanup(key);
+          continue;
+        }
+
+        // Matched — reattach and deliver result
+        reattachPromises.push(
+          (async () => {
+            try {
+              if (pulseEmitter) {
+                pulseEmitter.sessionResume(
+                  entry.sessionId,
+                  entry.projectKey,
+                  entry.cwd,
+                  Date.now() - entry.lastActivity,
+                );
+              }
+              const result = await runtime.reattach(key);
+              console.log(`Reattached orphan ${key}: ${result.text.length} chars`);
+              onResult(entry.projectKey, result);
+            } catch (err) {
+              console.error(`Failed to reattach orphan ${key}:`, err);
+            } finally {
+              if (runtime.cleanup) runtime.cleanup(key);
+            }
+          })(),
+        );
+      }
+
+      await Promise.all(reattachPromises);
     },
 
     shutdown() {

@@ -214,6 +214,15 @@ function start() {
           log.warn(`Dashboard server failed to start on port ${config.defaults.httpPort}: ${err}`);
         }
       }
+
+      // Recover orphaned tmux sessions after Discord is connected
+      sessionManager.recoverOrphanedSessions((projectKey, result) => {
+        bot.deliverOrphanResult(projectKey, result).catch((err) => {
+          log.error(`Failed to deliver orphan result for ${projectKey}: ${err}`);
+        });
+      }).catch((err) => {
+        log.error(`Orphan session recovery failed: ${err}`);
+      });
     })
     .catch((err) => {
       log.error(`Failed to start bot: ${err}`);
