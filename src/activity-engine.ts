@@ -188,6 +188,20 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
         const val = valueField ? (Number(e[valueField]) || 0) : 1;
         map.set(key, (map.get(key) ?? 0) + val);
       }
+      // Fill in all time slots in the range so the x-axis shows absolute time
+      const now = new Date();
+      const start = new Date(now.getTime() - RANGE_MS[range]);
+      const stepMs = bucket === '15min' ? 15 * 60 * 1000
+        : bucket === 'hour' ? 60 * 60 * 1000
+        : 24 * 60 * 60 * 1000;
+      const startKey = bucketKey(start.toISOString(), bucket);
+      const cursor = new Date(startKey);
+      const endTime = now.getTime();
+      while (cursor.getTime() <= endTime) {
+        const key = cursor.toISOString();
+        if (!map.has(key)) map.set(key, 0);
+        cursor.setTime(cursor.getTime() + stepMs);
+      }
       return Array.from(map.entries())
         .sort((a, b) => a[0].localeCompare(b[0]))
         .map(([b, value]) => ({ bucket: b, value }));
