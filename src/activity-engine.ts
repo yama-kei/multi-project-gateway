@@ -60,6 +60,17 @@ function bucketKey(timestamp: string, bucket: Bucket): string {
   return d.toISOString();
 }
 
+/** Resolve a project name from its directory path using a directory→name map.
+ *  Handles both exact matches and worktree subdirectory matches. */
+function resolveNameFromDir(projectDir: string, dirToNameMap?: Record<string, string>): string | undefined {
+  if (!dirToNameMap || !projectDir) return undefined;
+  if (dirToNameMap[projectDir]) return dirToNameMap[projectDir];
+  for (const [dir, name] of Object.entries(dirToNameMap)) {
+    if (projectDir.startsWith(dir + '/')) return name;
+  }
+  return undefined;
+}
+
 export interface ActivityEngine {
   computeSummary(range: TimeRange): {
     total_cost_usd: number;
@@ -69,9 +80,8 @@ export interface ActivityEngine {
     total_messages: number;
     avg_session_duration_ms: number;
   };
-  tokensByProject(range: TimeRange): Array<{
-    project_key: string;
-    project_dir: string;
+  tokensByProject(range: TimeRange, dirToNameMap?: Record<string, string>): Array<{
+    project_name: string;
     input_tokens: number;
     output_tokens: number;
     cache_read_input_tokens: number;
@@ -108,7 +118,7 @@ export interface ActivityEngine {
     cache_read_tokens: number;
     cache_hit_ratio: number;
   };
-  sessionTimeline(range: TimeRange, projectNameMap?: Record<string, string>): Array<{
+  sessionTimeline(range: TimeRange, projectNameMap?: Record<string, string>, dirToNameMap?: Record<string, string>): Array<{
     session_id: string;
     label: string;
     segments: Array<{
@@ -148,18 +158,18 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
       };
     },
 
-    tokensByProject(range) {
+    tokensByProject(range, dirToNameMap) {
       const messages = getEvents(range, 'message_completed');
-      const map = new Map<string, { project_key: string; project_dir: string; input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cost_usd: number; message_count: number }>();
+      const map = new Map<string, { project_name: string; input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cost_usd: number; message_count: number }>();
       for (const e of messages) {
-        const key = e.project_key;
-        const row = map.get(key) ?? { project_key: key, project_dir: e.project_dir, input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cost_usd: 0, message_count: 0 };
+        const name = resolveNameFromDir(e.project_dir, dirToNameMap) ?? e.project_key;
+        const row = map.get(name) ?? { project_name: name, input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cost_usd: 0, message_count: 0 };
         row.input_tokens += Number(e.input_tokens) || 0;
         row.output_tokens += Number(e.output_tokens) || 0;
         row.cache_read_input_tokens += Number(e.cache_read_input_tokens) || 0;
         row.cost_usd += Number(e.total_cost_usd) || 0;
         row.message_count++;
-        map.set(key, row);
+        map.set(name, row);
       }
       return Array.from(map.values());
     },
@@ -252,7 +262,7 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
       };
     },
 
-    sessionTimeline(range, projectNameMap) {
+    sessionTimeline(range, projectNameMap, dirToNameMap) {
       const events = readEvents(target, range);
       const TIMELINE_TYPES = new Set(['session_start', 'message_routed', 'message_completed', 'session_end', 'session_idle']);
       const relevant = events.filter(e => TIMELINE_TYPES.has(e.event_type));
@@ -299,11 +309,13 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
         }
 
         const shortId = sessionId.substring(0, 8);
-        // Resolve project name from the event's project_key via the config map
+        // Resolve project name: try directory-based lookup first, then channel ID, then fallback
+        const projectDir = sessionEvents[0].project_dir;
         const projectKey = sessionEvents[0].project_key;
-        // project_key may be "channelId" or "channelId:agentName"; extract the channel part
         const channelId = projectKey?.includes(':') ? projectKey.split(':')[0] : projectKey;
-        const projectName = (projectNameMap && channelId ? projectNameMap[channelId] : undefined) ?? 'mpg';
+        const projectName = resolveNameFromDir(projectDir, dirToNameMap)
+          ?? (projectNameMap && channelId ? projectNameMap[channelId] : undefined)
+          ?? 'unknown';
         const label = `${projectName}/${shortId}/${persona}`;
 
         // Build segments by walking through events

@@ -9,6 +9,8 @@ import { cleanupAttachments } from './attachments.js';
 export interface SessionInfo {
   sessionId: string;
   projectKey: string;
+  cwd: string;
+  projectDir?: string;
   lastActivity: number;
   queueLength: number;
   createdAt: number;
@@ -367,6 +369,8 @@ export function createSessionManager(defaults: {
       return {
         sessionId: session.sessionId ?? '',
         projectKey: session.projectKey,
+        cwd: session.cwd,
+        projectDir: session.projectDir,
         lastActivity: session.lastActivity,
         queueLength: session.queue.length,
         createdAt: session.createdAt,
@@ -378,6 +382,8 @@ export function createSessionManager(defaults: {
       return Array.from(sessions.values()).map((s) => ({
         sessionId: s.sessionId ?? '',
         projectKey: s.projectKey,
+        cwd: s.cwd,
+        projectDir: s.projectDir,
         lastActivity: s.lastActivity,
         queueLength: s.queue.length,
         createdAt: s.createdAt,

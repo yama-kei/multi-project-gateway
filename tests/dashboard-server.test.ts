@@ -83,8 +83,8 @@ describe('createDashboardServer', () => {
   it('returns 200 with health JSON on GET /health', async () => {
     const port = getPort();
     const sessions: SessionInfo[] = [
-      { sessionId: 'sess-1', projectKey: 'ch-1', lastActivity: Date.now(), queueLength: 0 },
-      { sessionId: 'sess-2', projectKey: 'ch-2', lastActivity: Date.now(), queueLength: 2 },
+      { sessionId: 'sess-1', projectKey: 'ch-1', cwd: '/home/user/project', lastActivity: Date.now(), queueLength: 0 },
+      { sessionId: 'sess-2', projectKey: 'ch-2', cwd: '/home/user/other', lastActivity: Date.now(), queueLength: 2 },
     ];
     server = await createDashboardServer(port, makeSessionManager(sessions), makeBot('connected'));
 
@@ -162,7 +162,7 @@ describe('createDashboardServer', () => {
     it('returns session list', async () => {
       const port = getPort();
       const sessions: SessionInfo[] = [
-        { sessionId: 'sess-1', projectKey: 'ch-1', lastActivity: 1700000000000, queueLength: 3 },
+        { sessionId: 'sess-1', projectKey: 'ch-1', cwd: '/home/user/project', lastActivity: 1700000000000, queueLength: 3 },
       ];
       server = await createDashboardServer(port, makeSessionManager(sessions), makeBot());
 
@@ -222,7 +222,7 @@ describe('createDashboardServer', () => {
     it('returns combined status overview', async () => {
       const port = getPort();
       const sessions: SessionInfo[] = [
-        { sessionId: 'sess-1', projectKey: 'ch-1', lastActivity: Date.now(), queueLength: 1 },
+        { sessionId: 'sess-1', projectKey: 'ch-1', cwd: '/home/user/project', lastActivity: Date.now(), queueLength: 1 },
       ];
       server = await createDashboardServer(port, makeSessionManager(sessions), makeBot('connected'), makeConfig());
 
@@ -258,7 +258,7 @@ describe('createDashboardServer', () => {
           total_sessions: 10, total_messages: 42, avg_session_duration_ms: 120000,
         }),
         tokensByProject: vi.fn().mockReturnValue([
-          { project_key: 'proj-a', project_dir: '/tmp/a', input_tokens: 300000, output_tokens: 30000, cache_read_input_tokens: 100000, cost_usd: 0.8, message_count: 25 },
+          { project_name: 'proj-a', input_tokens: 300000, output_tokens: 30000, cache_read_input_tokens: 100000, cost_usd: 0.8, message_count: 25 },
         ]),
         tokensBySession: vi.fn().mockReturnValue([
           { session_id: 'sess-1', project_key: 'proj-a', input_tokens: 150000, output_tokens: 15000, cost_usd: 0.4, message_count: 12, duration_ms: 60000 },
@@ -317,7 +317,7 @@ describe('createDashboardServer', () => {
       expect(body.project_name_map).toEqual({});
     });
 
-    it('GET /api/activity/summary includes project_name_map from config', async () => {
+    it('GET /api/activity/summary includes project_name_map and dir_to_name_map from config', async () => {
       const port = getPort();
       const engine = makeMockEngine();
       server = await createDashboardServer(port, makeSessionManager(), makeBot(), makeConfig(), {
@@ -326,6 +326,7 @@ describe('createDashboardServer', () => {
       const res = await httpGet(port, '/api/activity/summary?range=7d');
       const body = JSON.parse(res.body);
       expect(body.project_name_map).toEqual({ 'ch-1': 'My Project', 'ch-2': 'Other Project' });
+      expect(body.dir_to_name_map).toEqual({ '/home/user/project': 'My Project', '/home/user/other': 'Other Project' });
     });
   });
 
@@ -368,7 +369,7 @@ describe('createDashboardServer', () => {
       expect(body).toHaveLength(1);
       expect(body[0].label).toBe('mpg/sess-123/engineer');
       expect(body[0].segments).toHaveLength(2);
-      expect(engine.sessionTimeline).toHaveBeenCalledWith('24h', { 'ch-1': 'My Project', 'ch-2': 'Other Project' });
+      expect(engine.sessionTimeline).toHaveBeenCalledWith('24h', { 'ch-1': 'My Project', 'ch-2': 'Other Project' }, { '/home/user/project': 'My Project', '/home/user/other': 'Other Project' });
     });
 
     it('returns empty array when no engine provided', async () => {
@@ -387,7 +388,7 @@ describe('createDashboardServer', () => {
       });
       const res = await httpGet(port, '/api/activity/timeline?range=3h');
       expect(res.status).toBe(200);
-      expect(engine.sessionTimeline).toHaveBeenCalledWith('3h', { 'ch-1': 'My Project', 'ch-2': 'Other Project' });
+      expect(engine.sessionTimeline).toHaveBeenCalledWith('3h', { 'ch-1': 'My Project', 'ch-2': 'Other Project' }, { '/home/user/project': 'My Project', '/home/user/other': 'Other Project' });
     });
 
     it('accepts 12h range and passes it to engine', async () => {
@@ -398,7 +399,7 @@ describe('createDashboardServer', () => {
       });
       const res = await httpGet(port, '/api/activity/timeline?range=12h');
       expect(res.status).toBe(200);
-      expect(engine.sessionTimeline).toHaveBeenCalledWith('12h', { 'ch-1': 'My Project', 'ch-2': 'Other Project' });
+      expect(engine.sessionTimeline).toHaveBeenCalledWith('12h', { 'ch-1': 'My Project', 'ch-2': 'Other Project' }, { '/home/user/project': 'My Project', '/home/user/other': 'Other Project' });
     });
 
     it('returns 400 for invalid range', async () => {
