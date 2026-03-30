@@ -339,6 +339,30 @@ describe('ActivityEngine', () => {
       expect(timeline[0].label).toBe('mpg/sess-bar/default');
     });
 
+    it('resolves project name from projectNameMap', () => {
+      const t0 = new Date('2026-03-29T10:00:00Z');
+      const t1 = new Date('2026-03-29T10:01:00Z');
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-proj0000', timestamp: t0.toISOString(), project_key: '123456789', agent_name: 'engineer' }),
+        makeEvent({ event_type: 'session_end', session_id: 'sess-proj0000', timestamp: t1.toISOString(), project_key: '123456789' }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const timeline = engine.sessionTimeline('7d', { '123456789': 'my-cool-project' });
+      expect(timeline[0].label).toBe('my-cool-project/sess-pro/engineer');
+    });
+
+    it('resolves project name when project_key contains agent suffix', () => {
+      const t0 = new Date('2026-03-29T10:00:00Z');
+      const t1 = new Date('2026-03-29T10:01:00Z');
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-agt00000', timestamp: t0.toISOString(), project_key: '123456789:engineer', agent_name: 'engineer' }),
+        makeEvent({ event_type: 'session_end', session_id: 'sess-agt00000', timestamp: t1.toISOString(), project_key: '123456789:engineer' }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const timeline = engine.sessionTimeline('7d', { '123456789': 'my-cool-project' });
+      expect(timeline[0].label).toBe('my-cool-project/sess-agt/engineer');
+    });
+
     it('handles session_idle as session end', () => {
       const t0 = new Date('2026-03-29T10:00:00Z');
       const t1 = new Date('2026-03-29T10:05:00Z');

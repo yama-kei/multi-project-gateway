@@ -796,7 +796,13 @@ export function createDashboardServer(
         return;
       }
       try {
-        const data = engine.sessionTimeline(rangeParam as TimeRange);
+        const projectNameMap: Record<string, string> = {};
+        if (config) {
+          for (const [channelId, project] of Object.entries(config.projects)) {
+            projectNameMap[channelId] = project.name;
+          }
+        }
+        const data = engine.sessionTimeline(rangeParam as TimeRange, projectNameMap);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(data));
       } catch {

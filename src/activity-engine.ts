@@ -108,7 +108,7 @@ export interface ActivityEngine {
     cache_read_tokens: number;
     cache_hit_ratio: number;
   };
-  sessionTimeline(range: TimeRange): Array<{
+  sessionTimeline(range: TimeRange, projectNameMap?: Record<string, string>): Array<{
     session_id: string;
     label: string;
     segments: Array<{
@@ -238,7 +238,7 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
       };
     },
 
-    sessionTimeline(range) {
+    sessionTimeline(range, projectNameMap) {
       const events = readEvents(target, range);
       const TIMELINE_TYPES = new Set(['session_start', 'message_routed', 'message_completed', 'session_end', 'session_idle']);
       const relevant = events.filter(e => TIMELINE_TYPES.has(e.event_type));
@@ -285,7 +285,12 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
         }
 
         const shortId = sessionId.substring(0, 8);
-        const label = `mpg/${shortId}/${persona}`;
+        // Resolve project name from the event's project_key via the config map
+        const projectKey = sessionEvents[0].project_key;
+        // project_key may be "channelId" or "channelId:agentName"; extract the channel part
+        const channelId = projectKey?.includes(':') ? projectKey.split(':')[0] : projectKey;
+        const projectName = (projectNameMap && channelId ? projectNameMap[channelId] : undefined) ?? 'mpg';
+        const label = `${projectName}/${shortId}/${persona}`;
 
         // Build segments by walking through events
         const segments: Segment[] = [];
