@@ -56,10 +56,13 @@ export class TmuxRuntime implements AgentRuntime {
     const outPath = outputFile(sessionKey);
     const errPath = stderrFile(sessionKey);
 
-    // Build the claude command
+    // Build the claude command, wrapped with `timeout` so the tmux session
+    // self-destructs if mpg never reads the output (prevents zombie sessions).
     const args = buildClaudeArgs(opts.baseArgs, opts.prompt, opts.sessionId, opts.systemPrompt);
     const escapedArgs = args.map((a) => shellEscape(a));
-    const command = `claude ${escapedArgs.join(' ')} > ${shellEscape(outPath)} 2> ${shellEscape(errPath)}`;
+    const bufferMs = 5 * 60 * 1000; // 5 minutes buffer beyond mpg's own timeout
+    const timeoutSec = Math.ceil((timeoutMs + bufferMs) / 1000);
+    const command = `timeout ${timeoutSec} claude ${escapedArgs.join(' ')} > ${shellEscape(outPath)} 2> ${shellEscape(errPath)}`;
 
     // Kill any stale session with the same name
     if (sessionExists(tmuxName)) {

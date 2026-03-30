@@ -8,6 +8,7 @@ import { createFileSessionStore } from './session-store.js';
 import { ClaudeCliRuntime } from './runtimes/claude-cli-runtime.js';
 import { TmuxRuntime } from './runtimes/tmux-runtime.js';
 import type { AgentRuntime } from './agent-runtime.js';
+import { listSessions, killSession } from './tmux.js';
 import { createDiscordBot } from './discord.js';
 import { createPulseEmitter } from './pulse-events.js';
 import { createActivityEngine } from './activity-engine.js';
@@ -165,6 +166,19 @@ function start() {
     log.info('Using tmux-based persistent runtime');
   } else {
     runtime = new ClaudeCliRuntime();
+
+    // Sweep stale tmux sessions from a previous tmux-mode run
+    try {
+      const stale = listSessions('mpg-');
+      for (const name of stale) {
+        killSession(name);
+      }
+      if (stale.length > 0) {
+        log.info(`Cleaned up ${stale.length} stale tmux session(s)`);
+      }
+    } catch {
+      // tmux not installed — nothing to sweep
+    }
   }
   const sessionManager = createSessionManager(config.defaults, runtime, sessionStore, pulseEmitter);
 

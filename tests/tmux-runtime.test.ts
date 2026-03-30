@@ -76,7 +76,7 @@ describe('TmuxRuntime', () => {
       timeoutMs: 5000,
     };
 
-    it('creates output directory and launches tmux session', async () => {
+    it('creates output directory and launches tmux session with timeout wrapper', async () => {
       // Session exits immediately, output file exists with valid JSON
       mockSessionExists.mockReturnValue(false);
       mockExistsSync.mockReturnValue(true);
@@ -95,6 +95,21 @@ describe('TmuxRuntime', () => {
       );
       expect(result.text).toBe('Hello from tmux');
       expect(result.sessionId).toBe('tmux-session-123');
+
+      // Verify timeout wrapper: timeoutMs=5000 + 5min buffer = 305s
+      const command = mockCreateSession.mock.calls[0][1] as string;
+      expect(command).toMatch(/^timeout 305 claude /);
+    });
+
+    it('uses default timeout (20min + 5min buffer = 1500s) when timeoutMs is omitted', async () => {
+      mockSessionExists.mockReturnValue(false);
+      mockExistsSync.mockReturnValue(true);
+      mockReadFileSync.mockReturnValue(validOutput);
+
+      await runtime.spawn({ ...spawnOpts, timeoutMs: undefined });
+
+      const command = mockCreateSession.mock.calls[0][1] as string;
+      expect(command).toMatch(/^timeout 1500 claude /);
     });
 
     it('kills stale tmux session before launching new one', async () => {
