@@ -298,7 +298,8 @@ describe('ActivityEngine', () => {
       const timeline = engine.sessionTimeline('7d');
       expect(timeline).toHaveLength(1);
       expect(timeline[0].session_id).toBe('sess-abc12345xyz');
-      expect(timeline[0].label).toBe('unknown/sess-abc/engineer');
+      expect(timeline[0].label).toBe('unknown/roject-a/engineer');
+      expect(timeline[0].thread_id).toBe('project-a');
       expect(timeline[0].segments).toHaveLength(3);
       // idle: session_start → message_routed
       expect(timeline[0].segments[0]).toEqual({
@@ -356,7 +357,7 @@ describe('ActivityEngine', () => {
       ]);
       const engine = createActivityEngine(filePath);
       const timeline = engine.sessionTimeline('7d');
-      expect(timeline[0].label).toBe('unknown/sess-noa/designer');
+      expect(timeline[0].label).toBe('unknown/roject-a/designer');
     });
 
     it('falls back to "default" when no agent info available', () => {
@@ -368,7 +369,7 @@ describe('ActivityEngine', () => {
       ]);
       const engine = createActivityEngine(filePath);
       const timeline = engine.sessionTimeline('7d');
-      expect(timeline[0].label).toBe('unknown/sess-bar/default');
+      expect(timeline[0].label).toBe('unknown/roject-a/default');
     });
 
     it('resolves project name from projectNameMap', () => {
@@ -380,7 +381,7 @@ describe('ActivityEngine', () => {
       ]);
       const engine = createActivityEngine(filePath);
       const timeline = engine.sessionTimeline('7d', { '123456789': 'my-cool-project' });
-      expect(timeline[0].label).toBe('my-cool-project/sess-pro/engineer');
+      expect(timeline[0].label).toBe('my-cool-project/23456789/engineer');
     });
 
     it('resolves project name from dirToNameMap via project_dir', () => {
@@ -392,7 +393,7 @@ describe('ActivityEngine', () => {
       ]);
       const engine = createActivityEngine(filePath);
       const timeline = engine.sessionTimeline('7d', {}, { '/home/user/my-project': 'cool-project' });
-      expect(timeline[0].label).toBe('cool-project/sess-dir/engineer');
+      expect(timeline[0].label).toBe('cool-project/999/engineer');
     });
 
     it('resolves project name from dirToNameMap for worktree subdirectories', () => {
@@ -404,7 +405,7 @@ describe('ActivityEngine', () => {
       ]);
       const engine = createActivityEngine(filePath);
       const timeline = engine.sessionTimeline('7d', {}, { '/home/user/project': 'my-project' });
-      expect(timeline[0].label).toBe('my-project/sess-wt0/engineer');
+      expect(timeline[0].label).toBe('my-project/999/engineer');
     });
 
     it('prefers dirToNameMap over channelId lookup', () => {
@@ -416,7 +417,7 @@ describe('ActivityEngine', () => {
       ]);
       const engine = createActivityEngine(filePath);
       const timeline = engine.sessionTimeline('7d', { '123456789': 'channel-name' }, { '/home/user/project': 'dir-name' });
-      expect(timeline[0].label).toBe('dir-name/sess-pre/pm');
+      expect(timeline[0].label).toBe('dir-name/23456789/pm');
     });
 
     it('resolves project name when project_key contains agent suffix', () => {
@@ -428,7 +429,31 @@ describe('ActivityEngine', () => {
       ]);
       const engine = createActivityEngine(filePath);
       const timeline = engine.sessionTimeline('7d', { '123456789': 'my-cool-project' });
-      expect(timeline[0].label).toBe('my-cool-project/sess-agt/engineer');
+      expect(timeline[0].label).toBe('my-cool-project/23456789/engineer');
+    });
+
+    it('sessions from the same thread share the same short ID', () => {
+      const t0 = new Date('2026-03-29T10:00:00Z');
+      const t1 = new Date('2026-03-29T10:01:00Z');
+      const t2 = new Date('2026-03-29T10:02:00Z');
+      const t3 = new Date('2026-03-29T10:03:00Z');
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-pm000000', timestamp: t0.toISOString(), project_key: '1488241910345895966:pm', agent_name: 'pm' }),
+        makeEvent({ event_type: 'session_start', session_id: 'sess-eng00000', timestamp: t1.toISOString(), project_key: '1488241910345895966:engineer', agent_name: 'engineer' }),
+        makeEvent({ event_type: 'session_end', session_id: 'sess-pm000000', timestamp: t2.toISOString(), project_key: '1488241910345895966:pm' }),
+        makeEvent({ event_type: 'session_end', session_id: 'sess-eng00000', timestamp: t3.toISOString(), project_key: '1488241910345895966:engineer' }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const timeline = engine.sessionTimeline('7d');
+      expect(timeline).toHaveLength(2);
+      // Both sessions share the same thread short ID (last 8 of channel ID)
+      const pmEntry = timeline.find(t => t.label.includes('/pm'))!;
+      const engEntry = timeline.find(t => t.label.includes('/engineer'))!;
+      expect(pmEntry.label).toBe('unknown/45895966/pm');
+      expect(engEntry.label).toBe('unknown/45895966/engineer');
+      // Both share the same thread_id
+      expect(pmEntry.thread_id).toBe('1488241910345895966');
+      expect(engEntry.thread_id).toBe('1488241910345895966');
     });
 
     it('handles session_idle as session end', () => {
@@ -461,8 +486,8 @@ describe('ActivityEngine', () => {
       const timeline = engine.sessionTimeline('7d');
       expect(timeline).toHaveLength(2);
       const labels = timeline.map(t => t.label);
-      expect(labels).toContain('unknown/sess-aaa/pm');
-      expect(labels).toContain('unknown/sess-bbb/engineer');
+      expect(labels).toContain('unknown/roject-a/pm');
+      expect(labels).toContain('unknown/roject-a/engineer');
     });
 
     it('filters by time range', () => {
