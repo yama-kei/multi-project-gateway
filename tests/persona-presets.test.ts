@@ -21,6 +21,15 @@ describe('persona-presets', () => {
     expect(resolvePreset('qa')).toEqual(PERSONA_PRESETS.qa);
   });
 
+  it('pm prompt includes team management sections', () => {
+    const pm = PERSONA_PRESETS.pm;
+    expect(pm.prompt).toContain('## Team management');
+    expect(pm.prompt).toContain('### Task decomposition');
+    expect(pm.prompt).toContain('### Prioritization');
+    expect(pm.prompt).toContain('### Status tracking');
+    expect(pm.prompt).toContain('### Guiding the user');
+  });
+
   it('resolvePreset returns undefined for unknown preset', () => {
     expect(resolvePreset('ceo')).toBeUndefined();
   });
