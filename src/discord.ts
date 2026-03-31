@@ -198,6 +198,7 @@ async function fetchThreadHistory(channel: TextChannel | ThreadChannel, beforeMe
   }
 }
 
+/** @internal Use {@link createAdapter} instead — this is the Discord-specific implementation. */
 export function createDiscordBot(token: string, router: Router, sessionManager: SessionManager, config: GatewayConfig, turnCounter?: TurnCounter): DiscordBot {
   const client = new Client({
     intents: [
