@@ -31,7 +31,7 @@ const router = createRouter(config);
 const sessionStore = createFileSessionStore(resolve(process.cwd(), '.sessions.json'));
 const runtime = new ClaudeCliRuntime();
 const sessionManager = createSessionManager(config.defaults, runtime, sessionStore);
-const bot = createDiscordBot(router, sessionManager, config);
+const bot = createDiscordBot(token, router, sessionManager, config);
 
 // Graceful shutdown
 function shutdown() {
@@ -44,7 +44,7 @@ function shutdown() {
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
-bot.start(token).catch((err) => {
+bot.start().catch((err) => {
   console.error('Failed to start bot:', err);
   process.exit(1);
 });

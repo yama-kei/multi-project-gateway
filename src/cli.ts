@@ -211,7 +211,7 @@ function start() {
   }
 
   const turnCounter = createTurnCounter();
-  const bot = createDiscordBot(router, sessionManager, config, turnCounter);
+  const bot = createDiscordBot(token, router, sessionManager, config, turnCounter);
 
   let dashboardServer: DashboardServer | undefined;
 
@@ -229,7 +229,7 @@ function start() {
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
 
-  bot.start(token)
+  bot.start()
     .then(async () => {
       if (config.defaults.httpPort !== false) {
         try {
