@@ -340,7 +340,14 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
             segmentStart = e.timestamp;
             currentState = 'idle';
           } else if (e.event_type === 'session_resume') {
-            // Session was restored after a gap — skip the idle gap, restart segments from here
+            // Session was restored after a gap — close any in-progress segment at the
+            // previous event's time (not resume time) to avoid spanning the gap, then restart
+            if (i > 0) {
+              const prevEvent = sessionEvents[i - 1];
+              if (segmentStart !== prevEvent.timestamp) {
+                segments.push({ start: segmentStart, end: prevEvent.timestamp, state: currentState });
+              }
+            }
             segmentStart = e.timestamp;
             currentState = 'idle';
           } else if (e.event_type === 'session_end' || e.event_type === 'session_idle') {

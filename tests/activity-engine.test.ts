@@ -583,6 +583,39 @@ describe('ActivityEngine', () => {
       }
     });
 
+    it('session_resume during processing (crash recovery) preserves pre-crash segment', () => {
+      // Session starts processing, crashes (no session_idle), resumes 2 hours later
+      const t0 = new Date('2026-03-29T10:00:00Z');
+      const t1 = new Date('2026-03-29T10:01:00Z'); // routed
+      const t2 = new Date('2026-03-29T12:00:00Z'); // resume (crash, no idle/completed)
+      const t3 = new Date('2026-03-29T12:01:00Z'); // routed again
+      const t4 = new Date('2026-03-29T12:05:00Z'); // completed
+      const t5 = new Date('2026-03-29T12:06:00Z'); // session end
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-crash000', timestamp: t0.toISOString(), agent_name: 'engineer' }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-crash000', timestamp: t1.toISOString() }),
+        // crash happens here — no session_idle or message_completed
+        makeEvent({ event_type: 'session_resume', session_id: 'sess-crash000', timestamp: t2.toISOString() }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-crash000', timestamp: t3.toISOString() }),
+        makeEvent({ event_type: 'message_completed', session_id: 'sess-crash000', timestamp: t4.toISOString() }),
+        makeEvent({ event_type: 'session_end', session_id: 'sess-crash000', timestamp: t5.toISOString() }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const timeline = engine.sessionTimeline('7d');
+      expect(timeline).toHaveLength(1);
+      const segs = timeline[0].segments;
+      // Pre-crash: idle(t0→t1) — processing started at t1 but no end event, so zero-width (dropped)
+      // Post-resume: idle(t2→t3), processing(t3→t4), idle(t4→t5)
+      expect(segs.map(s => s.state)).toEqual([
+        'idle', 'idle', 'processing', 'idle',
+      ]);
+      // No segment should span the 2h gap
+      for (const seg of segs) {
+        const dur = new Date(seg.end).getTime() - new Date(seg.start).getTime();
+        expect(dur).toBeLessThanOrEqual(10 * 60 * 1000);
+      }
+    });
+
     it('idle segments have no token fields', () => {
       const t0 = new Date('2026-03-29T10:00:00Z');
       const t1 = new Date('2026-03-29T10:01:00Z');
