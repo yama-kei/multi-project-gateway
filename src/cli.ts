@@ -9,7 +9,7 @@ import { ClaudeCliRuntime } from './runtimes/claude-cli-runtime.js';
 import { TmuxRuntime } from './runtimes/tmux-runtime.js';
 import type { AgentRuntime } from './agent-runtime.js';
 import { listSessions, killSession } from './tmux.js';
-import { createDiscordBot } from './discord.js';
+import { createAdapter } from './create-adapter.js';
 import { createPulseEmitter } from './pulse-events.js';
 import { createActivityEngine } from './activity-engine.js';
 import { createDashboardServer, type DashboardServer } from './dashboard-server.js';
@@ -211,7 +211,7 @@ function start() {
   }
 
   const turnCounter = createTurnCounter();
-  const bot = createDiscordBot(token, router, sessionManager, config, turnCounter);
+  const bot = createAdapter({ token, router, sessionManager, config, turnCounter });
 
   let dashboardServer: DashboardServer | undefined;
 
