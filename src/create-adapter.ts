@@ -12,10 +12,11 @@ export interface AdapterDeps {
   sessionManager: SessionManager;
   config: GatewayConfig;
   turnCounter?: TurnCounter;
+  platform?: string;
 }
 
 export function createAdapter(deps: AdapterDeps): ChannelAdapter {
-  const platform = process.env.CHAT_PLATFORM ?? 'discord';
+  const platform = deps.platform ?? process.env.CHAT_PLATFORM ?? 'discord';
 
   switch (platform) {
     case 'discord':

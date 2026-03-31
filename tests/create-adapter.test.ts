@@ -50,8 +50,16 @@ describe('createAdapter', () => {
     expect(adapter.getStatus).toBeTypeOf('function');
   });
 
-  it('throws for unsupported platform', () => {
+  it('respects platform field in deps over env var', () => {
     process.env.CHAT_PLATFORM = 'telegram';
-    expect(() => createAdapter(makeDeps())).toThrow('Unsupported CHAT_PLATFORM: telegram');
+    const adapter = createAdapter(makeDeps({ platform: 'discord' }));
+    expect(createDiscordBot).toHaveBeenCalled();
+    expect(adapter.start).toBeTypeOf('function');
+  });
+
+  it('throws for unsupported platform', () => {
+    expect(() => createAdapter(makeDeps({ platform: 'telegram' }))).toThrow(
+      'Unsupported CHAT_PLATFORM: telegram',
+    );
   });
 });
