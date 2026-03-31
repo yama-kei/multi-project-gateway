@@ -282,6 +282,7 @@ If `~/.mpg/` does not exist and CWD files do, everything works exactly as before
 | `defaults.maxTurnsPerAgent` | number | `5` | Max automatic handoffs in a single agent chain |
 | `defaults.agentTimeoutMs` | number | `180000` (3 min) | Timeout per agent turn during auto-handoff |
 | `defaults.sessionTtlMs` | number | `604800000` (7 days) | Max age for persisted sessions before pruning |
+| `defaults.persistence` | string | — | Session runtime — set to `"tmux"` for persistent sessions that survive restarts |
 | `defaults.maxPersistedSessions` | number | `50` | Max number of persisted sessions kept on disk |
 | `defaults.httpPort` | number \| false | `3100` | Port for the web dashboard and API (`false` to disable) |
 | `defaults.logLevel` | string | `"info"` | Minimum log level (`debug`, `info`, `warn`, `error`) |
@@ -385,6 +386,26 @@ claude --resume <session-id>
 
 **Important:** You must run `claude --resume` from the same directory the session was started in (i.e., the project's `directory` in `config.json`). Claude will not find the session if you run it from a different working directory.
 
+### Session persistence (tmux)
+
+By default, Claude sessions run as direct child processes and are lost when the gateway stops. With tmux persistence enabled, sessions run inside detached tmux sessions and survive Ctrl+C, crashes, and gateway restarts.
+
+**Prerequisites:** tmux must be installed (`apt install tmux` / `brew install tmux`).
+
+**Enable it** by adding `"persistence": "tmux"` to your config defaults (or per-project):
+
+```json
+{
+  "defaults": {
+    "persistence": "tmux"
+  }
+}
+```
+
+**How recovery works:** When the gateway restarts, it auto-discovers orphaned tmux sessions from the previous run, waits for any still-running sessions to complete, and delivers their results to the originating Discord thread with a "Resumed after gateway restart" prefix.
+
+**Known limitation:** Recovered sessions don't appear as "processing" in the web dashboard and don't trigger Discord's "typing..." indicator during recovery. See [#137](https://github.com/yama-kei/multi-project-gateway/issues/137).
+
 ## Threading and per-thread sessions
 
 When a user posts a message in a mapped channel, the bot automatically creates a Discord thread and replies there instead of cluttering the main channel. Follow-up messages within the thread continue the same conversation.
@@ -446,6 +467,8 @@ For detailed architecture documentation — message lifecycle, session managemen
 | `src/session-manager.ts` | One session per channel/thread, queues concurrent messages, manages idle timeouts |
 | `src/session-store.ts` | Persists session IDs to `.sessions.json` for resume across restarts |
 | `src/claude-cli.ts` | Spawns `claude --print` subprocess, parses JSON output |
+| `src/tmux.ts` | Low-level tmux helpers: create, list, kill sessions; ensures tmux is installed |
+| `src/runtimes/tmux-runtime.ts` | Tmux-based agent runtime — runs Claude in detached tmux sessions for persistence across restarts |
 | `src/agent-dispatch.ts` | Parses `@mentions`, resolves agent targets |
 | `src/turn-counter.ts` | Tracks handoff turns per thread, enforces `maxTurnsPerAgent` |
 | `src/worktree.ts` | Manages git worktrees for session isolation; reconciles orphans on startup |
