@@ -6,6 +6,7 @@ import { buildToolArgs } from './claude-cli.js';
 import { parseAgentMention, parseAgentCommand, extractAskTarget, parseHandoffCommand } from './agent-dispatch.js';
 import { sendAgentMessage, buildHandoffEmbed } from './embed-format.js';
 import type { TurnCounter } from './turn-counter.js';
+import type { ChannelAdapter } from './adapter.js';
 import { hasAllowedRole } from './role-check.js';
 import { createRateLimiter } from './rate-limiter.js';
 import { downloadAttachments, buildAttachmentPrompt, type AttachmentConfig, DEFAULT_ATTACHMENT_CONFIG } from './attachments.js';
@@ -45,12 +46,9 @@ export function chunkMessage(text: string, limit: number): string[] {
   return chunks;
 }
 
-export interface DiscordBot {
-  start(token: string): Promise<void>;
-  stop(): void;
-  getStatus(): string;
-  /** Deliver an orphaned session result to the appropriate Discord thread. */
-  deliverOrphanResult(projectKey: string, result: import('./claude-cli.js').ClaudeResult): Promise<void>;
+export interface DiscordBot extends ChannelAdapter {
+  // DiscordBot is now a ChannelAdapter — kept as a named type
+  // for backward compatibility with dashboard-server.ts and tests.
 }
 
 function resolveProjectName(config: GatewayConfig, channelId: string): string {
@@ -200,7 +198,8 @@ async function fetchThreadHistory(channel: TextChannel | ThreadChannel, beforeMe
   }
 }
 
-export function createDiscordBot(router: Router, sessionManager: SessionManager, config: GatewayConfig, turnCounter?: TurnCounter): DiscordBot {
+/** @internal Use {@link createAdapter} instead — this is the Discord-specific implementation. */
+export function createDiscordBot(token: string, router: Router, sessionManager: SessionManager, config: GatewayConfig, turnCounter?: TurnCounter): DiscordBot {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -519,7 +518,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
   });
 
   return {
-    async start(token: string) {
+    async start() {
       await client.login(token);
       console.log(`Gateway connected as ${client.user?.tag}`);
     },

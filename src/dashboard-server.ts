@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { readFileSync } from 'node:fs';
 import type { SessionManager } from './session-manager.js';
-import type { DiscordBot } from './discord.js';
+import type { ChannelAdapter } from './adapter.js';
 import type { GatewayConfig } from './config.js';
 import type { ActivityEngine, TimeRange, Bucket } from './activity-engine.js';
 
@@ -720,7 +720,7 @@ setInterval(function() {
 export function createDashboardServer(
   port: number,
   sessionManager: SessionManager,
-  bot: DiscordBot,
+  bot: ChannelAdapter,
   config?: GatewayConfig,
   options?: DashboardServerOptions,
 ): Promise<DashboardServer> {
