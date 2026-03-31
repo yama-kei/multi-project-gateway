@@ -4,7 +4,7 @@ import { PERSONA_PRESETS, resolvePreset } from '../src/persona-presets.js';
 describe('persona-presets', () => {
   it('includes pm, engineer, qa, designer, devops presets', () => {
     expect(Object.keys(PERSONA_PRESETS)).toEqual(
-      expect.arrayContaining(['pm', 'engineer', 'qa', 'designer', 'devops']),
+      expect.arrayContaining(['pm', 'engineer', 'qa', 'designer', 'devops', 'curator']),
     );
   });
 
