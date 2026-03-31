@@ -449,6 +449,7 @@ export function createSessionManager(defaults: {
       // Tmux session names are sanitized (e.g. "threadId:agent" → "threadId-agent"),
       // so build a reverse lookup from sanitized key → persisted entry.
       const persisted = store ? store.load() : new Map<string, PersistedSession>();
+      console.log(`[recovery] Persisted store has ${persisted.size} entries. Keys: ${JSON.stringify([...persisted.keys()].slice(0, 20))}`);
       const sanitizedLookup = new Map<string, PersistedSession>();
       for (const [key, entry] of persisted) {
         const sanitized = key.replace(/[^a-zA-Z0-9_-]/g, '-');
@@ -459,6 +460,7 @@ export function createSessionManager(defaults: {
 
       for (const key of orphanedKeys) {
         const entry = sanitizedLookup.get(key);
+        console.log(`[recovery] Orphan key "${key}" → match: ${entry ? `yes (projectKey=${entry.projectKey})` : 'NO'}`);
         if (!entry) {
           // No persisted record — stale orphan, clean it up
           console.log(`Cleaning up unmatched orphan: ${key}`);
