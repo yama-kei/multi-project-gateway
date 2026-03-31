@@ -99,6 +99,28 @@ describe('BrokerClient', () => {
     expect(result.file_id).toBe('new-id');
   });
 
+  it('driveWrite passes folderId in request body when provided', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(JSON.stringify({ file_id: 'new-id', name: 'out.md', mime_type: 'text/plain', web_view_link: null }), { status: 200 }),
+    );
+
+    await client.driveWrite('out.md', '# Content', 'text', 'custom-folder-id');
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'http://localhost:3000/broker/drive/write',
+      expect.objectContaining({
+        body: JSON.stringify({
+          tenantId: 'tenant-1',
+          actorId: 'actor-1',
+          name: 'out.md',
+          content: '# Content',
+          format: 'text',
+          folderId: 'custom-folder-id',
+        }),
+      }),
+    );
+  });
+
   it('driveSearch calls POST /broker/drive/search', async () => {
     fetchSpy.mockResolvedValue(
       new Response(JSON.stringify({ files: [{ file_id: 'f1', name: 'notes.md' }] }), { status: 200 }),

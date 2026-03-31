@@ -107,7 +107,7 @@ export interface BrokerClient {
   gmailMessages(messageIds: string[]): Promise<GmailMessagesResult>;
   calendarEvents(timeMin: string, timeMax: string, limit?: number): Promise<CalendarEventsResult>;
   driveRead(fileId: string): Promise<DriveReadResult>;
-  driveWrite(name: string, content: string, format?: string): Promise<DriveWriteResult>;
+  driveWrite(name: string, content: string, format?: string, folderId?: string): Promise<DriveWriteResult>;
   driveSearch(query: string): Promise<DriveSearchResult>;
   driveCreateFolder(name: string, parentId?: string): Promise<DriveCreateFolderResult>;
   driveList(folderId: string, query?: string): Promise<DriveListResult>;
@@ -149,8 +149,8 @@ export function createBrokerClient(config: BrokerConfig): BrokerClient {
       request('POST', '/calendar/events', { timeMin, timeMax, limit }),
     driveRead: (fileId) =>
       request('POST', '/drive/read', { fileId }),
-    driveWrite: (name, content, format) =>
-      request('POST', '/drive/write', { name, content, format }),
+    driveWrite: (name, content, format, folderId) =>
+      request('POST', '/drive/write', { name, content, format, folderId }),
     driveSearch: (query) =>
       request('POST', '/drive/search', { query }),
     driveCreateFolder: (name, parentId) =>
