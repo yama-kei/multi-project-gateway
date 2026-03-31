@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import type { ClaudeResult } from './claude-cli.js';
 import type { AgentRuntime } from './agent-runtime.js';
 import type { SessionStore, PersistedSession } from './session-store.js';
-import type { PulseEmitter } from './pulse-events.js';
+import type { PulseEmitter, RoutingMethod } from './pulse-events.js';
 import { createWorktree as gitCreateWorktree, removeWorktree as gitRemoveWorktree } from './worktree.js';
 import { cleanupAttachments } from './attachments.js';
 
@@ -21,7 +21,7 @@ export interface SessionInfo {
 export type OrphanResultCallback = (projectKey: string, result: ClaudeResult) => void;
 
 export interface SessionManager {
-  send(projectKey: string, cwd: string, prompt: string, opts?: { worktree?: boolean; systemPrompt?: string; timeoutMs?: number; extraArgs?: string[] }): Promise<ClaudeResult>;
+  send(projectKey: string, cwd: string, prompt: string, opts?: { worktree?: boolean; systemPrompt?: string; timeoutMs?: number; extraArgs?: string[]; routingMethod?: RoutingMethod }): Promise<ClaudeResult>;
   getSession(projectKey: string): SessionInfo | undefined;
   listSessions(): SessionInfo[];
   clearSession(projectKey: string): boolean;
@@ -48,6 +48,7 @@ interface InternalSession {
     systemPrompt?: string;
     timeoutMs?: number;
     extraArgs?: string[];
+    routingMethod?: RoutingMethod;
     resolve: (result: ClaudeResult) => void;
     reject: (error: Error) => void;
   }>;
@@ -169,7 +170,7 @@ export function createSessionManager(defaults: {
           session.sessionId ?? session.projectKey,
           session.projectKey,
           session.cwd,
-          { agentTarget, queueDepth: session.queue.length },
+          { agentTarget, queueDepth: session.queue.length, routingMethod: item.routingMethod },
         );
       }
       try {
@@ -197,7 +198,7 @@ export function createSessionManager(defaults: {
             session.projectKey,
             session.cwd,
             result.usage,
-            { agentTarget },
+            { agentTarget, isError: result.isError, errorType: result.isError ? 'process_error' : undefined },
           );
         }
         resetIdleTimer(session);
@@ -222,7 +223,7 @@ export function createSessionManager(defaults: {
                 session.projectKey,
                 session.cwd,
                 result.usage,
-                { agentTarget },
+                { agentTarget, isError: result.isError, errorType: result.isError ? 'process_error' : undefined },
               );
             }
             resetIdleTimer(session);
@@ -356,10 +357,10 @@ export function createSessionManager(defaults: {
   }
 
   return {
-    send(projectKey: string, cwd: string, prompt: string, opts?: { worktree?: boolean; systemPrompt?: string; timeoutMs?: number; extraArgs?: string[] }): Promise<ClaudeResult> {
+    send(projectKey: string, cwd: string, prompt: string, opts?: { worktree?: boolean; systemPrompt?: string; timeoutMs?: number; extraArgs?: string[]; routingMethod?: RoutingMethod }): Promise<ClaudeResult> {
       const session = getOrCreateSession(projectKey, cwd, opts?.worktree);
       return new Promise<ClaudeResult>((resolve, reject) => {
-        session.queue.push({ prompt, systemPrompt: opts?.systemPrompt, timeoutMs: opts?.timeoutMs, extraArgs: opts?.extraArgs, resolve, reject });
+        session.queue.push({ prompt, systemPrompt: opts?.systemPrompt, timeoutMs: opts?.timeoutMs, extraArgs: opts?.extraArgs, routingMethod: opts?.routingMethod, resolve, reject });
         processQueue(session);
       });
     },

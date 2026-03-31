@@ -71,6 +71,15 @@ describe('PulseEmitter', () => {
     expect(event.event_type).toBe('message_routed');
     expect(event.agent_target).toBe('pm');
     expect(event.queue_depth).toBe(2);
+    expect(event.routing_method).toBe('default');
+  });
+
+  it('emits message_routed with routing_method', () => {
+    const emitter = createPulseEmitter(filePath);
+    emitter.messageRouted('sess-1', 'project-a', '/tmp/project', { agentTarget: 'engineer', queueDepth: 0, routingMethod: 'explicit_command' });
+
+    const event = JSON.parse(readFileSync(filePath, 'utf-8').trim());
+    expect(event.routing_method).toBe('explicit_command');
   });
 
   it('appends multiple events to same file', () => {
@@ -98,6 +107,23 @@ describe('PulseEmitter', () => {
     expect(() => {
       emitter.sessionStart('sess-1', 'project-a', '/tmp/project', { triggerSource: 'discord' });
     }).not.toThrow();
+  });
+
+  it('emits agent_handoff event', () => {
+    const emitter = createPulseEmitter(filePath);
+    emitter.agentHandoff('sess-1', 'project-a', '/tmp/project', {
+      sourceAgent: 'pm',
+      targetAgent: 'engineer',
+      threadId: 'thread-123',
+      handoffDepth: 2,
+    });
+
+    const event = JSON.parse(readFileSync(filePath, 'utf-8').trim());
+    expect(event.event_type).toBe('agent_handoff');
+    expect(event.source_agent).toBe('pm');
+    expect(event.target_agent).toBe('engineer');
+    expect(event.thread_id).toBe('thread-123');
+    expect(event.handoff_depth).toBe(2);
   });
 
   it('emits message_completed event with usage payload', () => {
@@ -130,5 +156,25 @@ describe('PulseEmitter', () => {
     expect(event.duration_api_ms).toBe(38000);
     expect(event.num_turns).toBe(12);
     expect(event.model).toBe('claude-sonnet-4-20250514');
+    expect(event.is_error).toBe(false);
+    expect(event.error_type).toBeUndefined();
+  });
+
+  it('emits message_completed with error fields', () => {
+    const emitter = createPulseEmitter(filePath);
+    emitter.messageCompleted('sess-1', 'project-a', '/tmp/project', {
+      input_tokens: 1000,
+      output_tokens: 200,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      total_cost_usd: 0.01,
+      duration_ms: 5000,
+      duration_api_ms: 4000,
+      num_turns: 1,
+    }, { agentTarget: 'engineer', isError: true, errorType: 'process_error' });
+
+    const event = JSON.parse(readFileSync(filePath, 'utf-8').trim());
+    expect(event.is_error).toBe(true);
+    expect(event.error_type).toBe('process_error');
   });
 });

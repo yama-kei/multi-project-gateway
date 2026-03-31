@@ -6,6 +6,7 @@ import { buildToolArgs } from './claude-cli.js';
 import { parseAgentMention, parseAgentCommand, extractAskTarget, parseHandoffCommand } from './agent-dispatch.js';
 import { sendAgentMessage, buildHandoffEmbed } from './embed-format.js';
 import type { TurnCounter } from './turn-counter.js';
+import type { PulseEmitter } from './pulse-events.js';
 import { hasAllowedRole } from './role-check.js';
 import { createRateLimiter } from './rate-limiter.js';
 import { downloadAttachments, buildAttachmentPrompt, type AttachmentConfig, DEFAULT_ATTACHMENT_CONFIG } from './attachments.js';
@@ -200,7 +201,7 @@ async function fetchThreadHistory(channel: TextChannel | ThreadChannel, beforeMe
   }
 }
 
-export function createDiscordBot(router: Router, sessionManager: SessionManager, config: GatewayConfig, turnCounter?: TurnCounter): DiscordBot {
+export function createDiscordBot(router: Router, sessionManager: SessionManager, config: GatewayConfig, turnCounter?: TurnCounter, pulseEmitter?: PulseEmitter): DiscordBot {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -349,10 +350,17 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
     if (turnCounter) turnCounter.reset(replyChannel.id);
 
     // Check for !ask <agent> command, @agent mention, or fall back to last active agent (#48, #60)
-    const mention = agents
-      ? (parseAgentCommand(message.content, agents) ?? parseAgentMention(message.content, agents))
-      : null;
-    const activeAgent = mention ?? (message.channel.isThread() ? lastActiveAgent.get(replyChannel.id) ?? null : null);
+    const explicitCommand = agents ? parseAgentCommand(message.content, agents) : null;
+    const mentionMatch = !explicitCommand && agents ? parseAgentMention(message.content, agents) : null;
+    const mention = explicitCommand ?? mentionMatch;
+    const lastActive = !mention && message.channel.isThread() ? lastActiveAgent.get(replyChannel.id) ?? null : null;
+    const activeAgent = mention ?? lastActive;
+
+    // Determine routing method for Pulse observability (#132)
+    const routingMethod = explicitCommand ? 'explicit_command' as const
+      : mentionMatch ? 'mention' as const
+      : lastActive ? 'last_active' as const
+      : 'default' as const;
 
     // Use thread ID for session keys so each thread gets its own agent sessions.
     // For main-channel messages, replyChannel is the newly created thread.
@@ -418,6 +426,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
           worktree: replyChannel.isThread() ? true : undefined,
           systemPrompt,
           extraArgs: toolArgs.length > 0 ? toolArgs : undefined,
+          routingMethod,
         },
       );
 
@@ -464,6 +473,22 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
           const handoffKey = `${threadId}:${handoff.agentName}`;
           const handoffPrompt = `Your role: ${handoff.agent.role}\n\n${handoff.agent.prompt}`;
 
+          // Emit agent_handoff event (#142)
+          if (pulseEmitter) {
+            const currentSession = sessionManager.getSession(sessionKey);
+            pulseEmitter.agentHandoff(
+              currentSession?.sessionId ?? sessionKey,
+              sessionKey,
+              resolved.directory,
+              {
+                sourceAgent: currentAgentName,
+                targetAgent: handoff.agentName,
+                threadId,
+                handoffDepth: turn,
+              },
+            );
+          }
+
           replyChannel.sendTyping().catch(() => {});
 
           // Post handoff announcement — kept visible so users see progress during long agent runs (#56, #65)
@@ -481,7 +506,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
               handoffKey,
               resolved.directory,
               responseText,
-              { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: handoffPrompt, timeoutMs: config.defaults.agentTimeoutMs, extraArgs: toolArgs.length > 0 ? toolArgs : undefined },
+              { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: handoffPrompt, timeoutMs: config.defaults.agentTimeoutMs, extraArgs: toolArgs.length > 0 ? toolArgs : undefined, routingMethod: 'handoff' },
             );
           } catch (handoffErr) {
             const msg = handoffErr instanceof Error ? handoffErr.message : String(handoffErr);
