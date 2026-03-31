@@ -265,7 +265,7 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
 
     sessionTimeline(range, projectNameMap, dirToNameMap) {
       const events = readEvents(target, range);
-      const TIMELINE_TYPES = new Set(['session_start', 'message_routed', 'message_completed', 'session_end', 'session_idle']);
+      const TIMELINE_TYPES = new Set(['session_start', 'session_resume', 'message_routed', 'message_completed', 'session_end', 'session_idle']);
       const relevant = events.filter(e => TIMELINE_TYPES.has(e.event_type));
 
       // Collect message_completed events indexed by session for token enrichment
@@ -337,6 +337,17 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
           } else if (e.event_type === 'message_completed' && currentState === 'processing') {
             // End processing segment, back to idle
             segments.push({ start: segmentStart, end: e.timestamp, state: 'processing' });
+            segmentStart = e.timestamp;
+            currentState = 'idle';
+          } else if (e.event_type === 'session_resume') {
+            // Session was restored after a gap — close any in-progress segment at the
+            // previous event's time (not resume time) to avoid spanning the gap, then restart
+            if (i > 0) {
+              const prevEvent = sessionEvents[i - 1];
+              if (segmentStart !== prevEvent.timestamp) {
+                segments.push({ start: segmentStart, end: prevEvent.timestamp, state: currentState });
+              }
+            }
             segmentStart = e.timestamp;
             currentState = 'idle';
           } else if (e.event_type === 'session_end' || e.event_type === 'session_idle') {
