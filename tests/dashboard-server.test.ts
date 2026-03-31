@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { request } from 'node:http';
 import { createDashboardServer, type DashboardServer } from '../src/dashboard-server.js';
 import type { SessionManager, SessionInfo } from '../src/session-manager.js';
-import type { DiscordBot } from '../src/discord.js';
+import type { ChannelAdapter } from '../src/adapter.js';
 import type { GatewayConfig } from '../src/config.js';
 
 function makeSessionManager(sessions: SessionInfo[] = []): SessionManager {
@@ -16,11 +16,12 @@ function makeSessionManager(sessions: SessionInfo[] = []): SessionManager {
   };
 }
 
-function makeBot(status = 'connected'): DiscordBot {
+function makeBot(status = 'connected'): ChannelAdapter {
   return {
     start: () => Promise.resolve(),
     stop: () => {},
     getStatus: () => status,
+    deliverOrphanResult: async () => {},
   };
 }
 
