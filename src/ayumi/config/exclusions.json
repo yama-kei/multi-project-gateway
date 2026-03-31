@@ -1,0 +1,14 @@
+{
+  "emails": [
+    "noreply@google.com",
+    "no-reply@accounts.google.com",
+    "calendar-notification@google.com"
+  ],
+  "domains": [
+    "marketing.example.com"
+  ],
+  "labels": [
+    "SPAM",
+    "CATEGORY_PROMOTIONS"
+  ]
+}
