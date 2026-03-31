@@ -211,7 +211,7 @@ function start() {
   }
 
   const turnCounter = createTurnCounter();
-  const bot = createDiscordBot(router, sessionManager, config, turnCounter);
+  const bot = createDiscordBot(router, sessionManager, config, turnCounter, pulseEmitter);
 
   let dashboardServer: DashboardServer | undefined;
 
