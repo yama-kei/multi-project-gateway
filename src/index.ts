@@ -6,7 +6,7 @@ import { createRouter } from './router.js';
 import { createSessionManager } from './session-manager.js';
 import { createFileSessionStore } from './session-store.js';
 import { ClaudeCliRuntime } from './runtimes/claude-cli-runtime.js';
-import { createDiscordBot } from './discord.js';
+import { createAdapter } from './create-adapter.js';
 
 loadEnv();
 
@@ -31,7 +31,7 @@ const router = createRouter(config);
 const sessionStore = createFileSessionStore(resolve(process.cwd(), '.sessions.json'));
 const runtime = new ClaudeCliRuntime();
 const sessionManager = createSessionManager(config.defaults, runtime, sessionStore);
-const bot = createDiscordBot(token, router, sessionManager, config);
+const bot = createAdapter({ token, router, sessionManager, config });
 
 // Graceful shutdown
 function shutdown() {
