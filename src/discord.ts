@@ -48,6 +48,8 @@ export interface DiscordBot {
   start(token: string): Promise<void>;
   stop(): void;
   getStatus(): string;
+  /** Notify a thread that recovery is starting — sends typing + interim message. */
+  notifyRecoveryStart(projectKey: string): void;
   /** Deliver an orphaned session result to the appropriate Discord thread. */
   deliverOrphanResult(projectKey: string, result: import('./claude-cli.js').ClaudeResult): Promise<void>;
 }
@@ -213,6 +215,9 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
 
   // Track last active agent per thread for routing plain replies (#48)
   const lastActiveAgent = new Map<string, { agentName: string; agent: import('./config.js').AgentConfig }>();
+
+  // Track typing intervals for recovery sessions so they can be cleared on result delivery
+  const recoveryTypingIntervals = new Map<string, ReturnType<typeof setInterval>>();
 
   client.on(Events.MessageCreate, async (message: Message) => {
     if (message.author.bot) return;
@@ -511,7 +516,31 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
       };
       return statusMap[ws.status] ?? 'unknown';
     },
+    notifyRecoveryStart(projectKey: string): void {
+      const threadId = projectKey.includes(':') ? projectKey.split(':')[0] : projectKey;
+
+      // Fire-and-forget: fetch channel, start typing, send interim message
+      client.channels.fetch(threadId).then((channel) => {
+        if (!channel || !('send' in channel)) return;
+        const sendable = channel as TextChannel | ThreadChannel;
+
+        sendable.sendTyping().catch(() => {});
+        const interval = setInterval(() => {
+          sendable.sendTyping().catch(() => {});
+        }, 7_000);
+        recoveryTypingIntervals.set(projectKey, interval);
+
+        sendable.send('🔄 Resuming session from before restart...').catch(() => {});
+      }).catch(() => {});
+    },
     async deliverOrphanResult(projectKey: string, result: import('./claude-cli.js').ClaudeResult): Promise<void> {
+      // Clear typing interval from notifyRecoveryStart
+      const interval = recoveryTypingIntervals.get(projectKey);
+      if (interval) {
+        clearInterval(interval);
+        recoveryTypingIntervals.delete(projectKey);
+      }
+
       // projectKey is "threadId" or "threadId:agentName"
       const threadId = projectKey.includes(':') ? projectKey.split(':')[0] : projectKey;
       const agentName = projectKey.includes(':') ? projectKey.split(':').pop() : undefined;
@@ -530,7 +559,6 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
           agentRole = project?.agents?.[agentName]?.role;
         }
 
-        await channel.send('🔄 Resumed after gateway restart — here is the pending response:');
         await sendAgentMessage(channel as TextChannel | ThreadChannel, result.text, agentName, agentRole);
       } catch (err) {
         console.error(`Failed to deliver orphan result to ${threadId}:`, err);

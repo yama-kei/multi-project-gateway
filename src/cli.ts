@@ -230,10 +230,15 @@ function start() {
       }
 
       // Recover orphaned tmux sessions after Discord is connected
-      sessionManager.recoverOrphanedSessions((projectKey, result) => {
-        bot.deliverOrphanResult(projectKey, result).catch((err) => {
-          log.error(`Failed to deliver orphan result for ${projectKey}: ${err}`);
-        });
+      sessionManager.recoverOrphanedSessions({
+        onStart(projectKey) {
+          bot.notifyRecoveryStart(projectKey);
+        },
+        onResult(projectKey, result) {
+          bot.deliverOrphanResult(projectKey, result).catch((err) => {
+            log.error(`Failed to deliver orphan result for ${projectKey}: ${err}`);
+          });
+        },
       }).catch((err) => {
         log.error(`Orphan session recovery failed: ${err}`);
       });

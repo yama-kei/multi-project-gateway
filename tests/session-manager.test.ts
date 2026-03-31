@@ -581,12 +581,17 @@ describe('SessionManager', () => {
   });
 
   describe('orphan session recovery', () => {
+    function mockCallbacks() {
+      return { onStart: vi.fn(), onResult: vi.fn() };
+    }
+
     it('skips recovery when runtime does not support resume', async () => {
       const rt = createMockRuntime(); // canResume=false
       const m = createSessionManager(defaults, rt);
-      const onResult = vi.fn();
-      await m.recoverOrphanedSessions(onResult);
-      expect(onResult).not.toHaveBeenCalled();
+      const cb = mockCallbacks();
+      await m.recoverOrphanedSessions(cb);
+      expect(cb.onStart).not.toHaveBeenCalled();
+      expect(cb.onResult).not.toHaveBeenCalled();
       m.shutdown();
     });
 
@@ -595,27 +600,73 @@ describe('SessionManager', () => {
       rt.listOrphanedSessions.mockResolvedValue(['unknown-key']);
       const store = createMockStore(); // empty — no persisted sessions
       const m = createSessionManager(defaults, rt, store);
-      const onResult = vi.fn();
-      await m.recoverOrphanedSessions(onResult);
+      const cb = mockCallbacks();
+      await m.recoverOrphanedSessions(cb);
       expect(rt.cleanup).toHaveBeenCalledWith('unknown-key');
       expect(rt.reattach).not.toHaveBeenCalled();
-      expect(onResult).not.toHaveBeenCalled();
+      expect(cb.onStart).not.toHaveBeenCalled();
+      expect(cb.onResult).not.toHaveBeenCalled();
       m.shutdown();
     });
 
-    it('reattaches matched orphan sessions and delivers result', async () => {
+    it('calls onStart before reattach and onResult after', async () => {
       const rt = createResumableRuntime();
       rt.listOrphanedSessions.mockResolvedValue(['thread-123']);
-      rt.reattach.mockResolvedValue({ text: 'Orphan output', sessionId: 'orphan-sid', isError: false });
+      const callOrder: string[] = [];
+      rt.reattach.mockImplementation(async () => {
+        callOrder.push('reattach');
+        return { text: 'Orphan output', sessionId: 'orphan-sid', isError: false };
+      });
       const store = createMockStore([
         { sessionId: 'old-sid', projectKey: 'thread-123', cwd: '/tmp/proj', lastActivity: Date.now() - 5000 },
       ]);
       const m = createSessionManager(defaults, rt, store);
-      const onResult = vi.fn();
-      await m.recoverOrphanedSessions(onResult);
-      expect(rt.reattach).toHaveBeenCalledWith('thread-123');
-      expect(onResult).toHaveBeenCalledWith('thread-123', expect.objectContaining({ text: 'Orphan output' }));
+      const cb = {
+        onStart: vi.fn(() => callOrder.push('onStart')),
+        onResult: vi.fn(() => callOrder.push('onResult')),
+      };
+      await m.recoverOrphanedSessions(cb);
+      expect(callOrder).toEqual(['onStart', 'reattach', 'onResult']);
+      expect(cb.onStart).toHaveBeenCalledWith('thread-123');
+      expect(cb.onResult).toHaveBeenCalledWith('thread-123', expect.objectContaining({ text: 'Orphan output' }));
       expect(rt.cleanup).toHaveBeenCalledWith('thread-123');
+      m.shutdown();
+    });
+
+    it('registers recovered session as processing and visible in listSessions', async () => {
+      const rt = createResumableRuntime();
+      rt.listOrphanedSessions.mockResolvedValue(['thread-123']);
+      let sessionDuringReattach: ReturnType<typeof m.getSession> | undefined;
+      rt.reattach.mockImplementation(async () => {
+        sessionDuringReattach = m.getSession('thread-123');
+        return { text: 'Done', sessionId: 'new-sid', isError: false };
+      });
+      const store = createMockStore([
+        { sessionId: 'old-sid', projectKey: 'thread-123', cwd: '/tmp/proj', lastActivity: Date.now() - 5000 },
+      ]);
+      const m = createSessionManager(defaults, rt, store);
+      await m.recoverOrphanedSessions(mockCallbacks());
+      // During reattach, session should be visible and processing
+      expect(sessionDuringReattach).toBeDefined();
+      expect(sessionDuringReattach!.processing).toBe(true);
+      expect(sessionDuringReattach!.sessionId).toBe('old-sid');
+      m.shutdown();
+    });
+
+    it('restores sessionId after successful recovery', async () => {
+      const rt = createResumableRuntime();
+      rt.listOrphanedSessions.mockResolvedValue(['thread-123']);
+      rt.reattach.mockResolvedValue({ text: 'Done', sessionId: 'new-sid', isError: false });
+      const store = createMockStore([
+        { sessionId: 'old-sid', projectKey: 'thread-123', cwd: '/tmp/proj', lastActivity: Date.now() - 5000 },
+      ]);
+      const m = createSessionManager(defaults, rt, store);
+      await m.recoverOrphanedSessions(mockCallbacks());
+      // After recovery, session should have updated sessionId and not be processing
+      const session = m.getSession('thread-123');
+      expect(session).toBeDefined();
+      expect(session!.sessionId).toBe('new-sid');
+      expect(session!.processing).toBe(false);
       m.shutdown();
     });
 
@@ -634,7 +685,7 @@ describe('SessionManager', () => {
         messageCompleted: vi.fn(),
       };
       const m = createSessionManager(defaults, rt, store, pulseEmitter);
-      await m.recoverOrphanedSessions(vi.fn());
+      await m.recoverOrphanedSessions(mockCallbacks());
       expect(pulseEmitter.sessionResume).toHaveBeenCalledWith(
         'sid-456', 'thread-456', '/tmp/proj', expect.any(Number),
       );
@@ -649,11 +700,16 @@ describe('SessionManager', () => {
         { sessionId: 'sid-789', projectKey: 'thread-789', cwd: '/tmp/proj', lastActivity: Date.now() - 5000 },
       ]);
       const m = createSessionManager(defaults, rt, store);
-      const onResult = vi.fn();
+      const cb = mockCallbacks();
       // Should not throw
-      await m.recoverOrphanedSessions(onResult);
-      expect(onResult).not.toHaveBeenCalled();
+      await m.recoverOrphanedSessions(cb);
+      expect(cb.onStart).toHaveBeenCalledWith('thread-789');
+      expect(cb.onResult).not.toHaveBeenCalled();
       expect(rt.cleanup).toHaveBeenCalledWith('thread-789');
+      // Session should not be processing after failure
+      const session = m.getSession('thread-789');
+      expect(session).toBeDefined();
+      expect(session!.processing).toBe(false);
       m.shutdown();
     });
 
@@ -670,11 +726,12 @@ describe('SessionManager', () => {
         { sessionId: 'old-2', projectKey: 't-2', cwd: '/tmp/b', lastActivity: Date.now() - 2000 },
       ]);
       const m = createSessionManager(defaults, rt, store);
-      const onResult = vi.fn();
-      await m.recoverOrphanedSessions(onResult);
+      const cb = mockCallbacks();
+      await m.recoverOrphanedSessions(cb);
       // t-1 and t-2 reattached, t-unknown cleaned up
       expect(rt.reattach).toHaveBeenCalledTimes(2);
-      expect(onResult).toHaveBeenCalledTimes(2);
+      expect(cb.onStart).toHaveBeenCalledTimes(2);
+      expect(cb.onResult).toHaveBeenCalledTimes(2);
       expect(rt.cleanup).toHaveBeenCalledWith('t-unknown'); // unmatched
       expect(rt.cleanup).toHaveBeenCalledWith('t-1'); // post-reattach
       expect(rt.cleanup).toHaveBeenCalledWith('t-2'); // post-reattach
