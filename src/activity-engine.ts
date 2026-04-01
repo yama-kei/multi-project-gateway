@@ -2,12 +2,13 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
-export type TimeRange = '3h' | '12h' | '24h' | '7d' | '30d';
+export type TimeRange = '1h' | '3h' | '12h' | '24h' | '7d' | '30d';
 export type Bucket = '15min' | 'hour' | 'day';
 
 const DEFAULT_PATH = join(homedir(), '.pulse', 'events', 'mpg-sessions.jsonl');
 
 const RANGE_MS: Record<TimeRange, number> = {
+  '1h': 1 * 60 * 60 * 1000,
   '3h': 3 * 60 * 60 * 1000,
   '12h': 12 * 60 * 60 * 1000,
   '24h': 24 * 60 * 60 * 1000,
