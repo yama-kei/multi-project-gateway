@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { writeTopicToDrive, type DriveWriterOptions } from '../../src/ayumi/drive-writer.js';
 import type { BrokerClient } from '../../src/broker-client.js';
-import type { FolderMap } from '../../src/life-context-setup.js';
+import type { FolderMap } from '../../src/ayumi/life-context-setup.js';
 import type { TopicSummaryResult } from '../../src/ayumi/topic-summarizer.js';
 
 function mockClient(overrides: Partial<BrokerClient> = {}): BrokerClient {

@@ -1,5 +1,5 @@
 import type { BrokerClient } from '../broker-client.js';
-import type { FolderMap } from '../life-context-setup.js';
+import type { FolderMap } from './life-context-setup.js';
 import type { TopicSummaryResult } from './topic-summarizer.js';
 
 export interface DriveWriterOptions {

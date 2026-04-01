@@ -4,7 +4,7 @@
  * and fetches summary.md, timeline.md, entities.md files.
  */
 
-import { createBrokerClient, type BrokerClient } from './broker-client.js';
+import { createBrokerClient, type BrokerClient } from '../broker-client.js';
 import type { FolderMap, TopicName } from './life-context-setup.js';
 
 const AGENT_TOPIC_MAP: Record<string, TopicName> = {

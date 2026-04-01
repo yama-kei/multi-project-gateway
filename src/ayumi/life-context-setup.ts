@@ -3,7 +3,7 @@
  * Searches for an existing folder-map.json first; creates any missing folders.
  */
 
-import type { BrokerClient } from './broker-client.js';
+import type { BrokerClient } from '../broker-client.js';
 
 export const TOPIC_FOLDERS = ['work', 'travel', 'finance', 'health', 'social', 'hobbies'] as const;
 export type TopicName = (typeof TOPIC_FOLDERS)[number];

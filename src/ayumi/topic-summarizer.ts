@@ -1,4 +1,4 @@
-import type { TopicName } from '../life-context-setup.js';
+import type { TopicName } from './life-context-setup.js';
 import type { ClassifiedItem } from './extraction-pipeline.js';
 
 export interface TopicSummaryFiles {
