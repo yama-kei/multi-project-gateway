@@ -100,6 +100,35 @@ describe('PulseEmitter', () => {
     }).not.toThrow();
   });
 
+  it('emits agent_handoff event', () => {
+    const emitter = createPulseEmitter(filePath);
+    emitter.agentHandoff('sess-1', 'thread-1:engineer', '/tmp/project', {
+      fromAgent: 'pm',
+      toAgent: 'engineer',
+      threadId: 'thread-1',
+    });
+
+    const event = JSON.parse(readFileSync(filePath, 'utf-8').trim());
+    expect(event.event_type).toBe('agent_handoff');
+    expect(event.from_agent).toBe('pm');
+    expect(event.to_agent).toBe('engineer');
+    expect(event.thread_id).toBe('thread-1');
+    expect(event.session_id).toBe('sess-1');
+  });
+
+  it('emits agent_handoff event with undefined fromAgent for user-initiated handoff', () => {
+    const emitter = createPulseEmitter(filePath);
+    emitter.agentHandoff('sess-1', 'thread-1:engineer', '/tmp/project', {
+      toAgent: 'engineer',
+      threadId: 'thread-1',
+    });
+
+    const event = JSON.parse(readFileSync(filePath, 'utf-8').trim());
+    expect(event.event_type).toBe('agent_handoff');
+    expect(event.from_agent).toBeUndefined();
+    expect(event.to_agent).toBe('engineer');
+  });
+
   it('emits message_completed event with usage payload', () => {
     const emitter = createPulseEmitter(filePath);
     emitter.messageCompleted('sess-1', 'project-a', '/tmp/project', {

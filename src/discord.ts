@@ -467,6 +467,15 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
             const turn = turnCounter.getTurns(replyChannel.id);
             console.log(`[fan-out] thread=${replyChannel.id} turn=${turn}/${maxTurns} ${currentAgentName ?? 'user'} → [${allHandoffs.map(h => h.agentName).join(', ')}]`);
 
+            // Emit agent_handoff pulse events for each fan-out target
+            for (const h of allHandoffs) {
+              sessionManager.emitHandoff(`${threadId}:${h.agentName}`, resolved.directory, {
+                fromAgent: currentAgentName,
+                toAgent: h.agentName,
+                threadId,
+              });
+            }
+
             if (turnCounter.isOverLimit(replyChannel.id, maxTurns)) {
               console.log(`[fan-out] thread=${replyChannel.id} turn limit reached, stopping`);
               await replyChannel.send(`⚠️ Agent turn limit reached (${maxTurns}) — send a message to reset.`);
@@ -551,6 +560,13 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
           turnCounter.increment(replyChannel.id);
           const turn = turnCounter.getTurns(replyChannel.id);
           console.log(`[handoff] thread=${replyChannel.id} turn=${turn}/${maxTurns} ${currentAgentName ?? 'user'} → ${handoff.agentName}`);
+
+          // Emit agent_handoff pulse event
+          sessionManager.emitHandoff(`${threadId}:${handoff.agentName}`, resolved.directory, {
+            fromAgent: currentAgentName,
+            toAgent: handoff.agentName,
+            threadId,
+          });
 
           if (turnCounter.isOverLimit(replyChannel.id, maxTurns)) {
             console.log(`[handoff] thread=${replyChannel.id} turn limit reached, stopping`);

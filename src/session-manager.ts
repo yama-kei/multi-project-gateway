@@ -29,6 +29,8 @@ export interface SessionManager {
   shutdown(): void;
   /** Discover orphaned tmux sessions and reattach to them. Call after Discord bot is ready. */
   recoverOrphanedSessions(onResult: OrphanResultCallback): Promise<void>;
+  /** Emit an agent_handoff pulse event. No-op if pulse is disabled. */
+  emitHandoff(projectKey: string, cwd: string, opts: { fromAgent?: string; toAgent: string; threadId: string }): void;
 }
 
 interface InternalSession {
@@ -310,11 +312,12 @@ export function createSessionManager(defaults: {
             Date.now() - (restoredLastActivity ?? Date.now()),
           );
         } else {
+          const agentName = projectKey.includes(':') ? projectKey.split(':').pop() : undefined;
           pulseEmitter.sessionStart(
             session.sessionId ?? projectKey,
             projectKey,
             effectiveCwd,
-            { triggerSource: 'discord' },
+            { agentName, triggerSource: 'discord' },
           );
         }
       }
@@ -493,6 +496,13 @@ export function createSessionManager(defaults: {
       }
 
       await Promise.all(reattachPromises);
+    },
+
+    emitHandoff(projectKey: string, cwd: string, opts: { fromAgent?: string; toAgent: string; threadId: string }): void {
+      if (!pulseEmitter) return;
+      const session = sessions.get(projectKey);
+      const sessionId = session?.sessionId ?? projectKey;
+      pulseEmitter.agentHandoff(sessionId, projectKey, cwd, opts);
     },
 
     shutdown() {
