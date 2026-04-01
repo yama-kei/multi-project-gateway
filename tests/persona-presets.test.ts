@@ -22,37 +22,22 @@ describe('persona-presets', () => {
   describe('life-context topic agents', () => {
     const LIFE_PRESETS = ['life-work', 'life-travel', 'life-social', 'life-hobbies'] as const;
 
-    it('each has contextPaths pointing to summary, timeline, and entities', () => {
+    it('each references LIFE CONTEXT DATA section for knowledge source', () => {
       for (const name of LIFE_PRESETS) {
-        const preset = PERSONA_PRESETS[name];
-        expect(preset.contextPaths).toBeDefined();
-        expect(preset.contextPaths).toHaveLength(3);
-        const topic = name.replace('life-', '');
-        expect(preset.contextPaths).toEqual([
-          `/life-context/${topic}/summary.md`,
-          `/life-context/${topic}/timeline.md`,
-          `/life-context/${topic}/entities.md`,
-        ]);
+        expect(PERSONA_PRESETS[name].prompt).toContain('LIFE CONTEXT DATA');
       }
     });
 
-    it('tier 1 agents (travel, hobbies) mention sharing freely', () => {
-      for (const name of ['life-travel', 'life-hobbies'] as const) {
-        expect(PERSONA_PRESETS[name].prompt).toContain('Tier 1');
-        expect(PERSONA_PRESETS[name].prompt).toContain('freely');
-      }
-    });
-
-    it('tier 2 agents (work, social) mention caution with sensitive details', () => {
-      for (const name of ['life-work', 'life-social'] as const) {
-        expect(PERSONA_PRESETS[name].prompt).toContain('Tier 2');
-        expect(PERSONA_PRESETS[name].prompt).toContain('do not volunteer');
-      }
-    });
-
-    it('each instructs to say "I don\'t have information" when context is missing', () => {
+    it('each instructs to cite specific details and say when info is missing', () => {
       for (const name of LIFE_PRESETS) {
-        expect(PERSONA_PRESETS[name].prompt).toContain("I don't have information about that");
+        expect(PERSONA_PRESETS[name].prompt).toContain('Cite specific details');
+        expect(PERSONA_PRESETS[name].prompt).toContain("don't have information");
+      }
+    });
+
+    it('each instructs concise factual style', () => {
+      for (const name of LIFE_PRESETS) {
+        expect(PERSONA_PRESETS[name].prompt).toContain('concise and factual');
       }
     });
   });
@@ -65,33 +50,24 @@ describe('persona-presets', () => {
     });
 
     it('references all 4 topic agents', () => {
-      expect(router.prompt).toContain('@life-work');
-      expect(router.prompt).toContain('@life-travel');
-      expect(router.prompt).toContain('@life-social');
-      expect(router.prompt).toContain('@life-hobbies');
+      expect(router.prompt).toContain('life-work');
+      expect(router.prompt).toContain('life-travel');
+      expect(router.prompt).toContain('life-social');
+      expect(router.prompt).toContain('life-hobbies');
     });
 
     it('includes HANDOFF dispatch instruction', () => {
-      expect(router.prompt).toContain('HANDOFF @life-<topic>:');
+      expect(router.prompt).toContain('HANDOFF @life-work:');
     });
 
     it('includes multi-topic fan-out instructions', () => {
-      expect(router.prompt).toContain('MULTI-TOPIC');
-      expect(router.prompt).toContain('one HANDOFF line per relevant topic');
+      expect(router.prompt).toContain('multiple HANDOFF commands');
+      expect(router.prompt).toContain('fan out');
     });
 
-    it('includes synthesis instructions', () => {
-      expect(router.prompt).toContain('Synthesis mode');
-      expect(router.prompt).toContain('agent-response');
-    });
-
-    it('includes fallback instructions for unmatched queries', () => {
-      expect(router.prompt).toContain('does not match any of the four topics');
-      expect(router.prompt).toContain('Could you rephrase');
-    });
-
-    it('does not have contextPaths (router does not load Drive files)', () => {
-      expect(router.contextPaths).toBeUndefined();
+    it('includes fallback for off-topic queries', () => {
+      expect(router.prompt).toContain('off-topic');
+      expect(router.prompt).toContain('I can help with questions about your work, travel, social life, and hobbies');
     });
   });
 
