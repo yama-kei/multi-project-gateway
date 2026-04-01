@@ -119,4 +119,37 @@ describe('loadLifeContext', () => {
 
     expect(mockClient.driveSearch).toHaveBeenCalledTimes(4);
   });
+
+  it('stops reading files when aggregate size would exceed 32KB limit', async () => {
+    const folderMap = {
+      root: 'root-id',
+      topics: { work: 'work-folder-id', travel: 't-id', finance: 'f-id', health: 'h-id', social: 's-id', hobbies: 'hb-id' },
+      meta: 'meta-id',
+    };
+    // First file is 30KB, second is 5KB — second should be skipped (would exceed 32KB)
+    const bigContent = 'x'.repeat(30 * 1024);
+    const smallContent = 'y'.repeat(5 * 1024);
+
+    mockClient.driveSearch = vi.fn().mockResolvedValue({
+      files: [{ file_id: 'map-file-id', name: 'folder-map.json', mime_type: 'application/json', size_bytes: 200, modified_at: '', web_view_link: null }],
+    });
+    mockClient.driveRead = vi.fn()
+      .mockResolvedValueOnce({ name: 'folder-map.json', mime_type: 'application/json', content: JSON.stringify(folderMap) })
+      .mockResolvedValueOnce({ name: 'big.md', mime_type: 'text/markdown', content: bigContent })
+      .mockResolvedValueOnce({ name: 'small.md', mime_type: 'text/markdown', content: smallContent });
+    mockClient.driveList = vi.fn().mockResolvedValue({
+      files: [
+        { file_id: 'big-id', name: 'big.md', mime_type: 'text/markdown', size_bytes: 30 * 1024, modified_at: '', web_view_link: null },
+        { file_id: 'small-id', name: 'small.md', mime_type: 'text/markdown', size_bytes: 5 * 1024, modified_at: '', web_view_link: null },
+      ],
+    });
+
+    const result = await loadLifeContext('life-work');
+
+    expect(result).not.toBeNull();
+    expect(result).toContain('## big.md');
+    expect(result).not.toContain('## small.md');
+    // driveRead called for folder-map + big.md + small.md (fetched then rejected by size check)
+    expect(mockClient.driveRead).toHaveBeenCalledTimes(3);
+  });
 });

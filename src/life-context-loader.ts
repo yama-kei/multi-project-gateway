@@ -49,7 +49,7 @@ export async function loadLifeContext(agentName: string): Promise<string | null>
 }
 
 async function fetchContext(client: BrokerClient, topic: string, agentName: string): Promise<string | null> {
-  // Step 1: Find folder-map.json
+  // Step 1: Find folder-map.json (name-only match — Drive search is flat, no path filtering)
   const searchResult = await client.driveSearch('folder-map.json');
   const mapFile = searchResult.files.find((f) => f.name === 'folder-map.json');
   if (!mapFile) return null;
@@ -77,8 +77,8 @@ async function fetchContext(client: BrokerClient, topic: string, agentName: stri
     const content = await client.driveRead(file.file_id);
     const text = content.content;
     if (totalBytes + text.length > MAX_TOTAL_BYTES) {
-      console.warn(`[life-context] ${agentName}: skipping ${file.name} (would exceed ${MAX_TOTAL_BYTES} byte limit)`);
-      continue;
+      console.warn(`[life-context] ${agentName}: skipping ${file.name} and remaining files (would exceed ${MAX_TOTAL_BYTES} byte limit)`);
+      break;
     }
     totalBytes += text.length;
     sections.push(`## ${file.name}\n${text}`);
