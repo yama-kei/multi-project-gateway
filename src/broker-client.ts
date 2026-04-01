@@ -126,7 +126,11 @@ export function createBrokerClient(config: BrokerConfig): BrokerClient {
 
     if (body) {
       headers['Content-Type'] = 'application/json';
-      init.body = JSON.stringify({ tenantId, actorId, ...body });
+      const merged = { tenantId, actorId, ...body };
+      const filtered = Object.fromEntries(
+        Object.entries(merged).filter(([, v]) => v !== undefined),
+      );
+      init.body = JSON.stringify(filtered);
     }
 
     const res = await fetch(url, init);

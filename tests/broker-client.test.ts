@@ -157,6 +157,23 @@ describe('BrokerClient', () => {
     expect(result.files).toHaveLength(1);
   });
 
+  it('excludes undefined optional parameters from request body', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(JSON.stringify({ messages: [], nextPageToken: undefined }), { status: 200 }),
+    );
+
+    await client.gmailSearch('test query');
+
+    const callBody = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    expect(callBody).toEqual({
+      tenantId: 'tenant-1',
+      actorId: 'actor-1',
+      q: 'test query',
+    });
+    expect(callBody).not.toHaveProperty('maxResults');
+    expect(callBody).not.toHaveProperty('pageToken');
+  });
+
   it('throws BrokerError on 401 response', async () => {
     fetchSpy.mockResolvedValue(new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 }));
 
