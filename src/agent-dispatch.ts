@@ -110,3 +110,33 @@ export function parseHandoffCommand(
 
   return { agentName: matchedName, agent, prompt: match[2].trim() };
 }
+
+/**
+ * Parse ALL `HANDOFF @agent: <task>` lines in a response.
+ * Returns one AgentMention per unique agent (deduped by name).
+ * Used for multi-topic fan-out where a router emits multiple HANDOFFs.
+ */
+export function parseAllHandoffs(
+  text: string,
+  agents: Record<string, AgentConfig>,
+): AgentMention[] {
+  const agentNames = Object.keys(agents);
+  if (agentNames.length === 0) return [];
+
+  const escaped = agentNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const pattern = new RegExp(`^HANDOFF\\s+@(${escaped.join('|')})\\s*:\\s*(.*)$`, 'igm');
+
+  const seen = new Set<string>();
+  const results: AgentMention[] = [];
+
+  for (const match of text.matchAll(pattern)) {
+    const name = match[1].toLowerCase();
+    if (seen.has(name)) continue;
+    const agent = agents[name];
+    if (!agent) continue;
+    seen.add(name);
+    results.push({ agentName: name, agent, prompt: match[2].trim() });
+  }
+
+  return results;
+}

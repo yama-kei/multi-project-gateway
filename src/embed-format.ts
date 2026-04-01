@@ -52,6 +52,15 @@ export function buildHandoffEmbed(agentName: string, agentRole: string): EmbedBu
     .setColor(agentColor(agentName));
 }
 
+/** Build an embed announcing parallel fan-out to multiple agents. */
+export function buildFanOutEmbed(agentNames: string[]): EmbedBuilder {
+  const list = agentNames.map(n => `**@${n}**`).join(', ');
+  return new EmbedBuilder()
+    .setAuthor({ name: 'Life Context Router' })
+    .setDescription(`Dispatching to ${agentNames.length} agents: ${list}...`)
+    .setColor(PALETTE[0]);
+}
+
 const PLAIN_TEXT_LIMIT = 2000;
 
 /** Send a message as embeds (if agent) or plain text (if not). */

@@ -75,6 +75,16 @@ describe('persona-presets', () => {
       expect(router.prompt).toContain('HANDOFF @life-<topic>:');
     });
 
+    it('includes multi-topic fan-out instructions', () => {
+      expect(router.prompt).toContain('MULTI-TOPIC');
+      expect(router.prompt).toContain('one HANDOFF line per relevant topic');
+    });
+
+    it('includes synthesis instructions', () => {
+      expect(router.prompt).toContain('Synthesis mode');
+      expect(router.prompt).toContain('agent-response');
+    });
+
     it('includes fallback instructions for unmatched queries', () => {
       expect(router.prompt).toContain('does not match any of the four topics');
       expect(router.prompt).toContain('Could you rephrase');

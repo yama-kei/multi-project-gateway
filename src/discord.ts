@@ -3,8 +3,8 @@ import type { Router } from './router.js';
 import type { SessionManager } from './session-manager.js';
 import type { GatewayConfig } from './config.js';
 import { buildToolArgs } from './claude-cli.js';
-import { parseAgentMention, parseAgentCommand, extractAskTarget, parseHandoffCommand } from './agent-dispatch.js';
-import { sendAgentMessage, buildHandoffEmbed } from './embed-format.js';
+import { parseAgentMention, parseAgentCommand, extractAskTarget, parseHandoffCommand, parseAllHandoffs } from './agent-dispatch.js';
+import { sendAgentMessage, buildHandoffEmbed, buildFanOutEmbed } from './embed-format.js';
 import type { TurnCounter } from './turn-counter.js';
 import { hasAllowedRole } from './role-check.js';
 import { createRateLimiter } from './rate-limiter.js';
@@ -490,9 +490,99 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
         const maxTurns = config.defaults.maxTurnsPerAgent;
 
         while (true) {
-          const handoff = parseHandoffCommand(responseText, agents);
-          if (!handoff || handoff.agentName === currentAgentName) break;
+          const allHandoffs = parseAllHandoffs(responseText, agents)
+            .filter(h => h.agentName !== currentAgentName);
+          if (allHandoffs.length === 0) break;
 
+          // --- Multi-topic fan-out (#157) ---
+          if (allHandoffs.length > 1) {
+            // Fan-out counts as 1 turn, synthesis as 1 turn = 2 total
+            turnCounter.increment(replyChannel.id);
+            turnCounter.increment(replyChannel.id);
+            const turn = turnCounter.getTurns(replyChannel.id);
+            console.log(`[fan-out] thread=${replyChannel.id} turn=${turn}/${maxTurns} ${currentAgentName ?? 'user'} → [${allHandoffs.map(h => h.agentName).join(', ')}]`);
+
+            if (turnCounter.isOverLimit(replyChannel.id, maxTurns)) {
+              console.log(`[fan-out] thread=${replyChannel.id} turn limit reached, stopping`);
+              await replyChannel.send(`⚠️ Agent turn limit reached (${maxTurns}) — send a message to reset.`);
+              break;
+            }
+
+            // Announce fan-out
+            await replyChannel.send({ embeds: [buildFanOutEmbed(allHandoffs.map(h => h.agentName))] }).catch(() => null);
+            replyChannel.sendTyping().catch(() => {});
+
+            // Dispatch all agents in parallel
+            const fanOutStart = Date.now();
+            const fanOutTimeout = Math.min(config.defaults.agentTimeoutMs, 5 * 60 * 1000);
+            const promises = allHandoffs.map(async (handoff) => {
+              const key = `${threadId}:${handoff.agentName}`;
+              const sysPrompt = await buildSystemPrompt(handoff.agent);
+              return {
+                agentName: handoff.agentName,
+                result: await sessionManager.send(
+                  key, resolved.directory, responseText,
+                  { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: sysPrompt, timeoutMs: fanOutTimeout, extraArgs: toolArgs.length > 0 ? toolArgs : undefined },
+                ),
+              };
+            });
+
+            const settled = await Promise.allSettled(promises);
+            const fanOutElapsed = ((Date.now() - fanOutStart) / 1000).toFixed(1);
+            console.log(`[fan-out] thread=${replyChannel.id} ${settled.length} agents responded in ${fanOutElapsed}s`);
+
+            // Collect results
+            const agentResponses: string[] = [];
+            for (let i = 0; i < settled.length; i++) {
+              const outcome = settled[i];
+              const agentName = allHandoffs[i].agentName;
+              if (outcome.status === 'fulfilled') {
+                agentResponses.push(`<agent-response agent="${agentName}">\n${outcome.value.result.text}\n</agent-response>`);
+              } else {
+                const msg = outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
+                console.log(`[fan-out] thread=${replyChannel.id} ${agentName} failed: ${msg}`);
+                agentResponses.push(`<agent-response agent="${agentName}">\n[Error: ${msg.slice(0, 500)}]\n</agent-response>`);
+              }
+            }
+
+            // Send collected responses back to the originating agent for synthesis
+            const synthesisPrompt = `The user asked: "${responseText}"\n\nHere are the responses from the topic agents:\n\n${agentResponses.join('\n\n')}\n\nPlease synthesize these into a single coherent answer.`;
+            const originKey = `${threadId}:${currentAgentName ?? 'life-router'}`;
+            const originAgent = currentAgentName ? agents[currentAgentName] : undefined;
+            const originSysPrompt = originAgent ? await buildSystemPrompt(originAgent) : undefined;
+
+            replyChannel.sendTyping().catch(() => {});
+
+            let synthesisResult;
+            try {
+              synthesisResult = await sessionManager.send(
+                originKey, resolved.directory, synthesisPrompt,
+                { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: originSysPrompt, timeoutMs: config.defaults.agentTimeoutMs, extraArgs: toolArgs.length > 0 ? toolArgs : undefined },
+              );
+            } catch (synthErr) {
+              const msg = synthErr instanceof Error ? synthErr.message : String(synthErr);
+              console.log(`[fan-out] thread=${replyChannel.id} synthesis failed: ${msg}`);
+              await replyChannel.send(`⚠️ Synthesis failed: ${msg.slice(0, 1800)}`);
+              break;
+            }
+
+            const synthElapsed = ((Date.now() - fanOutStart) / 1000).toFixed(1);
+            console.log(`[fan-out] thread=${replyChannel.id} synthesis complete in ${synthElapsed}s (${synthesisResult.text.length} chars)`);
+
+            await sendAgentMessage(
+              replyChannel,
+              synthesisResult.text,
+              currentAgentName ?? 'life-router',
+              originAgent?.role ?? 'Life Context Router',
+            );
+
+            responseText = synthesisResult.text;
+            // After synthesis, continue loop to check for further handoffs (unlikely but handled)
+            continue;
+          }
+
+          // --- Single handoff (existing behavior) ---
+          const handoff = allHandoffs[0];
           turnCounter.increment(replyChannel.id);
           const turn = turnCounter.getTurns(replyChannel.id);
           console.log(`[handoff] thread=${replyChannel.id} turn=${turn}/${maxTurns} ${currentAgentName ?? 'user'} → ${handoff.agentName}`);
