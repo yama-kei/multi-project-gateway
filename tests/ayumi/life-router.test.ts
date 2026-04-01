@@ -1,11 +1,11 @@
 /**
  * E2E-style tests for the life-router persona.
  * These verify that the router prompt, when combined with agent-dispatch parsing,
- * produces correct routing behavior for single-topic queries.
+ * produces correct routing behavior for single and multi-topic queries.
  */
 import { describe, it, expect } from 'vitest';
 import { PERSONA_PRESETS } from '../../src/persona-presets.js';
-import { parseHandoffCommand } from '../../src/agent-dispatch.js';
+import { parseHandoffCommand, parseAllHandoffs } from '../../src/agent-dispatch.js';
 
 // All agents that the router can dispatch to must be registered
 const ALL_AGENTS = Object.fromEntries(
@@ -13,9 +13,8 @@ const ALL_AGENTS = Object.fromEntries(
 );
 
 describe('life-router E2E', () => {
-  describe('HANDOFF parsing for routed queries', () => {
+  describe('single-topic HANDOFF parsing', () => {
     it('routes a travel query to life-travel', () => {
-      // Simulate what the router agent would output
       const routerOutput = 'HANDOFF @life-travel: Where did I travel last year?';
       const result = parseHandoffCommand(routerOutput, ALL_AGENTS);
       expect(result).not.toBeNull();
@@ -43,44 +42,81 @@ describe('life-router E2E', () => {
       expect(result).not.toBeNull();
       expect(result!.agentName).toBe('life-hobbies');
     });
+  });
 
-    it('routes multi-topic query to primary topic with secondary note', () => {
-      const routerOutput = 'HANDOFF @life-travel: Where did I go with my running club? (may also relate to hobbies)';
-      const result = parseHandoffCommand(routerOutput, ALL_AGENTS);
-      expect(result).not.toBeNull();
-      expect(result!.agentName).toBe('life-travel');
-      expect(result!.prompt).toContain('may also relate to hobbies');
+  describe('multi-topic fan-out parsing', () => {
+    it('parses multiple HANDOFF lines into separate dispatches', () => {
+      const routerOutput = [
+        'HANDOFF @life-travel: What did I do last summer? (focus on trips)',
+        'HANDOFF @life-social: What did I do last summer? (focus on social events)',
+        'HANDOFF @life-hobbies: What did I do last summer? (focus on activities)',
+      ].join('\n');
+
+      const results = parseAllHandoffs(routerOutput, ALL_AGENTS);
+      expect(results).toHaveLength(3);
+      expect(results.map(r => r.agentName)).toEqual(['life-travel', 'life-social', 'life-hobbies']);
+    });
+
+    it('each HANDOFF includes topic-specific focus in the prompt', () => {
+      const routerOutput = [
+        'HANDOFF @life-work: Tell me about Q1 (focus on projects and deadlines)',
+        'HANDOFF @life-social: Tell me about Q1 (focus on team events)',
+      ].join('\n');
+
+      const results = parseAllHandoffs(routerOutput, ALL_AGENTS);
+      expect(results[0].prompt).toContain('focus on projects');
+      expect(results[1].prompt).toContain('focus on team events');
+    });
+
+    it('single-topic query still works with parseAllHandoffs', () => {
+      const routerOutput = 'HANDOFF @life-travel: Where did I fly to in March?';
+      const results = parseAllHandoffs(routerOutput, ALL_AGENTS);
+      expect(results).toHaveLength(1);
+      expect(results[0].agentName).toBe('life-travel');
     });
   });
 
   describe('fallback behavior', () => {
     it('unmatched query does not produce a HANDOFF', () => {
-      // When the router responds directly (no HANDOFF), parseHandoffCommand returns null
       const routerOutput = 'I can help with questions about your work, travel, social life, and hobbies. Could you rephrase your question to relate to one of these areas?';
       const result = parseHandoffCommand(routerOutput, ALL_AGENTS);
       expect(result).toBeNull();
+    });
+
+    it('unmatched query produces empty array from parseAllHandoffs', () => {
+      const routerOutput = 'I can help with questions about your work, travel, social life, and hobbies.';
+      const results = parseAllHandoffs(routerOutput, ALL_AGENTS);
+      expect(results).toEqual([]);
     });
   });
 
   describe('router prompt structure', () => {
     const router = PERSONA_PRESETS['life-router'];
 
-    it('instructs to dispatch via HANDOFF syntax that agent-dispatch can parse', () => {
-      // The prompt tells the agent to use "HANDOFF @life-<topic>:" which matches
-      // the parseHandoffCommand regex: /^HANDOFF\s+@<agent>\s*:\s*(.*)$/im
+    it('instructs to dispatch via HANDOFF syntax', () => {
       expect(router.prompt).toMatch(/HANDOFF @life-/);
     });
 
     it('lists all four topics as dispatch targets', () => {
-      const topics = ['work', 'travel', 'social', 'hobbies'];
-      for (const topic of topics) {
+      for (const topic of ['work', 'travel', 'social', 'hobbies']) {
         expect(router.prompt).toContain(`@life-${topic}`);
       }
     });
 
-    it('instructs single-topic dispatch for multi-topic queries', () => {
-      expect(router.prompt).toContain('PRIMARY topic');
-      expect(router.prompt).toContain('secondary topics');
+    it('includes multi-topic instructions with example of multiple HANDOFF lines', () => {
+      expect(router.prompt).toContain('MULTI-TOPIC');
+      expect(router.prompt).toContain('one HANDOFF line per relevant topic');
+    });
+
+    it('includes synthesis instructions for collected responses', () => {
+      expect(router.prompt).toContain('Synthesis mode');
+      expect(router.prompt).toContain('agent-response');
+      expect(router.prompt).toContain('coherent answer');
+    });
+
+    it('includes fallback for unmatched queries', () => {
+      expect(router.prompt).toContain('does not match any of the four topics');
+      expect(router.prompt).toContain('Could you rephrase');
     });
   });
 });

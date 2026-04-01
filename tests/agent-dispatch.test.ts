@@ -1,10 +1,18 @@
 // tests/agent-dispatch.test.ts
 import { describe, it, expect } from 'vitest';
-import { parseAgentMention, parseAgentCommand, extractAskTarget, parseHandoffCommand, type AgentConfig } from '../src/agent-dispatch.js';
+import { parseAgentMention, parseAgentCommand, extractAskTarget, parseHandoffCommand, parseAllHandoffs, type AgentConfig } from '../src/agent-dispatch.js';
 
 const agents: Record<string, AgentConfig> = {
   pm: { role: 'Product Manager', prompt: 'You manage requirements.' },
   engineer: { role: 'Engineer', prompt: 'You write code.' },
+};
+
+const lifeAgents: Record<string, AgentConfig> = {
+  'life-router': { role: 'Life Context Router', prompt: 'Route queries.' },
+  'life-work': { role: 'Life Context Agent — Work', prompt: 'Work context.' },
+  'life-travel': { role: 'Life Context Agent — Travel', prompt: 'Travel context.' },
+  'life-social': { role: 'Life Context Agent — Social', prompt: 'Social context.' },
+  'life-hobbies': { role: 'Life Context Agent — Hobbies', prompt: 'Hobbies context.' },
 };
 
 describe('parseAgentMention', () => {
@@ -239,5 +247,67 @@ describe('parseHandoffCommand', () => {
       agent: agents.engineer,
       prompt: '',
     });
+  });
+});
+
+describe('parseAllHandoffs', () => {
+  it('returns empty array when no handoffs found', () => {
+    expect(parseAllHandoffs('Just a regular message', lifeAgents)).toEqual([]);
+  });
+
+  it('returns single match (same as parseHandoffCommand)', () => {
+    const result = parseAllHandoffs('HANDOFF @life-travel: Where did I travel?', lifeAgents);
+    expect(result).toHaveLength(1);
+    expect(result[0].agentName).toBe('life-travel');
+    expect(result[0].prompt).toBe('Where did I travel?');
+  });
+
+  it('returns multiple matches from multi-line response', () => {
+    const text = [
+      'HANDOFF @life-travel: What did I do last summer? (focus on trips)',
+      'HANDOFF @life-social: What did I do last summer? (focus on social events)',
+      'HANDOFF @life-hobbies: What did I do last summer? (focus on hobbies)',
+    ].join('\n');
+    const result = parseAllHandoffs(text, lifeAgents);
+    expect(result).toHaveLength(3);
+    expect(result.map(r => r.agentName)).toEqual(['life-travel', 'life-social', 'life-hobbies']);
+  });
+
+  it('deduplicates same agent mentioned twice', () => {
+    const text = [
+      'HANDOFF @life-travel: First question',
+      'HANDOFF @life-travel: Second question',
+    ].join('\n');
+    const result = parseAllHandoffs(text, lifeAgents);
+    expect(result).toHaveLength(1);
+    expect(result[0].agentName).toBe('life-travel');
+    expect(result[0].prompt).toBe('First question');
+  });
+
+  it('skips unknown agents', () => {
+    const text = [
+      'HANDOFF @life-travel: Question about travel',
+      'HANDOFF @unknown-agent: Some question',
+    ].join('\n');
+    const result = parseAllHandoffs(text, lifeAgents);
+    expect(result).toHaveLength(1);
+    expect(result[0].agentName).toBe('life-travel');
+  });
+
+  it('returns empty array for empty agents', () => {
+    expect(parseAllHandoffs('HANDOFF @life-travel: question', {})).toEqual([]);
+  });
+
+  it('handles HANDOFF lines with text before and after', () => {
+    const text = [
+      'I will dispatch to the relevant agents:',
+      'HANDOFF @life-work: What projects am I on?',
+      'HANDOFF @life-social: Who did I meet recently?',
+      'That should cover it.',
+    ].join('\n');
+    const result = parseAllHandoffs(text, lifeAgents);
+    expect(result).toHaveLength(2);
+    expect(result[0].agentName).toBe('life-work');
+    expect(result[1].agentName).toBe('life-social');
   });
 });
