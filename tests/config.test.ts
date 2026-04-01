@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { loadConfig, DEFAULT_ALLOWED_TOOLS, type GatewayConfig } from '../src/config.js';
+import { loadConfig, DEFAULT_ALLOWED_TOOLS, resolveAgentTimeout, type GatewayConfig, type GatewayDefaults, type AgentConfig } from '../src/config.js';
 import { PERSONA_PRESETS } from '../src/persona-presets.js';
 
 describe('loadConfig', () => {
@@ -439,5 +439,95 @@ describe('loadConfig', () => {
       projects: { 'ch-1': { directory: '/tmp/a' } },
     });
     expect(config.defaults.persistence).toBe('direct');
+  });
+
+  // --- per-agent timeoutMs ---
+
+  it('parses per-agent timeoutMs from inline agent config', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          directory: '/tmp/app',
+          agents: {
+            engineer: { role: 'Engineer', prompt: 'You write code.', timeoutMs: 1800000 },
+            pm: { role: 'PM', prompt: 'You manage.', timeoutMs: 300000 },
+          },
+        },
+      },
+    });
+    expect(config.projects['ch-1'].agents!.engineer.timeoutMs).toBe(1800000);
+    expect(config.projects['ch-1'].agents!.pm.timeoutMs).toBe(300000);
+  });
+
+  it('parses per-agent timeoutMs from preset-based agent config', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          directory: '/tmp/app',
+          agents: {
+            engineer: { preset: 'engineer', timeoutMs: 900000 },
+          },
+        },
+      },
+    });
+    expect(config.projects['ch-1'].agents!.engineer.timeoutMs).toBe(900000);
+  });
+
+  it('omits timeoutMs when not specified in agent config', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          directory: '/tmp/app',
+          agents: {
+            pm: { role: 'PM', prompt: 'You manage.' },
+          },
+        },
+      },
+    });
+    expect(config.projects['ch-1'].agents!.pm.timeoutMs).toBeUndefined();
+  });
+
+  it('ignores non-positive timeoutMs values', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          directory: '/tmp/app',
+          agents: {
+            pm: { role: 'PM', prompt: 'You manage.', timeoutMs: 0 },
+            engineer: { role: 'Engineer', prompt: 'You code.', timeoutMs: -1 },
+          },
+        },
+      },
+    });
+    expect(config.projects['ch-1'].agents!.pm.timeoutMs).toBeUndefined();
+    expect(config.projects['ch-1'].agents!.engineer.timeoutMs).toBeUndefined();
+  });
+
+  it('ignores non-number timeoutMs values', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          directory: '/tmp/app',
+          agents: {
+            pm: { role: 'PM', prompt: 'You manage.', timeoutMs: 'fast' },
+          },
+        },
+      },
+    });
+    expect(config.projects['ch-1'].agents!.pm.timeoutMs).toBeUndefined();
+  });
+});
+
+describe('resolveAgentTimeout', () => {
+  const defaults = { agentTimeoutMs: 180000 } as GatewayDefaults;
+
+  it('returns agent-specific timeout when set', () => {
+    const agent: AgentConfig = { role: 'Engineer', prompt: 'code', timeoutMs: 1800000 };
+    expect(resolveAgentTimeout(agent, defaults)).toBe(1800000);
+  });
+
+  it('falls back to global default when agent has no timeoutMs', () => {
+    const agent: AgentConfig = { role: 'PM', prompt: 'manage' };
+    expect(resolveAgentTimeout(agent, defaults)).toBe(180000);
   });
 });
