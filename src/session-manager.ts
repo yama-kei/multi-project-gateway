@@ -15,13 +15,14 @@ export interface SessionInfo {
   queueLength: number;
   createdAt: number;
   processing: boolean;
+  guildId?: string;
 }
 
 /** Callback invoked when an orphaned tmux session produces a result on startup recovery. */
 export type OrphanResultCallback = (projectKey: string, result: ClaudeResult) => void;
 
 export interface SessionManager {
-  send(projectKey: string, cwd: string, prompt: string, opts?: { worktree?: boolean; systemPrompt?: string; timeoutMs?: number; extraArgs?: string[] }): Promise<ClaudeResult>;
+  send(projectKey: string, cwd: string, prompt: string, opts?: { worktree?: boolean; systemPrompt?: string; timeoutMs?: number; extraArgs?: string[]; guildId?: string }): Promise<ClaudeResult>;
   getSession(projectKey: string): SessionInfo | undefined;
   listSessions(): SessionInfo[];
   clearSession(projectKey: string): boolean;
@@ -39,6 +40,7 @@ interface InternalSession {
   cwd: string;
   projectDir: string | undefined;
   worktreePath: string | undefined;
+  guildId: string | undefined;
   lastActivity: number;
   createdAt: number;
   messageCount: number;
@@ -110,6 +112,7 @@ export function createSessionManager(defaults: {
           lastActivity: s.lastActivity,
           worktreePath: s.worktreePath,
           projectDir: s.projectDir,
+          guildId: s.guildId,
         });
       }
     }
@@ -244,7 +247,7 @@ export function createSessionManager(defaults: {
     session.processing = false;
   }
 
-  function getOrCreateSession(projectKey: string, cwd: string, useWorktree?: boolean): InternalSession {
+  function getOrCreateSession(projectKey: string, cwd: string, useWorktree?: boolean, guildId?: string): InternalSession {
     let session = sessions.get(projectKey);
     if (session && session.restored && !session.resumeEmitted && pulseEmitter && session.sessionId) {
       session.resumeEmitted = true;
@@ -260,6 +263,7 @@ export function createSessionManager(defaults: {
       let restoredSessionId: string | undefined;
       let restoredWorktreePath: string | undefined;
       let restoredLastActivity: number | undefined;
+      let restoredGuildId: string | undefined;
       if (store) {
         const persisted = store.load();
         const entry = persisted.get(projectKey);
@@ -267,6 +271,7 @@ export function createSessionManager(defaults: {
           restoredSessionId = entry.sessionId;
           restoredWorktreePath = entry.worktreePath;
           restoredLastActivity = entry.lastActivity;
+          restoredGuildId = entry.guildId;
         }
       }
 
@@ -291,6 +296,7 @@ export function createSessionManager(defaults: {
         cwd: effectiveCwd,
         projectDir,
         worktreePath,
+        guildId: guildId ?? restoredGuildId,
         lastActivity: Date.now(),
         createdAt: Date.now(),
         messageCount: 0,
@@ -340,6 +346,7 @@ export function createSessionManager(defaults: {
         cwd: entry.cwd,
         projectDir: entry.projectDir,
         worktreePath: entry.worktreePath,
+        guildId: entry.guildId,
         lastActivity: entry.lastActivity,
         createdAt: entry.lastActivity,
         messageCount: 0,
@@ -359,8 +366,8 @@ export function createSessionManager(defaults: {
   }
 
   return {
-    send(projectKey: string, cwd: string, prompt: string, opts?: { worktree?: boolean; systemPrompt?: string; timeoutMs?: number; extraArgs?: string[] }): Promise<ClaudeResult> {
-      const session = getOrCreateSession(projectKey, cwd, opts?.worktree);
+    send(projectKey: string, cwd: string, prompt: string, opts?: { worktree?: boolean; systemPrompt?: string; timeoutMs?: number; extraArgs?: string[]; guildId?: string }): Promise<ClaudeResult> {
+      const session = getOrCreateSession(projectKey, cwd, opts?.worktree, opts?.guildId);
       return new Promise<ClaudeResult>((resolve, reject) => {
         session.queue.push({ prompt, systemPrompt: opts?.systemPrompt, timeoutMs: opts?.timeoutMs, extraArgs: opts?.extraArgs, resolve, reject });
         processQueue(session);
@@ -379,6 +386,7 @@ export function createSessionManager(defaults: {
         queueLength: session.queue.length,
         createdAt: session.createdAt,
         processing: session.processing,
+        guildId: session.guildId,
       };
     },
 
@@ -392,6 +400,7 @@ export function createSessionManager(defaults: {
         queueLength: s.queue.length,
         createdAt: s.createdAt,
         processing: s.processing,
+        guildId: s.guildId,
       }));
     },
 

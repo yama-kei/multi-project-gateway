@@ -266,7 +266,10 @@ function refresh() {
           var projName = resolveProjectNameFromDir(s.projectDir || s.cwd, dirToNameMap) || (projectNameMap && projectNameMap[pkParts[0]] ? projectNameMap[pkParts[0]] : null) || pkParts[0];
           var role = pkParts.length > 1 ? pkParts[1] : '';
           var sessionLabel = projName && shortId ? (role ? projName + '/' + shortId + '/' + role : projName + '/' + shortId) : (shortId || '—');
-          h += '<tr><td><span class="clickable-id" style="cursor:pointer;text-decoration:underline dotted" title="Click to copy: ' + escapeHtml(sid) + '" onclick="copyToClipboard(\\'' + escapeHtml(sid) + '\\', this)">' + escapeHtml(sessionLabel) + '</span></td><td>' + sessionStatus(s) + '</td><td>' + formatDuration(s.createdAt) + '</td><td>' + formatAgo(s.lastActivity) + '</td></tr>';
+          var labelHtml = s.sourceUrl
+            ? '<a href="' + escapeHtml(s.sourceUrl) + '" target="_blank" rel="noopener" style="color:#58a6ff;text-decoration:underline">' + escapeHtml(sessionLabel) + '</a>'
+            : '<span class="clickable-id" style="cursor:pointer;text-decoration:underline dotted" title="Click to copy: ' + escapeHtml(sid) + '" onclick="copyToClipboard(\\'' + escapeHtml(sid) + '\\', this)">' + escapeHtml(sessionLabel) + '</span>';
+          h += '<tr><td>' + labelHtml + '</td><td>' + sessionStatus(s) + '</td><td>' + formatDuration(s.createdAt) + '</td><td>' + formatAgo(s.lastActivity) + '</td></tr>';
         }
         h += '</table>';
         st.innerHTML = h;
@@ -873,10 +876,15 @@ export function createDashboardServer(
     }
 
     if (pathname === '/api/status') {
+      const sessions = sessionManager.listSessions().map((s) => {
+        const threadId = s.projectKey.includes(':') ? s.projectKey.split(':')[0] : s.projectKey;
+        const sourceUrl = s.guildId ? `https://discord.com/channels/${s.guildId}/${threadId}` : undefined;
+        return { ...s, sourceUrl };
+      });
       const body = JSON.stringify({
         version,
         health: getHealthData(),
-        sessions: sessionManager.listSessions(),
+        sessions,
         projects: getProjectsData(),
       });
       res.writeHead(200, { 'Content-Type': 'application/json' });

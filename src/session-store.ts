@@ -8,6 +8,7 @@ export interface PersistedSession {
   lastActivity: number;
   worktreePath?: string;
   projectDir?: string;
+  guildId?: string;
 }
 
 export interface SessionStore {
