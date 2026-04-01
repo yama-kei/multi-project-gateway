@@ -26,10 +26,11 @@ Behavior:
 1. Maps agent name to topic: `life-work` → `work`, `life-travel` → `travel`, `life-social` → `social`, `life-hobbies` → `hobbies`
 2. Returns `null` for non-life-context agents (`life-router`, `curator`, `pm`, etc.)
 3. Creates broker client lazily via `createBrokerClientFromEnv()`, cached as module-level singleton
-4. Loads `folder-map.json` via `driveSearch` → `driveRead` to get topic folder ID
+4. Loads `folder-map.json`: search Drive for files named `folder-map.json`, find the one in the `_meta` folder (match by file name — there should be exactly one), then `driveRead` to get the `FolderMap` JSON containing all topic folder IDs
 5. Lists files in the topic folder via `driveList`
-6. Reads each file via `driveRead`
+6. Reads each file via `driveRead`, up to **10 files** and **32 KB aggregate** text. If a file would exceed the limit, skip it and log a warning.
 7. Returns formatted context string
+8. Overall timeout: **5 seconds** for the entire `loadLifeContext` call. On timeout, return `null` and log.
 
 ### Injected context format
 
@@ -52,10 +53,14 @@ Behavior:
 
 Two injection points where system prompts are built:
 
-1. **Initial agent dispatch** (~line 365): where `systemPrompt` is constructed from `activeAgent`
-2. **Handoff dispatch** (~line 465): where `handoffPrompt` is constructed from `handoff.agent`
+1. **Initial agent dispatch**: where `systemPrompt` is constructed from `activeAgent`
+2. **Handoff dispatch**: where `handoffPrompt` is constructed from `handoff.agent`
 
 Both become async — call `loadLifeContext(agentName)` and append the result to the system prompt if non-null.
+
+### Agent prompt update
+
+Update topic agent system prompts to say "Your knowledge comes from curated context data provided below" instead of referencing a Drive path the agent cannot access. This prevents wasted tool calls where the agent tries to Read/Glob a nonexistent local path.
 
 ### Error handling
 
@@ -65,13 +70,19 @@ Both become async — call `loadLifeContext(agentName)` and append the result to
 | Broker unreachable / API error | Returns `null`, logs error. Agent responds without context (same as today). |
 | `folder-map.json` not found | Returns `null` (curator hasn't run yet). |
 | Topic folder empty | Returns `null`. |
+| Aggregate context exceeds 32 KB | Truncate: skip remaining files, log warning. |
+| More than 10 files in folder | Read only first 10, log warning. |
+| Overall call exceeds 5 seconds | Return `null`, log timeout. |
+
+### Observability
+
+Log on success: `[life-context] Injected {N} files / {size}KB for {agentName}` so operators can verify the feature is working and track context sizes over time.
 
 No caching across requests — each dispatch fetches fresh from Drive so context stays up-to-date as the curator writes new data. Broker calls are lightweight (3-4 small markdown file reads).
 
 ## Scope boundaries
 
 - No changes to the curator pipeline
-- No changes to agent system prompt wording (beyond appending context)
 - No caching layer
 - No changes to `life-router` (dispatches only, doesn't need Drive context)
 
@@ -79,6 +90,7 @@ No caching across requests — each dispatch fetches fresh from Drive so context
 
 | File | Change |
 |---|---|
-| `src/life-context-loader.ts` | New — loader function |
+| `src/life-context-loader.ts` | New — loader function with size/timeout guards |
 | `src/discord.ts` | Modified — call loader at both dispatch points |
+| `src/persona-presets.ts` | Modified — update topic agent prompt wording |
 | `tests/life-context-loader.test.ts` | New — unit tests |
