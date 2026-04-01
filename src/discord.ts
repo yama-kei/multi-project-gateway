@@ -1,7 +1,7 @@
 import { Client, GatewayIntentBits, Events, Status, type Message, type TextChannel, type ThreadChannel } from 'discord.js';
 import type { Router } from './router.js';
 import type { SessionManager } from './session-manager.js';
-import type { GatewayConfig } from './config.js';
+import { type GatewayConfig, resolveAgentTimeout } from './config.js';
 import { buildToolArgs } from './claude-cli.js';
 import { parseAgentMention, parseAgentCommand, extractAskTarget, parseHandoffCommand, parseAllHandoffs } from './agent-dispatch.js';
 import { sendAgentMessage, buildHandoffEmbed, buildFanOutEmbed } from './embed-format.js';
@@ -479,10 +479,10 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
 
             // Dispatch all agents in parallel
             const fanOutStart = Date.now();
-            const fanOutTimeout = Math.min(config.defaults.agentTimeoutMs, 5 * 60 * 1000);
             const promises = allHandoffs.map(async (handoff) => {
               const key = `${threadId}:${handoff.agentName}`;
               const sysPrompt = await buildSystemPrompt(handoff.agentName, handoff.agent);
+              const fanOutTimeout = Math.min(resolveAgentTimeout(handoff.agent, config.defaults), 5 * 60 * 1000);
               return {
                 agentName: handoff.agentName,
                 result: await sessionManager.send(
@@ -522,7 +522,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
             try {
               synthesisResult = await sessionManager.send(
                 originKey, resolved.directory, synthesisPrompt,
-                { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: originSysPrompt, timeoutMs: config.defaults.agentTimeoutMs, extraArgs: toolArgs.length > 0 ? toolArgs : undefined },
+                { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: originSysPrompt, timeoutMs: originAgent ? resolveAgentTimeout(originAgent, config.defaults) : config.defaults.agentTimeoutMs, extraArgs: toolArgs.length > 0 ? toolArgs : undefined },
               );
             } catch (synthErr) {
               const msg = synthErr instanceof Error ? synthErr.message : String(synthErr);
@@ -580,7 +580,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
               handoffKey,
               resolved.directory,
               responseText,
-              { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: handoffPrompt, timeoutMs: config.defaults.agentTimeoutMs, extraArgs: toolArgs.length > 0 ? toolArgs : undefined },
+              { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: handoffPrompt, timeoutMs: resolveAgentTimeout(handoff.agent, config.defaults), extraArgs: toolArgs.length > 0 ? toolArgs : undefined },
             );
           } catch (handoffErr) {
             const msg = handoffErr instanceof Error ? handoffErr.message : String(handoffErr);

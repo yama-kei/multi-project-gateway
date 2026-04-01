@@ -5,6 +5,7 @@ export interface AgentConfig {
   role: string;
   prompt: string;
   contextPaths?: string[];
+  timeoutMs?: number;
 }
 
 export interface AgentInputConfig {
@@ -106,6 +107,8 @@ export function loadConfig(raw: unknown): GatewayConfig {
         const ac = agentCfg as Record<string, unknown>;
         const name = agentName.toLowerCase();
 
+        const agentTimeoutMs = typeof ac.timeoutMs === 'number' && ac.timeoutMs > 0 ? ac.timeoutMs : undefined;
+
         if (typeof ac.preset === 'string') {
           // Preset-based: resolve preset, then merge overrides
           const preset = resolvePreset(ac.preset);
@@ -114,11 +117,11 @@ export function loadConfig(raw: unknown): GatewayConfig {
             const basePrompt = preset.prompt;
             const extra = typeof ac.prompt === 'string' ? ac.prompt : '';
             const prompt = extra ? `${basePrompt}\n\n${extra}` : basePrompt;
-            agents[name] = { role, prompt };
+            agents[name] = { role, prompt, ...(agentTimeoutMs !== undefined && { timeoutMs: agentTimeoutMs }) };
           }
         } else if (typeof ac.role === 'string' && typeof ac.prompt === 'string') {
           // Inline: original behavior
-          agents[name] = { role: ac.role, prompt: ac.prompt };
+          agents[name] = { role: ac.role, prompt: ac.prompt, ...(agentTimeoutMs !== undefined && { timeoutMs: agentTimeoutMs }) };
         }
       }
       if (Object.keys(agents).length === 0) agents = undefined;
@@ -178,4 +181,11 @@ export function loadConfig(raw: unknown): GatewayConfig {
     },
     projects: validated,
   };
+}
+
+/**
+ * Resolve timeout for a specific agent: agent-specific → global default.
+ */
+export function resolveAgentTimeout(agent: AgentConfig, defaults: GatewayDefaults): number {
+  return agent.timeoutMs ?? defaults.agentTimeoutMs;
 }

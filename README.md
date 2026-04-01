@@ -302,7 +302,7 @@ You can define multiple agents per project that collaborate via `@mentions`. Eac
 
 ### Defining agents
 
-Add an `agents` map to any project in `config.json`. Each key is the agent name (used as `@name` in Discord), with `role` and `prompt` fields:
+Add an `agents` map to any project in `config.json`. Each key is the agent name (used as `@name` in Discord), with `role` and `prompt` fields. You can optionally set a per-agent `timeoutMs` to override `defaults.agentTimeoutMs`:
 
 ```json
 {
@@ -313,17 +313,21 @@ Add an `agents` map to any project in `config.json`. Each key is the agent name 
       "agents": {
         "pm": {
           "role": "Product Manager",
-          "prompt": "You are the PM for my-app. Analyze requirements, create issues, and review work. When you need code implemented, mention @engineer in your response. Never write code directly."
+          "prompt": "You are the PM for my-app. Analyze requirements, create issues, and review work. When you need code implemented, mention @engineer in your response. Never write code directly.",
+          "timeoutMs": 300000
         },
         "engineer": {
           "role": "Software Engineer",
-          "prompt": "You are a senior engineer for my-app. Implement features, write tests, fix bugs, and create PRs. When work is done or you need PM review, mention @pm in your response."
+          "prompt": "You are a senior engineer for my-app. Implement features, write tests, fix bugs, and create PRs. When work is done or you need PM review, mention @pm in your response.",
+          "timeoutMs": 1800000
         }
       }
     }
   }
 }
 ```
+
+The timeout resolution order is: agent-specific `timeoutMs` → `defaults.agentTimeoutMs` (3 min).
 
 ### How agent routing works
 
