@@ -427,6 +427,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
           worktree: replyChannel.isThread() ? true : undefined,
           systemPrompt,
           extraArgs: toolArgs.length > 0 ? toolArgs : undefined,
+          guildId: message.guildId ?? undefined,
         },
       );
 
