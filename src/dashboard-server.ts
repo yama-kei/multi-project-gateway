@@ -884,14 +884,17 @@ export function createDashboardServer(
     }
 
     if (pathname === '/api/status') {
+      const discordGuildId = bot.getGuildId() ?? undefined;
       const sessions = sessionManager.listSessions().map((s) => {
         const threadId = s.projectKey.includes(':') ? s.projectKey.split(':')[0] : s.projectKey;
-        const sourceUrl = s.guildId ? `https://discord.com/channels/${s.guildId}/${threadId}` : undefined;
+        const gid = s.guildId ?? discordGuildId;
+        const sourceUrl = gid ? `discord://discord.com/channels/${gid}/${threadId}` : undefined;
         return { ...s, sourceUrl };
       });
       const body = JSON.stringify({
         version,
         health: getHealthData(),
+        discordGuildId,
         sessions,
         projects: getProjectsData(),
       });

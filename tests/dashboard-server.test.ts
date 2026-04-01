@@ -16,11 +16,12 @@ function makeSessionManager(sessions: SessionInfo[] = []): SessionManager {
   };
 }
 
-function makeBot(status = 'connected'): DiscordBot {
+function makeBot(status = 'connected', guildId: string | null = null): DiscordBot {
   return {
     start: () => Promise.resolve(),
     stop: () => {},
     getStatus: () => status,
+    getGuildId: () => guildId,
   };
 }
 
@@ -247,6 +248,71 @@ describe('createDashboardServer', () => {
 
       // Projects array
       expect(json.projects).toHaveLength(2);
+    });
+
+    it('includes discordGuildId when bot has guild', async () => {
+      const port = getPort();
+      const sessions: SessionInfo[] = [
+        { sessionId: 'sess-1', projectKey: 'ch-1', cwd: '/home/user/project', lastActivity: Date.now(), queueLength: 0 },
+      ];
+      server = await createDashboardServer(port, makeSessionManager(sessions), makeBot('connected', '999888777'), makeConfig());
+
+      const res = await httpGet(port, '/api/status');
+      const json = JSON.parse(res.body);
+
+      expect(json.discordGuildId).toBe('999888777');
+    });
+
+    it('constructs discord:// deep link when session has guildId', async () => {
+      const port = getPort();
+      const sessions: SessionInfo[] = [
+        { sessionId: 'sess-1', projectKey: 'ch-1', cwd: '/tmp', lastActivity: Date.now(), queueLength: 0, guildId: '111222333' },
+      ];
+      server = await createDashboardServer(port, makeSessionManager(sessions), makeBot('connected'), makeConfig());
+
+      const res = await httpGet(port, '/api/status');
+      const json = JSON.parse(res.body);
+
+      expect(json.sessions[0].sourceUrl).toBe('discord://discord.com/channels/111222333/ch-1');
+    });
+
+    it('falls back to bot guildId when session has no guildId', async () => {
+      const port = getPort();
+      const sessions: SessionInfo[] = [
+        { sessionId: 'sess-1', projectKey: 'ch-1', cwd: '/tmp', lastActivity: Date.now(), queueLength: 0 },
+      ];
+      server = await createDashboardServer(port, makeSessionManager(sessions), makeBot('connected', '444555666'), makeConfig());
+
+      const res = await httpGet(port, '/api/status');
+      const json = JSON.parse(res.body);
+
+      expect(json.sessions[0].sourceUrl).toBe('discord://discord.com/channels/444555666/ch-1');
+    });
+
+    it('omits sourceUrl when no guildId is available', async () => {
+      const port = getPort();
+      const sessions: SessionInfo[] = [
+        { sessionId: 'sess-1', projectKey: 'ch-1', cwd: '/tmp', lastActivity: Date.now(), queueLength: 0 },
+      ];
+      server = await createDashboardServer(port, makeSessionManager(sessions), makeBot('connected'), makeConfig());
+
+      const res = await httpGet(port, '/api/status');
+      const json = JSON.parse(res.body);
+
+      expect(json.sessions[0].sourceUrl).toBeUndefined();
+    });
+
+    it('uses threadId from projectKey with agent suffix for deep link', async () => {
+      const port = getPort();
+      const sessions: SessionInfo[] = [
+        { sessionId: 'sess-1', projectKey: 'ch-1:engineer', cwd: '/tmp', lastActivity: Date.now(), queueLength: 0, guildId: '777888999' },
+      ];
+      server = await createDashboardServer(port, makeSessionManager(sessions), makeBot('connected'), makeConfig());
+
+      const res = await httpGet(port, '/api/status');
+      const json = JSON.parse(res.body);
+
+      expect(json.sessions[0].sourceUrl).toBe('discord://discord.com/channels/777888999/ch-1');
     });
   });
 
