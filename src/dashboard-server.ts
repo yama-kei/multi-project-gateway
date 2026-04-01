@@ -380,10 +380,12 @@ function refreshTimeline() {
         return s.segments.some(function(seg) { return seg.state === 'processing'; });
       }) : [];
 
-      var LABEL_W = 160;
+      var LABEL_W = 180;
       var ROW_H = 32;
       var HEADER_H = 28;
       var FOOTER_H = 8;
+      var PROJECT_H = 26;
+      var THREAD_H = 22;
       var chartW = containerW;
 
       if (!activeSessions.length) {
@@ -404,8 +406,62 @@ function refreshTimeline() {
         return;
       }
 
+      // --- Build grouped structure: Project → Thread → Persona rows ---
+      // Each session label is "project/shortId/persona"
+      var projectMap = {};
+      for (var gi = 0; gi < activeSessions.length; gi++) {
+        var gs = activeSessions[gi];
+        var parts = gs.label.split('/');
+        var projName = parts[0] || 'unknown';
+        var threadId = gs.thread_id || parts[1] || 'unknown';
+        if (!projectMap[projName]) projectMap[projName] = {};
+        if (!projectMap[projName][threadId]) projectMap[projName][threadId] = [];
+        projectMap[projName][threadId].push(gs);
+      }
+
+      // Sort personas within each thread by earliest segment start time
+      function earliestStart(sess) {
+        var earliest = Infinity;
+        for (var i = 0; i < sess.segments.length; i++) {
+          var t = new Date(sess.segments[i].start).getTime();
+          if (t < earliest) earliest = t;
+        }
+        return earliest;
+      }
+      var projectNames = Object.keys(projectMap).sort();
+
+      // Build flat render list: [{type:'project',name}, {type:'thread',id,shortId}, {type:'row',sess}]
+      var renderList = [];
+      for (var pi = 0; pi < projectNames.length; pi++) {
+        var pName = projectNames[pi];
+        renderList.push({ type: 'project', name: pName });
+        var threads = projectMap[pName];
+        var threadIds = Object.keys(threads).sort(function(a, b) {
+          return earliestStart(threads[a][0]) - earliestStart(threads[b][0]);
+        });
+        for (var thi = 0; thi < threadIds.length; thi++) {
+          var tid = threadIds[thi];
+          var shortId = tid.length > 8 ? tid.slice(-8) : tid;
+          renderList.push({ type: 'thread', id: tid, shortId: shortId });
+          var personas = threads[tid].slice().sort(function(a, b) {
+            return earliestStart(a) - earliestStart(b);
+          });
+          for (var psi = 0; psi < personas.length; psi++) {
+            renderList.push({ type: 'row', sess: personas[psi] });
+          }
+        }
+      }
+
+      // Calculate total height from render list
+      var contentH = 0;
+      for (var rli = 0; rli < renderList.length; rli++) {
+        if (renderList[rli].type === 'project') contentH += PROJECT_H;
+        else if (renderList[rli].type === 'thread') contentH += THREAD_H;
+        else contentH += ROW_H;
+      }
+
       var LEGEND_H = 28;
-      var totalH = HEADER_H + activeSessions.length * ROW_H + FOOTER_H + LEGEND_H;
+      var totalH = HEADER_H + contentH + FOOTER_H + LEGEND_H;
       canvas.width = Math.floor(chartW * dpr);
       canvas.height = Math.floor(totalH * dpr);
       canvas.style.width = chartW + 'px';
@@ -469,41 +525,76 @@ function refreshTimeline() {
         return 'hsl(' + hue + ', ' + sat + '%, ' + light + '%)';
       }
 
-      for (var ri = 0; ri < activeSessions.length; ri++) {
-        var sess = activeSessions[ri];
-        var rowY = HEADER_H + ri * ROW_H;
-        var barY = rowY + 6;
-        var barH = ROW_H - 12;
+      // Render grouped rows
+      var curY = HEADER_H;
+      for (var ri = 0; ri < renderList.length; ri++) {
+        var item = renderList[ri];
 
-        // Y-axis label
-        ctx.fillStyle = '#8b949e';
-        ctx.font = '11px monospace';
-        ctx.textAlign = 'right';
-        ctx.fillText(sess.label, LABEL_W - 8, rowY + ROW_H / 2 + 4);
+        if (item.type === 'project') {
+          // Project header row
+          ctx.fillStyle = '#58a6ff';
+          ctx.font = 'bold 11px -apple-system, sans-serif';
+          ctx.textAlign = 'left';
+          ctx.fillText(item.name, 8, curY + PROJECT_H / 2 + 4);
+          // Divider line across the plot area
+          ctx.strokeStyle = '#30363d';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(0, curY + PROJECT_H - 1);
+          ctx.lineTo(chartW, curY + PROJECT_H - 1);
+          ctx.stroke();
+          curY += PROJECT_H;
 
-        // Row separator
-        ctx.strokeStyle = '#21262d';
-        ctx.lineWidth = 0.5;
-        ctx.beginPath();
-        ctx.moveTo(plotLeft, rowY + ROW_H);
-        ctx.lineTo(plotRight, rowY + ROW_H);
-        ctx.stroke();
+        } else if (item.type === 'thread') {
+          // Thread sub-header
+          ctx.fillStyle = '#7d8590';
+          ctx.font = '10px monospace';
+          ctx.textAlign = 'left';
+          ctx.fillText('\u2514 ' + item.shortId, 16, curY + THREAD_H / 2 + 3);
+          curY += THREAD_H;
 
-        // Draw segments
-        for (var si = 0; si < sess.segments.length; si++) {
-          var seg = sess.segments[si];
-          var segStart = Math.max(new Date(seg.start).getTime(), xMin);
-          var segEnd = Math.min(new Date(seg.end).getTime(), xMax);
-          if (segStart >= segEnd) continue;
+        } else {
+          // Persona data row
+          var sess = item.sess;
+          var rowY = curY;
+          var barY = rowY + 6;
+          var barH = ROW_H - 12;
 
-          var x1 = timeToX(segStart);
-          var x2 = timeToX(segEnd);
-          var w = Math.max(x2 - x1, 1);
+          // Extract persona name from label (project/shortId/persona)
+          var labelParts = sess.label.split('/');
+          var personaName = labelParts.length >= 3 ? labelParts.slice(2).join('/') : sess.label;
 
-          ctx.fillStyle = seg.state === 'processing' ? tokenRateColor(seg.token_rate || 0) : '#484f58';
-          ctx.fillRect(x1, barY, w, barH);
+          // Y-axis label — indented persona name
+          ctx.fillStyle = '#8b949e';
+          ctx.font = '11px monospace';
+          ctx.textAlign = 'right';
+          ctx.fillText(personaName, LABEL_W - 8, rowY + ROW_H / 2 + 4);
 
-          _tlHitRects.push({ x: x1, y: barY, w: w, h: barH, label: sess.label, state: seg.state, start: seg.start, end: seg.end, token_count: seg.token_count || 0, token_rate: seg.token_rate || 0 });
+          // Row separator
+          ctx.strokeStyle = '#21262d';
+          ctx.lineWidth = 0.5;
+          ctx.beginPath();
+          ctx.moveTo(plotLeft, rowY + ROW_H);
+          ctx.lineTo(plotRight, rowY + ROW_H);
+          ctx.stroke();
+
+          // Draw segments
+          for (var si = 0; si < sess.segments.length; si++) {
+            var seg = sess.segments[si];
+            var segStart = Math.max(new Date(seg.start).getTime(), xMin);
+            var segEnd = Math.min(new Date(seg.end).getTime(), xMax);
+            if (segStart >= segEnd) continue;
+
+            var x1 = timeToX(segStart);
+            var x2 = timeToX(segEnd);
+            var w = Math.max(x2 - x1, 1);
+
+            ctx.fillStyle = seg.state === 'processing' ? tokenRateColor(seg.token_rate || 0) : '#484f58';
+            ctx.fillRect(x1, barY, w, barH);
+
+            _tlHitRects.push({ x: x1, y: barY, w: w, h: barH, label: sess.label, state: seg.state, start: seg.start, end: seg.end, token_count: seg.token_count || 0, token_rate: seg.token_rate || 0 });
+          }
+          curY += ROW_H;
         }
       }
 
