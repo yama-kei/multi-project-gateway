@@ -6,7 +6,6 @@
  */
 
 import { loadLifeContext } from './life-context-loader.js';
-import type { AgentConfig } from '../config.js';
 
 export { loadLifeContext };
 
