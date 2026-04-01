@@ -417,6 +417,7 @@ describe('SessionManager', () => {
       sessionResume: ReturnType<typeof vi.fn>;
       messageRouted: ReturnType<typeof vi.fn>;
       messageCompleted: ReturnType<typeof vi.fn>;
+      agentHandoff: ReturnType<typeof vi.fn>;
     };
     let pulseManager: SessionManager;
 
@@ -431,6 +432,7 @@ describe('SessionManager', () => {
         sessionResume: vi.fn(),
         messageRouted: vi.fn(),
         messageCompleted: vi.fn(),
+        agentHandoff: vi.fn(),
       };
       pulseManager = createSessionManager(defaults, pulseRuntime, undefined, pulseEmitter);
     });
@@ -444,6 +446,22 @@ describe('SessionManager', () => {
       expect(pulseEmitter.sessionStart).toHaveBeenCalledOnce();
       expect(pulseEmitter.sessionStart).toHaveBeenCalledWith(
         expect.any(String), 'project-a', '/tmp/a', expect.objectContaining({ triggerSource: 'discord' }),
+      );
+    });
+
+    it('emits session_start with agentName when project key contains agent', async () => {
+      await pulseManager.send('thread-1:engineer', '/tmp/a', 'Hello');
+      expect(pulseEmitter.sessionStart).toHaveBeenCalledWith(
+        expect.any(String), 'thread-1:engineer', '/tmp/a',
+        expect.objectContaining({ agentName: 'engineer', triggerSource: 'discord' }),
+      );
+    });
+
+    it('emits session_start without agentName for plain project keys', async () => {
+      await pulseManager.send('project-a', '/tmp/a', 'Hello');
+      expect(pulseEmitter.sessionStart).toHaveBeenCalledWith(
+        expect.any(String), 'project-a', '/tmp/a',
+        expect.objectContaining({ agentName: undefined, triggerSource: 'discord' }),
       );
     });
 
@@ -535,6 +553,20 @@ describe('SessionManager', () => {
     it('does not emit message_completed when usage is absent', async () => {
       await pulseManager.send('project-a', '/tmp/a', 'Hello');
       expect(pulseEmitter.messageCompleted).not.toHaveBeenCalled();
+    });
+
+    it('emitHandoff emits agent_handoff pulse event', async () => {
+      await pulseManager.send('thread-1:pm', '/tmp/a', 'Hello');
+      pulseManager.emitHandoff('thread-1:engineer', '/tmp/a', {
+        fromAgent: 'pm',
+        toAgent: 'engineer',
+        threadId: 'thread-1',
+      });
+      expect(pulseEmitter.agentHandoff).toHaveBeenCalledOnce();
+      expect(pulseEmitter.agentHandoff).toHaveBeenCalledWith(
+        expect.any(String), 'thread-1:engineer', '/tmp/a',
+        { fromAgent: 'pm', toAgent: 'engineer', threadId: 'thread-1' },
+      );
     });
   });
 
@@ -637,6 +669,7 @@ describe('SessionManager', () => {
         sessionResume: vi.fn(),
         messageRouted: vi.fn(),
         messageCompleted: vi.fn(),
+        agentHandoff: vi.fn(),
       };
       const m = createSessionManager(defaults, rt, store, pulseEmitter);
       await m.recoverOrphanedSessions(vi.fn());

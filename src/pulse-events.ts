@@ -10,6 +10,7 @@ export interface PulseEmitter {
   sessionResume(sessionId: string, projectKey: string, projectDir: string, idleDurationMs: number): void;
   messageRouted(sessionId: string, projectKey: string, projectDir: string, opts?: { agentTarget?: string; queueDepth?: number }): void;
   messageCompleted(sessionId: string, projectKey: string, projectDir: string, usage: ClaudeUsage, opts?: { agentTarget?: string }): void;
+  agentHandoff(sessionId: string, projectKey: string, projectDir: string, opts: { fromAgent?: string; toAgent: string; threadId: string }): void;
 }
 
 const DEFAULT_PATH = join(homedir(), '.pulse', 'events', 'mpg-sessions.jsonl');
@@ -94,6 +95,15 @@ export function createPulseEmitter(filePath?: string): PulseEmitter {
         duration_api_ms: usage.duration_api_ms,
         num_turns: usage.num_turns,
         model: usage.model,
+      });
+    },
+
+    agentHandoff(sessionId, projectKey, projectDir, opts) {
+      emit({
+        ...baseEvent('agent_handoff', sessionId, projectKey, projectDir),
+        from_agent: opts.fromAgent,
+        to_agent: opts.toAgent,
+        thread_id: opts.threadId,
       });
     },
   };
