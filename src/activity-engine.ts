@@ -287,7 +287,7 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
         else sessionMap.set(e.session_id, [e]);
       }
 
-      type Segment = { start: string; end: string; state: 'processing' | 'idle'; token_count?: number; token_rate?: number };
+      type Segment = { start: string; end: string; state: 'processing' | 'idle' | 'pending'; token_count?: number; token_rate?: number };
       const result: Array<{
         session_id: string;
         thread_id: string;
@@ -387,6 +387,17 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
 
           seg.token_count = tokenCount;
           seg.token_rate = durationSec > 0 ? Math.round(tokenCount / durationSec) : 0;
+        }
+
+        // Synthesize a pending segment for active sessions with no processing activity
+        const hasProcessing = segments.some(s => s.state === 'processing');
+        const isEnded = sessionEvents.some(e => e.event_type === 'session_end' || e.event_type === 'session_idle');
+        if (!hasProcessing && !isEnded) {
+          const sessionStartTs = sessionEvents[0].timestamp;
+          const nowTs = new Date().toISOString();
+          // Replace idle-only segments with a single pending segment
+          segments.length = 0;
+          segments.push({ start: sessionStartTs, end: nowTs, state: 'pending' });
         }
 
         result.push({ session_id: sessionId, thread_id: channelId ?? '', label, segments });

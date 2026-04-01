@@ -379,9 +379,9 @@ function refreshTimeline() {
       var dpr = window.devicePixelRatio || 1;
       var containerW = canvas.parentElement.clientWidth - 32;
 
-      // Filter out sessions with only idle segments (no processing)
+      // Filter out sessions with only idle segments (no processing or pending)
       var activeSessions = sessions ? sessions.filter(function(s) {
-        return s.segments.some(function(seg) { return seg.state === 'processing'; });
+        return s.segments.some(function(seg) { return seg.state === 'processing' || seg.state === 'pending'; });
       }) : [];
 
       var LABEL_W = 180;
@@ -593,7 +593,7 @@ function refreshTimeline() {
             var x2 = timeToX(segEnd);
             var w = Math.max(x2 - x1, 1);
 
-            ctx.fillStyle = seg.state === 'processing' ? tokenRateColor(seg.token_rate || 0) : '#484f58';
+            ctx.fillStyle = seg.state === 'processing' ? tokenRateColor(seg.token_rate || 0) : seg.state === 'pending' ? 'hsl(180, 30%, 40%)' : '#484f58';
             ctx.fillRect(x1, barY, w, barH);
 
             _tlHitRects.push({ x: x1, y: barY, w: w, h: barH, label: sess.label, state: seg.state, start: seg.start, end: seg.end, token_count: seg.token_count || 0, token_rate: seg.token_rate || 0 });
@@ -640,6 +640,13 @@ function refreshTimeline() {
         ctx.font = '9px -apple-system, sans-serif';
         ctx.textAlign = 'left';
         ctx.fillText('Idle', idleX + lgH + 4, lgY + 9);
+
+        // Pending swatch
+        var pendingX = idleX + lgH + 30;
+        ctx.fillStyle = 'hsl(180, 30%, 40%)';
+        ctx.fillRect(pendingX, lgY + 1, lgH, lgH);
+        ctx.fillStyle = '#8b949e';
+        ctx.fillText('Pending', pendingX + lgH + 4, lgY + 9);
       }
     })
     .catch(function(err) { console.error('Timeline fetch error:', err); });
@@ -665,7 +672,8 @@ function refreshTimeline() {
       if (hit.state === 'processing' && hit.token_count > 0) {
         tokenInfo = '<br>Tokens: ' + compactTokens(hit.token_count) + ' (' + compactTokens(hit.token_rate) + ' tok/s)';
       }
-      tooltip.innerHTML = '<strong>' + hit.label + '</strong><br>' + state + ': ' + formatSegmentDuration(hit.start, hit.end) + tokenInfo;
+      var stateLabel = hit.state === 'pending' ? 'Pending (no activity yet)' : state;
+      tooltip.innerHTML = '<strong>' + hit.label + '</strong><br>' + stateLabel + ': ' + formatSegmentDuration(hit.start, hit.end) + tokenInfo;
       tooltip.style.display = 'block';
       tooltip.style.left = (e.clientX + 12) + 'px';
       tooltip.style.top = (e.clientY - 10) + 'px';
