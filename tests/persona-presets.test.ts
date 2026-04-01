@@ -7,6 +7,7 @@ describe('persona-presets', () => {
       expect.arrayContaining([
         'pm', 'engineer', 'qa', 'designer', 'devops', 'curator',
         'life-work', 'life-travel', 'life-social', 'life-hobbies',
+        'life-router',
       ]),
     );
   });
@@ -53,6 +54,34 @@ describe('persona-presets', () => {
       for (const name of LIFE_PRESETS) {
         expect(PERSONA_PRESETS[name].prompt).toContain("I don't have information about that");
       }
+    });
+  });
+
+  describe('life-router', () => {
+    const router = PERSONA_PRESETS['life-router'];
+
+    it('has the correct role', () => {
+      expect(router.role).toBe('Life Context Router');
+    });
+
+    it('references all 4 topic agents', () => {
+      expect(router.prompt).toContain('@life-work');
+      expect(router.prompt).toContain('@life-travel');
+      expect(router.prompt).toContain('@life-social');
+      expect(router.prompt).toContain('@life-hobbies');
+    });
+
+    it('includes HANDOFF dispatch instruction', () => {
+      expect(router.prompt).toContain('HANDOFF @life-<topic>:');
+    });
+
+    it('includes fallback instructions for unmatched queries', () => {
+      expect(router.prompt).toContain('does not match any of the four topics');
+      expect(router.prompt).toContain('Could you rephrase');
+    });
+
+    it('does not have contextPaths (router does not load Drive files)', () => {
+      expect(router.contextPaths).toBeUndefined();
     });
   });
 
