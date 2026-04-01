@@ -9,6 +9,7 @@ import type { TurnCounter } from './turn-counter.js';
 import { hasAllowedRole } from './role-check.js';
 import { createRateLimiter } from './rate-limiter.js';
 import { downloadAttachments, buildAttachmentPrompt, type AttachmentConfig, DEFAULT_ATTACHMENT_CONFIG } from './attachments.js';
+import { loadLifeContext } from './life-context-loader.js';
 
 export function chunkMessage(text: string, limit: number): string[] {
   if (text.length <= limit) return [text];
@@ -362,9 +363,12 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
     const sessionKey = activeAgent
       ? `${threadId}:${activeAgent.agentName}`
       : threadId;
-    const systemPrompt = activeAgent
-      ? `Your role: ${activeAgent.agent.role}\n\n${activeAgent.agent.prompt}`
-      : undefined;
+    let systemPrompt: string | undefined;
+    if (activeAgent) {
+      const base = `Your role: ${activeAgent.agent.role}\n\n${activeAgent.agent.prompt}`;
+      const context = await loadLifeContext(activeAgent.agentName);
+      systemPrompt = context ? `${base}${context}` : base;
+    }
 
     try {
       // Download attachments if present (#110)
@@ -462,7 +466,9 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
           }
 
           const handoffKey = `${threadId}:${handoff.agentName}`;
-          const handoffPrompt = `Your role: ${handoff.agent.role}\n\n${handoff.agent.prompt}`;
+          const handoffBase = `Your role: ${handoff.agent.role}\n\n${handoff.agent.prompt}`;
+          const handoffContext = await loadLifeContext(handoff.agentName);
+          const handoffPrompt = handoffContext ? `${handoffBase}${handoffContext}` : handoffBase;
 
           replyChannel.sendTyping().catch(() => {});
 
