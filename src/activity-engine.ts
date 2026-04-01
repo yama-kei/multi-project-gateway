@@ -126,7 +126,7 @@ export interface ActivityEngine {
     segments: Array<{
       start: string;
       end: string;
-      state: 'processing' | 'idle';
+      state: 'processing' | 'idle' | 'pending';
       token_count?: number;
       token_rate?: number;
     }>;
@@ -287,7 +287,7 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
         else sessionMap.set(e.session_id, [e]);
       }
 
-      type Segment = { start: string; end: string; state: 'processing' | 'idle'; token_count?: number; token_rate?: number };
+      type Segment = { start: string; end: string; state: 'processing' | 'idle' | 'pending'; token_count?: number; token_rate?: number };
       const result: Array<{
         session_id: string;
         thread_id: string;
@@ -366,6 +366,18 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
             if (segments.length > 0 || sessionEvents.length > 1) {
               segments.push({ start: segmentStart, end: lastEvent.timestamp, state: currentState });
             }
+          }
+        }
+
+        // Synthesize a 'pending' segment for active sessions that have no processing segments.
+        // This covers sessions with only session_start (or only idle segments) so they
+        // remain visible on the timeline instead of being filtered out.
+        if (segments.length === 0 ||
+            !segments.some(s => s.state === 'processing')) {
+          const hasNoEnd = lastEvent.event_type !== 'session_end' && lastEvent.event_type !== 'session_idle';
+          if (hasNoEnd) {
+            const nowIso = new Date().toISOString();
+            segments.push({ start: lastEvent.timestamp, end: nowIso, state: 'pending' });
           }
         }
 

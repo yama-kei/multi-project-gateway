@@ -379,9 +379,9 @@ function refreshTimeline() {
       var dpr = window.devicePixelRatio || 1;
       var containerW = canvas.parentElement.clientWidth - 32;
 
-      // Filter out sessions with only idle segments (no processing)
+      // Filter out sessions with only idle segments (no processing or pending)
       var activeSessions = sessions ? sessions.filter(function(s) {
-        return s.segments.some(function(seg) { return seg.state === 'processing'; });
+        return s.segments.some(function(seg) { return seg.state === 'processing' || seg.state === 'pending'; });
       }) : [];
 
       var LABEL_W = 180;
@@ -593,7 +593,9 @@ function refreshTimeline() {
             var x2 = timeToX(segEnd);
             var w = Math.max(x2 - x1, 1);
 
-            ctx.fillStyle = seg.state === 'processing' ? tokenRateColor(seg.token_rate || 0) : '#484f58';
+            ctx.fillStyle = seg.state === 'processing' ? tokenRateColor(seg.token_rate || 0)
+              : seg.state === 'pending' ? '#d29922'
+              : '#484f58';
             ctx.fillRect(x1, barY, w, barH);
 
             _tlHitRects.push({ x: x1, y: barY, w: w, h: barH, label: sess.label, state: seg.state, start: seg.start, end: seg.end, token_count: seg.token_count || 0, token_rate: seg.token_rate || 0 });
