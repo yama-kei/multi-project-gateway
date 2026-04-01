@@ -5,7 +5,7 @@ vi.mock('../src/broker-client.js', () => ({
   createBrokerClient: vi.fn(),
 }));
 
-import { loadLifeContext, _resetForTest } from '../src/life-context-loader.js';
+import { loadLifeContext, _resetForTest } from '../src/ayumi/life-context-loader.js';
 import { createBrokerClient } from '../src/broker-client.js';
 
 const mockCreateBrokerClient = vi.mocked(createBrokerClient);

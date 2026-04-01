@@ -3,7 +3,7 @@ import { extractAndClassify } from '../../src/ayumi/extraction-pipeline.js';
 import { summarizeTopic } from '../../src/ayumi/topic-summarizer.js';
 import { writeTopicToDrive } from '../../src/ayumi/drive-writer.js';
 import type { BrokerClient } from '../../src/broker-client.js';
-import type { FolderMap, TopicName } from '../../src/life-context-setup.js';
+import type { FolderMap, TopicName } from '../../src/ayumi/life-context-setup.js';
 
 function mockClient(): BrokerClient {
   return {

@@ -4,7 +4,7 @@
  */
 
 import type { BrokerClient, DriveFile } from '../broker-client.js';
-import type { FolderMap } from '../life-context-setup.js';
+import type { FolderMap } from './life-context-setup.js';
 
 /** ~50K tokens ≈ 200K characters */
 const MAX_CONTEXT_CHARS = 200_000;

@@ -10,7 +10,15 @@ import { hasAllowedRole } from './role-check.js';
 import { createRateLimiter } from './rate-limiter.js';
 import { downloadAttachments, buildAttachmentPrompt, type AttachmentConfig, DEFAULT_ATTACHMENT_CONFIG } from './attachments.js';
 import type { AgentConfig } from './config.js';
-import { loadLifeContext } from './life-context-loader.js';
+
+// Ayumi life-context module — optional, gracefully absent
+let getAgentContext: (agentName: string) => Promise<string | null> = async () => null;
+try {
+  const ayumi = await import('./ayumi/index.js');
+  getAgentContext = ayumi.getAgentContext;
+} catch {
+  // Ayumi module not available — no life context injection
+}
 
 export function chunkMessage(text: string, limit: number): string[] {
   if (text.length <= limit) return [text];
@@ -217,7 +225,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
   // Build system prompt with optional Drive context injection (#161)
   async function buildSystemPrompt(agentName: string, agent: AgentConfig): Promise<string> {
     const base = `Your role: ${agent.role}\n\n${agent.prompt}`;
-    const ctx = await loadLifeContext(agentName);
+    const ctx = await getAgentContext(agentName);
     return ctx ? `${base}\n\n${ctx}` : base;
   }
 

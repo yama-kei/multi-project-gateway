@@ -1,6 +1,6 @@
 import type { BrokerClient, GmailMessage, GmailMessageFull, CalendarEvent } from '../broker-client.js';
 import { shouldExclude, type ExclusionConfig } from './exclusions.js';
-import type { TopicName } from '../life-context-setup.js';
+import type { TopicName } from './life-context-setup.js';
 
 export interface ExtractionOptions {
   timeMin: string;

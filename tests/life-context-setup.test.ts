@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ensureLifeContextFolders, TOPIC_FOLDERS, type FolderMap } from '../src/life-context-setup.js';
+import { ensureLifeContextFolders, TOPIC_FOLDERS, type FolderMap } from '../src/ayumi/life-context-setup.js';
 import type { BrokerClient } from '../src/broker-client.js';
 
 function createMockClient(overrides: Partial<BrokerClient> = {}): BrokerClient {
