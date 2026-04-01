@@ -9,6 +9,9 @@ import type { TurnCounter } from './turn-counter.js';
 import { hasAllowedRole } from './role-check.js';
 import { createRateLimiter } from './rate-limiter.js';
 import { downloadAttachments, buildAttachmentPrompt, type AttachmentConfig, DEFAULT_ATTACHMENT_CONFIG } from './attachments.js';
+import type { AgentConfig } from './config.js';
+import { loadDriveContext } from './ayumi/context-loader.js';
+import { createBrokerClient, type BrokerClient } from './broker-client.js';
 
 export function chunkMessage(text: string, limit: number): string[] {
   if (text.length <= limit) return [text];
@@ -212,8 +215,49 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
 
   const rateLimiter = createRateLimiter();
 
+  // Broker client for loading Drive context (created lazily if env vars are set)
+  let brokerClient: BrokerClient | null = null;
+  function getBrokerClient(): BrokerClient | null {
+    if (brokerClient) return brokerClient;
+    const { BROKER_URL, BROKER_API_SECRET, BROKER_TENANT_ID, BROKER_ACTOR_ID } = process.env;
+    if (BROKER_URL && BROKER_API_SECRET && BROKER_TENANT_ID && BROKER_ACTOR_ID) {
+      brokerClient = createBrokerClient({
+        brokerUrl: BROKER_URL, apiSecret: BROKER_API_SECRET,
+        tenantId: BROKER_TENANT_ID, actorId: BROKER_ACTOR_ID,
+      });
+    }
+    return brokerClient;
+  }
+
+  // Cache loaded Drive context per agent name (loaded once, reused across messages)
+  const contextCache = new Map<string, string>();
+
+  async function buildSystemPrompt(agent: AgentConfig): Promise<string> {
+    const base = `Your role: ${agent.role}\n\n${agent.prompt}`;
+    if (!agent.contextPaths || agent.contextPaths.length === 0) return base;
+
+    // Check cache by contextPaths key (stable for a given preset)
+    const cacheKey = agent.contextPaths.join('|');
+    const cached = contextCache.get(cacheKey);
+    if (cached) return `${base}\n\n${cached}`;
+
+    const client = getBrokerClient();
+    if (!client) return base;
+
+    try {
+      const ctx = await loadDriveContext(agent.contextPaths, client);
+      if (ctx.content) {
+        contextCache.set(cacheKey, ctx.content);
+        return `${base}\n\n${ctx.content}`;
+      }
+    } catch (err) {
+      console.error('[context-loader] Failed to load Drive context:', err);
+    }
+    return base;
+  }
+
   // Track last active agent per thread for routing plain replies (#48)
-  const lastActiveAgent = new Map<string, { agentName: string; agent: import('./config.js').AgentConfig }>();
+  const lastActiveAgent = new Map<string, { agentName: string; agent: AgentConfig }>();
 
   client.on(Events.MessageCreate, async (message: Message) => {
     if (message.author.bot) return;
@@ -363,7 +407,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
       ? `${threadId}:${activeAgent.agentName}`
       : threadId;
     const systemPrompt = activeAgent
-      ? `Your role: ${activeAgent.agent.role}\n\n${activeAgent.agent.prompt}`
+      ? await buildSystemPrompt(activeAgent.agent)
       : undefined;
 
     try {
@@ -462,7 +506,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
           }
 
           const handoffKey = `${threadId}:${handoff.agentName}`;
-          const handoffPrompt = `Your role: ${handoff.agent.role}\n\n${handoff.agent.prompt}`;
+          const handoffPrompt = await buildSystemPrompt(handoff.agent);
 
           replyChannel.sendTyping().catch(() => {});
 
