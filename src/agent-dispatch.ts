@@ -116,23 +116,6 @@ export function parseHandoffCommand(
  * Returns one AgentMention per unique agent (deduped by name).
  * Used for multi-topic fan-out where a router emits multiple HANDOFFs.
  */
-/**
- * Extract thread name from a `THREAD_NAME: <name>` marker on the first line of an agent response.
- * Returns the name string, or null if the marker is absent.
- */
-export function parseThreadName(text: string): string | null {
-  const match = text.match(/^THREAD_NAME:[ \t]*([^\n]+)/);
-  if (!match) return null;
-  return match[1].trim().slice(0, 100) || null;
-}
-
-/**
- * Strip the `THREAD_NAME:` line from agent output so it is not displayed to the user.
- */
-export function stripThreadName(text: string): string {
-  return text.replace(/^THREAD_NAME:[^\n]*\n?/, '');
-}
-
 export function parseAllHandoffs(
   text: string,
   agents: Record<string, AgentConfig>,
@@ -156,4 +139,21 @@ export function parseAllHandoffs(
   }
 
   return results;
+}
+
+/**
+ * Extract thread name from a `THREAD_NAME: <name>` marker on the first line of an agent response.
+ * Returns the name string, or null if the marker is absent.
+ */
+export function parseThreadName(text: string): string | null {
+  const match = text.match(/^THREAD_NAME:[ \t]*([^\n]+)/);
+  if (!match) return null;
+  return match[1].trim().slice(0, 100) || null;
+}
+
+/**
+ * Strip the `THREAD_NAME:` line from agent output so it is not displayed to the user.
+ */
+export function stripThreadName(text: string): string {
+  return text.replace(/^THREAD_NAME:[^\n]*\n?/, '');
 }
