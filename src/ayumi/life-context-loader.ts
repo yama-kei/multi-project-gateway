@@ -2,10 +2,17 @@
  * Loads life-context data from Google Drive for topic agents.
  * Maps agent names (life-work, life-travel, etc.) to Drive topics
  * and fetches summary.md, timeline.md, entities.md files.
+ *
+ * Navigates the Drive folder tree directly:
+ *   driveSearch("life-context") → driveList(life-context/) → find topic folder
+ *   → driveList(topic/) → driveRead(files)
+ *
+ * This avoids depending on folder-map.json (which requires metadata cache
+ * priming that the broker's search endpoint doesn't provide).
  */
 
 import { createBrokerClient, type BrokerClient } from '../broker-client.js';
-import type { FolderMap, TopicName } from './life-context-setup.js';
+import type { TopicName } from './life-context-setup.js';
 
 const AGENT_TOPIC_MAP: Record<string, TopicName> = {
   'life-work': 'work',
@@ -19,6 +26,10 @@ const CONTEXT_FILES = ['summary.md', 'timeline.md', 'entities.md'] as const;
 // Module-level singleton broker client
 let brokerClient: BrokerClient | null = null;
 let envWarned = false;
+
+// Cache the life-context folder ID and its topic subfolder IDs across calls
+let lifeContextFolderId: string | null = null;
+let topicFolderIds: Record<string, string> | null = null;
 
 function getOrCreateClient(): BrokerClient | null {
   if (brokerClient) return brokerClient;
@@ -41,13 +52,41 @@ function getOrCreateClient(): BrokerClient | null {
   return brokerClient;
 }
 
-async function loadFolderMap(client: BrokerClient): Promise<FolderMap | null> {
-  // List the designated root folder (primes metadata cache so driveRead works)
-  const listing = await client.driveList();
-  const mapFile = listing.files.find((f) => f.name === 'folder-map.json');
-  if (!mapFile) return null;
-  const content = await client.driveRead(mapFile.file_id);
-  return JSON.parse(content.content) as FolderMap;
+/**
+ * Discover the topic folder ID by navigating the Drive tree:
+ * 1. Search for "life-context" folder
+ * 2. List its children to find topic subfolders
+ * 3. Return the folder ID for the requested topic
+ */
+async function resolveTopicFolderId(client: BrokerClient, topic: string): Promise<string | null> {
+  // Use cached topic folder IDs if available
+  if (topicFolderIds) {
+    return topicFolderIds[topic] ?? null;
+  }
+
+  // Find the life-context folder
+  if (!lifeContextFolderId) {
+    const searchResult = await client.driveSearch('life-context');
+    const lcFolder = searchResult.files.find(
+      (f) => f.name === 'life-context' && f.mime_type === 'application/vnd.google-apps.folder',
+    );
+    if (!lcFolder) {
+      console.error('[life-context-loader] life-context folder not found in Drive');
+      return null;
+    }
+    lifeContextFolderId = lcFolder.file_id;
+  }
+
+  // List life-context/ to discover topic subfolders (also primes metadata cache)
+  const listing = await client.driveList(lifeContextFolderId);
+  topicFolderIds = {};
+  for (const file of listing.files) {
+    if (file.mime_type === 'application/vnd.google-apps.folder') {
+      topicFolderIds[file.name] = file.file_id;
+    }
+  }
+
+  return topicFolderIds[topic] ?? null;
 }
 
 /**
@@ -64,15 +103,9 @@ export async function loadLifeContext(agentName: string): Promise<string | null>
   if (!client) return null;
 
   try {
-    const folderMap = await loadFolderMap(client);
-    if (!folderMap) {
-      console.error('[life-context-loader] folder-map.json not found in Drive');
-      return null;
-    }
-
-    const folderId = folderMap.topics[topic];
+    const folderId = await resolveTopicFolderId(client, topic);
     if (!folderId) {
-      console.error(`[life-context-loader] No folder ID for topic "${topic}" in folder-map`);
+      console.error(`[life-context-loader] No folder found for topic "${topic}" in Drive`);
       return null;
     }
 
@@ -104,4 +137,6 @@ export async function loadLifeContext(agentName: string): Promise<string | null>
 export function _resetForTest(): void {
   brokerClient = null;
   envWarned = false;
+  lifeContextFolderId = null;
+  topicFolderIds = null;
 }

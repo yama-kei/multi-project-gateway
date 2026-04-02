@@ -10,33 +10,34 @@ import { createBrokerClient } from '../src/broker-client.js';
 
 const mockCreateBrokerClient = vi.mocked(createBrokerClient);
 
-const FOLDER_MAP = {
-  root: 'root-id',
-  topics: { work: 'work-id', travel: 'travel-id', finance: 'finance-id', health: 'health-id', social: 'social-id', hobbies: 'hobbies-id' },
-  meta: 'meta-id',
-};
+const TOPIC_FOLDERS = [
+  { file_id: 'work-id', name: 'work', mime_type: 'application/vnd.google-apps.folder' },
+  { file_id: 'travel-id', name: 'travel', mime_type: 'application/vnd.google-apps.folder' },
+  { file_id: 'social-id', name: 'social', mime_type: 'application/vnd.google-apps.folder' },
+  { file_id: 'hobbies-id', name: 'hobbies', mime_type: 'application/vnd.google-apps.folder' },
+  { file_id: 'meta-id', name: '_meta', mime_type: 'application/vnd.google-apps.folder' },
+];
+
+const TOPIC_FILES = [
+  { file_id: 'summary-id', name: 'summary.md' },
+  { file_id: 'timeline-id', name: 'timeline.md' },
+  { file_id: 'entities-id', name: 'entities.md' },
+];
 
 function setupMockClient(overrides: Record<string, unknown> = {}) {
   const client = {
-    driveSearch: vi.fn().mockResolvedValue({ files: [] }),
+    driveSearch: vi.fn().mockResolvedValue({
+      files: [{ file_id: 'lc-folder-id', name: 'life-context', mime_type: 'application/vnd.google-apps.folder' }],
+    }),
     driveRead: vi.fn()
-      .mockResolvedValueOnce({ content: JSON.stringify(FOLDER_MAP) }) // folder-map.json
       .mockResolvedValueOnce({ content: '# Work Summary\nDetails.' }) // summary.md
       .mockResolvedValueOnce({ content: '- 2025-01 Started job' }) // timeline.md
       .mockResolvedValueOnce({ content: '## People\n- Alice' }), // entities.md
     driveList: vi.fn()
-      // First call: root listing (for loadFolderMap)
-      .mockResolvedValueOnce({
-        files: [{ file_id: 'map-file-id', name: 'folder-map.json' }],
-      })
+      // First call: life-context/ folder listing (discover topic subfolders)
+      .mockResolvedValueOnce({ files: TOPIC_FOLDERS })
       // Second call: topic folder listing
-      .mockResolvedValueOnce({
-        files: [
-          { file_id: 'summary-id', name: 'summary.md' },
-          { file_id: 'timeline-id', name: 'timeline.md' },
-          { file_id: 'entities-id', name: 'entities.md' },
-        ],
-      }),
+      .mockResolvedValueOnce({ files: TOPIC_FILES }),
     ...overrides,
   };
   mockCreateBrokerClient.mockReturnValue(client as any);
@@ -62,6 +63,8 @@ describe('loadLifeContext', () => {
       const result = await loadLifeContext('life-work');
 
       expect(result).not.toBeNull();
+      expect(client.driveSearch).toHaveBeenCalledWith('life-context');
+      expect(client.driveList).toHaveBeenCalledWith('lc-folder-id');
       expect(client.driveList).toHaveBeenCalledWith('work-id');
     });
 
@@ -96,6 +99,28 @@ describe('loadLifeContext', () => {
 
       await loadLifeContext('life-hobbies');
       expect(client.driveList).toHaveBeenCalledWith('hobbies-id');
+    });
+
+    it('caches topic folder IDs across calls', async () => {
+      process.env.BROKER_URL = 'http://broker';
+      process.env.BROKER_API_SECRET = 'secret';
+      process.env.BROKER_TENANT_ID = 'tenant';
+      process.env.BROKER_ACTOR_ID = 'actor';
+      const client = setupMockClient();
+      // Add extra driveList/driveRead mocks for second call
+      client.driveList.mockResolvedValueOnce({ files: TOPIC_FILES });
+      client.driveRead
+        .mockResolvedValueOnce({ content: '# Travel Summary' })
+        .mockResolvedValueOnce({ content: '- trip' })
+        .mockResolvedValueOnce({ content: '## Contacts' });
+
+      await loadLifeContext('life-work');
+      await loadLifeContext('life-travel');
+
+      // driveSearch and life-context listing should only happen once
+      expect(client.driveSearch).toHaveBeenCalledTimes(1);
+      // 1 for life-context listing + 1 for work topic + 1 for travel topic = 3
+      expect(client.driveList).toHaveBeenCalledTimes(3);
     });
   });
 
@@ -141,18 +166,11 @@ describe('loadLifeContext', () => {
       const client = setupMockClient();
       client.driveList
         .mockReset()
-        // Root listing (for loadFolderMap)
-        .mockResolvedValueOnce({
-          files: [{ file_id: 'map-file-id', name: 'folder-map.json' }],
-        })
+        .mockResolvedValueOnce({ files: TOPIC_FOLDERS })
         // Topic listing — only summary.md present
-        .mockResolvedValueOnce({
-          files: [{ file_id: 'summary-id', name: 'summary.md' }],
-        });
-      // Only folder-map + summary reads
+        .mockResolvedValueOnce({ files: [{ file_id: 'summary-id', name: 'summary.md' }] });
       client.driveRead
         .mockReset()
-        .mockResolvedValueOnce({ content: JSON.stringify(FOLDER_MAP) })
         .mockResolvedValueOnce({ content: '# Summary only' });
 
       const result = await loadLifeContext('life-work');
@@ -208,9 +226,9 @@ describe('loadLifeContext', () => {
       delete process.env.BROKER_ACTOR_ID;
     });
 
-    it('returns null when root driveList throws', async () => {
+    it('returns null when driveSearch throws', async () => {
       const client = setupMockClient();
-      client.driveList.mockReset().mockRejectedValue(new Error('Network error'));
+      client.driveSearch.mockReset().mockRejectedValue(new Error('Network error'));
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
       const result = await loadLifeContext('life-work');
@@ -223,16 +241,32 @@ describe('loadLifeContext', () => {
       errorSpy.mockRestore();
     });
 
-    it('returns null when folder-map.json is not found in root listing', async () => {
+    it('returns null when life-context folder not found', async () => {
       const client = setupMockClient();
-      client.driveList.mockReset().mockResolvedValue({ files: [] });
+      client.driveSearch.mockReset().mockResolvedValue({ files: [] });
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
       const result = await loadLifeContext('life-work');
 
       expect(result).toBeNull();
       expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('folder-map.json not found'),
+        expect.stringContaining('life-context folder not found'),
+      );
+      errorSpy.mockRestore();
+    });
+
+    it('returns null when topic folder not found in life-context', async () => {
+      const client = setupMockClient();
+      client.driveList.mockReset().mockResolvedValue({
+        files: [{ file_id: 'other-id', name: 'other', mime_type: 'application/vnd.google-apps.folder' }],
+      });
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const result = await loadLifeContext('life-work');
+
+      expect(result).toBeNull();
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('No folder found for topic "work"'),
       );
       errorSpy.mockRestore();
     });
@@ -241,15 +275,8 @@ describe('loadLifeContext', () => {
       const client = setupMockClient();
       client.driveList
         .mockReset()
-        // Root listing returns folder-map.json
-        .mockResolvedValueOnce({
-          files: [{ file_id: 'map-file-id', name: 'folder-map.json' }],
-        })
-        // Topic listing is empty
+        .mockResolvedValueOnce({ files: TOPIC_FOLDERS })
         .mockResolvedValueOnce({ files: [] });
-      client.driveRead
-        .mockReset()
-        .mockResolvedValueOnce({ content: JSON.stringify(FOLDER_MAP) });
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       const result = await loadLifeContext('life-work');
