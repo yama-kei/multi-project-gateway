@@ -110,7 +110,7 @@ export interface BrokerClient {
   driveWrite(name: string, content: string, format?: string, folderId?: string): Promise<DriveWriteResult>;
   driveSearch(query: string): Promise<DriveSearchResult>;
   driveCreateFolder(name: string, parentId?: string): Promise<DriveCreateFolderResult>;
-  driveList(folderId?: string, query?: string): Promise<DriveListResult>;
+  driveList(folderId: string, query?: string): Promise<DriveListResult>;
 }
 
 export function createBrokerClient(config: BrokerConfig): BrokerClient {
