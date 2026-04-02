@@ -15,6 +15,7 @@ vi.mock('node:fs', async () => {
     ...actual,
     mkdirSync: vi.fn(),
     readFileSync: vi.fn(),
+    writeFileSync: vi.fn(),
     existsSync: vi.fn().mockReturnValue(false),
     statSync: vi.fn(),
     rmSync: vi.fn(),
@@ -90,15 +91,15 @@ describe('TmuxRuntime', () => {
       );
       expect(mockCreateSession).toHaveBeenCalledWith(
         expect.stringMatching(/^mpg-/),
-        expect.stringContaining('claude'),
+        expect.stringContaining('run.sh'),
         expect.objectContaining({ cwd: '/tmp/project' }),
       );
       expect(result.text).toBe('Hello from tmux');
       expect(result.sessionId).toBe('tmux-session-123');
 
-      // Verify timeout wrapper: timeoutMs=5000 + 5min buffer = 305s
-      const command = mockCreateSession.mock.calls[0][1] as string;
-      expect(command).toMatch(/^timeout 305 claude /);
+      // Verify script contains timeout wrapper: timeoutMs=5000 + 5min buffer = 305s
+      const scriptContent = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(scriptContent).toMatch(/^#!\/bin\/sh\ntimeout 305 claude /);
     });
 
     it('uses default timeout (20min + 5min buffer = 1500s) when timeoutMs is omitted', async () => {
@@ -108,8 +109,8 @@ describe('TmuxRuntime', () => {
 
       await runtime.spawn({ ...spawnOpts, timeoutMs: undefined });
 
-      const command = mockCreateSession.mock.calls[0][1] as string;
-      expect(command).toMatch(/^timeout 1500 claude /);
+      const scriptContent = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      expect(scriptContent).toMatch(/^#!\/bin\/sh\ntimeout 1500 claude /);
     });
 
     it('kills stale tmux session before launching new one', async () => {
