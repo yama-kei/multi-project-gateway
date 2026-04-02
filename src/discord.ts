@@ -59,6 +59,8 @@ export interface DiscordBot {
   start(token: string): Promise<void>;
   stop(): void;
   getStatus(): string;
+  /** Return the guild ID of the connected server, or null if not yet available. */
+  getGuildId(): string | null;
   /** Deliver an orphaned session result to the appropriate Discord thread. */
   deliverOrphanResult(projectKey: string, result: import('./claude-cli.js').ClaudeResult): Promise<void>;
 }
@@ -650,6 +652,10 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
     stop() {
       rateLimiter.dispose();
       client.destroy();
+    },
+    getGuildId(): string | null {
+      const first = client.guilds.cache.first();
+      return first?.id ?? null;
     },
     getStatus(): string {
       const ws = client.ws;

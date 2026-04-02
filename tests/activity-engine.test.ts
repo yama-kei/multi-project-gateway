@@ -616,6 +616,68 @@ describe('ActivityEngine', () => {
       }
     });
 
+    it('synthesizes pending segment for active session with no processing', () => {
+      const t0 = new Date('2026-03-29T10:00:00Z');
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-pend0000', timestamp: t0.toISOString(), agent_name: 'engineer' }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const timeline = engine.sessionTimeline('7d');
+      expect(timeline).toHaveLength(1);
+      expect(timeline[0].segments).toHaveLength(1);
+      expect(timeline[0].segments[0].state).toBe('pending');
+      expect(timeline[0].segments[0].start).toBe(t0.toISOString());
+      // end should be close to now
+      const endMs = new Date(timeline[0].segments[0].end).getTime();
+      expect(endMs).toBeGreaterThan(Date.now() - 5000);
+      expect(endMs).toBeLessThanOrEqual(Date.now() + 1000);
+    });
+
+    it('synthesizes pending segment for active session with only idle segments', () => {
+      const t0 = new Date('2026-03-29T10:00:00Z');
+      const t1 = new Date('2026-03-29T10:01:00Z');
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-pend1111', timestamp: t0.toISOString() }),
+        makeEvent({ event_type: 'session_resume', session_id: 'sess-pend1111', timestamp: t1.toISOString() }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const timeline = engine.sessionTimeline('7d');
+      expect(timeline).toHaveLength(1);
+      expect(timeline[0].segments).toHaveLength(1);
+      expect(timeline[0].segments[0].state).toBe('pending');
+    });
+
+    it('does not synthesize pending for ended sessions with no processing', () => {
+      const t0 = new Date('2026-03-29T10:00:00Z');
+      const t1 = new Date('2026-03-29T10:01:00Z');
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-ended000', timestamp: t0.toISOString() }),
+        makeEvent({ event_type: 'session_end', session_id: 'sess-ended000', timestamp: t1.toISOString() }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const timeline = engine.sessionTimeline('7d');
+      expect(timeline).toHaveLength(1);
+      // Should keep the original idle segment, not synthesize pending
+      expect(timeline[0].segments.every(s => s.state === 'idle')).toBe(true);
+    });
+
+    it('does not synthesize pending for sessions with processing segments', () => {
+      const t0 = new Date('2026-03-29T10:00:00Z');
+      const t1 = new Date('2026-03-29T10:01:00Z');
+      const t2 = new Date('2026-03-29T10:05:00Z');
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-proc0000', timestamp: t0.toISOString() }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-proc0000', timestamp: t1.toISOString() }),
+        makeEvent({ event_type: 'message_completed', session_id: 'sess-proc0000', timestamp: t2.toISOString() }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const timeline = engine.sessionTimeline('7d');
+      expect(timeline).toHaveLength(1);
+      // Should have idle + processing + closing segment, no pending
+      expect(timeline[0].segments.some(s => s.state === 'processing')).toBe(true);
+      expect(timeline[0].segments.some(s => s.state === 'pending')).toBe(false);
+    });
+
     it('idle segments have no token fields', () => {
       const t0 = new Date('2026-03-29T10:00:00Z');
       const t1 = new Date('2026-03-29T10:01:00Z');
