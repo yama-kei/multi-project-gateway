@@ -53,11 +53,21 @@ beforeEach(() => {
 
 describe('loadLifeContext', () => {
   describe('agent name mapping', () => {
-    it('maps life-work to work topic', async () => {
+    beforeEach(() => {
       process.env.BROKER_URL = 'http://broker';
       process.env.BROKER_API_SECRET = 'secret';
       process.env.BROKER_TENANT_ID = 'tenant';
       process.env.BROKER_ACTOR_ID = 'actor';
+    });
+
+    afterEach(() => {
+      delete process.env.BROKER_URL;
+      delete process.env.BROKER_API_SECRET;
+      delete process.env.BROKER_TENANT_ID;
+      delete process.env.BROKER_ACTOR_ID;
+    });
+
+    it('maps life-work to work topic', async () => {
       const client = setupMockClient();
 
       const result = await loadLifeContext('life-work');
@@ -69,10 +79,6 @@ describe('loadLifeContext', () => {
     });
 
     it('maps life-travel to travel topic', async () => {
-      process.env.BROKER_URL = 'http://broker';
-      process.env.BROKER_API_SECRET = 'secret';
-      process.env.BROKER_TENANT_ID = 'tenant';
-      process.env.BROKER_ACTOR_ID = 'actor';
       const client = setupMockClient();
 
       await loadLifeContext('life-travel');
@@ -80,10 +86,6 @@ describe('loadLifeContext', () => {
     });
 
     it('maps life-social to social topic', async () => {
-      process.env.BROKER_URL = 'http://broker';
-      process.env.BROKER_API_SECRET = 'secret';
-      process.env.BROKER_TENANT_ID = 'tenant';
-      process.env.BROKER_ACTOR_ID = 'actor';
       const client = setupMockClient();
 
       await loadLifeContext('life-social');
@@ -91,10 +93,6 @@ describe('loadLifeContext', () => {
     });
 
     it('maps life-hobbies to hobbies topic', async () => {
-      process.env.BROKER_URL = 'http://broker';
-      process.env.BROKER_API_SECRET = 'secret';
-      process.env.BROKER_TENANT_ID = 'tenant';
-      process.env.BROKER_ACTOR_ID = 'actor';
       const client = setupMockClient();
 
       await loadLifeContext('life-hobbies');
@@ -102,10 +100,6 @@ describe('loadLifeContext', () => {
     });
 
     it('caches topic folder IDs across calls', async () => {
-      process.env.BROKER_URL = 'http://broker';
-      process.env.BROKER_API_SECRET = 'secret';
-      process.env.BROKER_TENANT_ID = 'tenant';
-      process.env.BROKER_ACTOR_ID = 'actor';
       const client = setupMockClient();
       // Add extra driveList/driveRead mocks for second call
       client.driveList.mockResolvedValueOnce({ files: TOPIC_FILES });
@@ -286,6 +280,24 @@ describe('loadLifeContext', () => {
         expect.stringContaining('No files in work folder'),
       );
       warnSpy.mockRestore();
+    });
+
+    it('returns null when topic folder driveList throws', async () => {
+      const client = setupMockClient();
+      client.driveList
+        .mockReset()
+        .mockResolvedValueOnce({ files: TOPIC_FOLDERS })
+        .mockRejectedValueOnce(new Error('Drive timeout'));
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const result = await loadLifeContext('life-work');
+
+      expect(result).toBeNull();
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Error loading context'),
+        expect.any(Error),
+      );
+      errorSpy.mockRestore();
     });
   });
 });

@@ -23,13 +23,18 @@ const AGENT_TOPIC_MAP: Record<string, TopicName> = {
 
 const CONTEXT_FILES = ['summary.md', 'timeline.md', 'entities.md'] as const;
 
+/** Re-resolve folder IDs after this many milliseconds (5 minutes). */
+const FOLDER_CACHE_TTL_MS = 5 * 60 * 1000;
+
 // Module-level singleton broker client
 let brokerClient: BrokerClient | null = null;
 let envWarned = false;
 
-// Cache the life-context folder ID and its topic subfolder IDs across calls
+// Cache the life-context folder ID and its topic subfolder IDs across calls.
+// Expires after FOLDER_CACHE_TTL_MS to pick up Drive folder changes without restart.
 let lifeContextFolderId: string | null = null;
 let topicFolderIds: Record<string, string> | null = null;
+let folderCacheTime = 0;
 
 function getOrCreateClient(): BrokerClient | null {
   if (brokerClient) return brokerClient;
@@ -59,6 +64,12 @@ function getOrCreateClient(): BrokerClient | null {
  * 3. Return the folder ID for the requested topic
  */
 async function resolveTopicFolderId(client: BrokerClient, topic: string): Promise<string | null> {
+  // Invalidate cache after TTL
+  if (topicFolderIds && Date.now() - folderCacheTime > FOLDER_CACHE_TTL_MS) {
+    lifeContextFolderId = null;
+    topicFolderIds = null;
+  }
+
   // Use cached topic folder IDs if available
   if (topicFolderIds) {
     return topicFolderIds[topic] ?? null;
@@ -85,6 +96,7 @@ async function resolveTopicFolderId(client: BrokerClient, topic: string): Promis
       topicFolderIds[file.name] = file.file_id;
     }
   }
+  folderCacheTime = Date.now();
 
   return topicFolderIds[topic] ?? null;
 }
@@ -139,4 +151,5 @@ export function _resetForTest(): void {
   envWarned = false;
   lifeContextFolderId = null;
   topicFolderIds = null;
+  folderCacheTime = 0;
 }
