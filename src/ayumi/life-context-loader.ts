@@ -1,17 +1,17 @@
 /**
  * Loads life-context data from Google Drive for topic agents.
  * Maps agent names (life-work, life-travel, etc.) to Drive topics
- * and fetches summary.md, timeline.md, entities.md files.
+ * and reads all .md files from each topic folder dynamically.
  *
  * Navigates the Drive folder tree directly:
  *   driveSearch("life-context") → driveList(life-context/) → find topic folder
- *   → driveList(topic/) → driveRead(files)
+ *   → driveList(topic/) → driveRead(all .md files)
  *
- * This avoids depending on folder-map.json (which requires metadata cache
- * priming that the broker's search endpoint doesn't provide).
+ * Files are sorted by modified date (newest first). A per-topic size budget
+ * ensures context doesn't exceed token limits — oldest content is dropped first.
  */
 
-import { createBrokerClient, type BrokerClient } from '../broker-client.js';
+import { createBrokerClient, type BrokerClient, type DriveFile } from '../broker-client.js';
 import type { TopicName } from './life-context-setup.js';
 
 const AGENT_TOPIC_MAP: Record<string, TopicName> = {
@@ -21,7 +21,8 @@ const AGENT_TOPIC_MAP: Record<string, TopicName> = {
   'life-hobbies': 'hobbies',
 };
 
-const CONTEXT_FILES = ['summary.md', 'timeline.md', 'entities.md'] as const;
+/** Maximum bytes of context content per topic before truncation. */
+export const DEFAULT_TOPIC_SIZE_BUDGET = 8 * 1024; // 8 KB
 
 /** Re-resolve folder IDs after this many milliseconds (5 minutes). */
 const FOLDER_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -103,11 +104,17 @@ async function resolveTopicFolderId(client: BrokerClient, topic: string): Promis
 
 /**
  * Load life-context files from Drive for the given agent.
+ * Reads all .md files in the topic folder, sorted by modified date (newest first).
+ * Applies a per-topic size budget, dropping oldest content first.
  *
  * @param agentName Agent preset name (e.g., 'life-work', 'life-travel')
+ * @param sizeBudget Maximum bytes of content per topic (default: DEFAULT_TOPIC_SIZE_BUDGET)
  * @returns Formatted context string, or null if not a life-context agent or loading fails
  */
-export async function loadLifeContext(agentName: string): Promise<string | null> {
+export async function loadLifeContext(
+  agentName: string,
+  sizeBudget: number = DEFAULT_TOPIC_SIZE_BUDGET,
+): Promise<string | null> {
   const topic = AGENT_TOPIC_MAP[agentName];
   if (!topic) return null;
 
@@ -122,18 +129,39 @@ export async function loadLifeContext(agentName: string): Promise<string | null>
     }
 
     const listing = await client.driveList(folderId);
-    if (listing.files.length === 0) {
-      console.warn(`[life-context-loader] No files in ${topic} folder`);
+
+    // Filter to .md files only, sorted by modified_at descending (newest first)
+    const mdFiles = listing.files
+      .filter((f) => f.name.endsWith('.md'))
+      .sort((a, b) => (b.modified_at ?? '').localeCompare(a.modified_at ?? ''));
+
+    if (mdFiles.length === 0) {
+      console.warn(`[life-context-loader] No .md files in ${topic} folder`);
       return null;
     }
 
+    // Read files and apply size budget (newest first, drop oldest when over budget)
     const sections: string[] = [];
-    for (const filename of CONTEXT_FILES) {
-      const file = listing.files.find((f) => f.name === filename);
-      if (!file) continue;
+    let totalSize = 0;
+    let filesIncluded = 0;
 
+    for (const file of mdFiles) {
       const result = await client.driveRead(file.file_id);
-      sections.push(`## ${filename}\n${result.content}`);
+      const section = `## ${file.name}\n${result.content}`;
+      const sectionSize = new TextEncoder().encode(section).length;
+
+      if (totalSize + sectionSize > sizeBudget && sections.length > 0) {
+        // Budget exceeded — stop including more files
+        const omitted = mdFiles.length - filesIncluded;
+        if (omitted > 0) {
+          sections.push(`[truncated: ${omitted} file${omitted > 1 ? 's' : ''} omitted due to size budget]`);
+        }
+        break;
+      }
+
+      sections.push(section);
+      totalSize += sectionSize;
+      filesIncluded++;
     }
 
     if (sections.length === 0) return null;
