@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
-import { writeTopicToDrive, type DriveWriterOptions } from '../../src/ayumi/drive-writer.js';
+import {
+  writeTopicToDrive,
+  readPendingManifest,
+  writePendingManifest,
+  removeFromManifest,
+  type DriveWriterOptions,
+  type PendingReviewManifest,
+} from '../../src/ayumi/drive-writer.js';
 import type { BrokerClient } from '../../src/broker-client.js';
 import type { FolderMap } from '../../src/ayumi/life-context-setup.js';
 import type { TopicSummaryResult } from '../../src/ayumi/topic-summarizer.js';
@@ -64,8 +71,10 @@ describe('writeTopicToDrive', () => {
     expect(client.driveWrite).toHaveBeenCalledWith('summary.md', summary.files.summary, 'text', 'finance-id');
   });
 
-  it('skips write for tier 3 topics when not approved', async () => {
-    const client = mockClient();
+  it('skips topic write for tier 3 when not approved, but writes manifest', async () => {
+    const client = mockClient({
+      driveList: vi.fn().mockResolvedValue({ files: [] }),
+    });
     const summary: TopicSummaryResult = {
       topic: 'health',
       files: { summary: '# Health — Summary\n\n...' },
@@ -77,11 +86,16 @@ describe('writeTopicToDrive', () => {
 
     expect(result.written).toBe(false);
     expect(result.skippedReason).toBe('approval_required');
-    expect(client.driveWrite).not.toHaveBeenCalled();
+    // Should NOT write summary.md to the topic folder
+    expect(client.driveWrite).not.toHaveBeenCalledWith('summary.md', expect.anything(), expect.anything(), 'health-id');
+    // Should write pending-review manifest
+    expect(client.driveWrite).toHaveBeenCalledWith('pending-review.json', expect.stringContaining('"health"'), 'text', 'meta-id');
   });
 
   it('defaults to not approved for tier 3 topics', async () => {
-    const client = mockClient();
+    const client = mockClient({
+      driveList: vi.fn().mockResolvedValue({ files: [] }),
+    });
     const summary: TopicSummaryResult = {
       topic: 'health',
       files: { summary: '# Health — Summary\n\n...' },
@@ -92,5 +106,128 @@ describe('writeTopicToDrive', () => {
     const result = await writeTopicToDrive(client, testFolderMap, summary);
 
     expect(result.written).toBe(false);
+  });
+
+  it('writes pending-review manifest when tier 3 is skipped', async () => {
+    const client = mockClient({
+      driveList: vi.fn().mockResolvedValue({ files: [] }),
+    });
+    const summary: TopicSummaryResult = {
+      topic: 'finance',
+      files: { summary: '# Finance — Summary\n\nSensitive data here.' },
+      requiresApproval: true,
+      itemCount: 3,
+    };
+
+    await writeTopicToDrive(client, testFolderMap, summary);
+
+    // Should have written the manifest to the meta folder
+    expect(client.driveWrite).toHaveBeenCalledWith(
+      'pending-review.json',
+      expect.stringContaining('"finance"'),
+      'text',
+      'meta-id',
+    );
+  });
+});
+
+describe('readPendingManifest', () => {
+  it('returns null when no manifest file exists', async () => {
+    const client = mockClient({
+      driveList: vi.fn().mockResolvedValue({ files: [] }),
+    });
+    const result = await readPendingManifest(client, testFolderMap);
+    expect(result).toBeNull();
+  });
+
+  it('reads and parses existing manifest', async () => {
+    const manifest: PendingReviewManifest = {
+      createdAt: '2026-04-01T10:00:00Z',
+      topics: {
+        finance: { fileCount: 1, totalSize: 100, preview: 'preview text', summaryContent: 'full content' },
+      },
+    };
+    const client = mockClient({
+      driveList: vi.fn().mockResolvedValue({
+        files: [{ file_id: 'manifest-id', name: 'pending-review.json', mime_type: 'text/plain', size_bytes: 100, modified_at: '2026-04-01T10:00:00Z', web_view_link: null }],
+      }),
+      driveRead: vi.fn().mockResolvedValue({ name: 'pending-review.json', mime_type: 'text/plain', content: JSON.stringify(manifest) }),
+    });
+
+    const result = await readPendingManifest(client, testFolderMap);
+    expect(result).toEqual(manifest);
+  });
+
+  it('returns null on error', async () => {
+    const client = mockClient({
+      driveList: vi.fn().mockRejectedValue(new Error('network error')),
+    });
+    const result = await readPendingManifest(client, testFolderMap);
+    expect(result).toBeNull();
+  });
+});
+
+describe('writePendingManifest', () => {
+  it('writes manifest to meta folder', async () => {
+    const client = mockClient();
+    const manifest: PendingReviewManifest = {
+      createdAt: '2026-04-01T10:00:00Z',
+      topics: { finance: { fileCount: 1, totalSize: 100, preview: 'preview', summaryContent: 'full' } },
+    };
+
+    await writePendingManifest(client, testFolderMap, manifest);
+    expect(client.driveWrite).toHaveBeenCalledWith(
+      'pending-review.json',
+      JSON.stringify(manifest, null, 2),
+      'text',
+      'meta-id',
+    );
+  });
+
+  it('writes empty object when manifest has no topics', async () => {
+    const client = mockClient();
+    await writePendingManifest(client, testFolderMap, { createdAt: '2026-04-01T10:00:00Z', topics: {} });
+    expect(client.driveWrite).toHaveBeenCalledWith('pending-review.json', '{}', 'text', 'meta-id');
+  });
+
+  it('writes empty object when manifest is null', async () => {
+    const client = mockClient();
+    await writePendingManifest(client, testFolderMap, null);
+    expect(client.driveWrite).toHaveBeenCalledWith('pending-review.json', '{}', 'text', 'meta-id');
+  });
+});
+
+describe('removeFromManifest', () => {
+  it('removes topic and updates manifest', async () => {
+    const manifest: PendingReviewManifest = {
+      createdAt: '2026-04-01T10:00:00Z',
+      topics: {
+        finance: { fileCount: 1, totalSize: 100, preview: 'p', summaryContent: 'full' },
+        health: { fileCount: 1, totalSize: 80, preview: 'p2', summaryContent: 'full2' },
+      },
+    };
+    const client = mockClient({
+      driveList: vi.fn().mockResolvedValue({
+        files: [{ file_id: 'manifest-id', name: 'pending-review.json', mime_type: 'text/plain', size_bytes: 100, modified_at: '2026-04-01T10:00:00Z', web_view_link: null }],
+      }),
+      driveRead: vi.fn().mockResolvedValue({ name: 'pending-review.json', mime_type: 'text/plain', content: JSON.stringify(manifest) }),
+    });
+
+    const result = await removeFromManifest(client, testFolderMap, 'finance');
+    expect(result).toBe(true);
+    expect(client.driveWrite).toHaveBeenCalledWith(
+      'pending-review.json',
+      expect.stringContaining('"health"'),
+      'text',
+      'meta-id',
+    );
+  });
+
+  it('returns false when topic not in manifest', async () => {
+    const client = mockClient({
+      driveList: vi.fn().mockResolvedValue({ files: [] }),
+    });
+    const result = await removeFromManifest(client, testFolderMap, 'travel');
+    expect(result).toBe(false);
   });
 });

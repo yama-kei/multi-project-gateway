@@ -23,3 +23,8 @@ export async function getAgentContext(agentName: string): Promise<string | null>
  * Loaded lazily so the preset registry can merge them at startup.
  */
 export { AYUMI_PRESETS } from './presets.js';
+
+/**
+ * Curator approval commands for tier-3 content.
+ */
+export { handleCuratorCommand } from './curator-commands.js';
