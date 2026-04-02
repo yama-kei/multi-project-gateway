@@ -192,17 +192,22 @@ Post a message in any mapped Discord channel. The bot reacts with an eye emoji, 
 mpg <command>
 
 Commands:
-  start     Start the gateway (default)
-  init      Interactive setup wizard
-  status    Show session status from disk
-  logs      Show structured gateway logs
-  help      Show help
+  start              Start the gateway (default)
+  init               Interactive setup wizard
+  status             Show session status from disk
+  logs               Show structured gateway logs
+  daemon install     Install systemd user service
+  daemon uninstall   Remove systemd user service
+  daemon status      Show systemd service status
+  daemon logs        Show service logs (journalctl)
+  help               Show help
 
 Options:
-  --profile <name>  Use a named profile (default: "default")
-  --config <path>   Use a specific config.json path
-  --migrate         Copy CWD config files into ~/.mpg/profiles/default/
-  --level <level>   (logs) Filter by minimum log level (debug|info|warn|error)
+  --profile <name>   Use a named profile (default: "default")
+  --config <path>    Use a specific config.json path
+  --migrate          Copy CWD config files into ~/.mpg/profiles/default/
+  --level <level>    (logs) Filter by minimum log level (debug|info|warn|error)
+  --follow, -f       (daemon logs) Follow log output
 ```
 
 ## Config home (`~/.mpg/`)
@@ -295,6 +300,9 @@ If `~/.mpg/` does not exist and CWD files do, everything works exactly as before
 | `projects.<channelId>.agents` | object | — | Named agents for this project (see [Multi-agent setup](#multi-agent-setup)) |
 | `projects.<channelId>.allowedRoles` | string[] | — | Discord role names required to use this project (empty = no restriction) |
 | `projects.<channelId>.rateLimitPerUser` | number | — | Max messages per user per minute for this project |
+| `defaults.maxAttachmentSizeMb` | number | `10` | Max attachment file size in MB |
+| `defaults.allowedMimeTypes` | string[] | `["image/*", "text/*", "application/pdf", "application/json"]` | MIME type patterns allowed for attachments |
+| `defaults.maxAttachmentsPerMessage` | number | `5` | Max attachments processed per message |
 
 ## Multi-agent setup
 
@@ -371,6 +379,10 @@ Use `!agents` in any mapped Discord channel to see the available agents for that
 ### Thread history
 
 When an agent is invoked in a thread, the gateway prepends the last 20 messages as context so the agent understands the conversation so far. This is especially useful when a different agent picks up a thread mid-conversation.
+
+### Agent-driven thread naming
+
+Agents can name their thread by including a `THREAD_NAME: <title>` marker on the first line of their first response. The gateway renames the Discord thread and strips the marker from the displayed message. This happens only once per thread — subsequent responses do not rename it.
 
 ### Environment variables
 
@@ -456,6 +468,8 @@ Open `http://localhost:3100/` to view the dashboard, which shows:
 | `GET /api/sessions` | List all active sessions with details |
 | `GET /api/projects` | List configured projects and their agents |
 | `GET /api/status` | Combined status: version, health, sessions, and projects |
+| `GET /api/activity/timeline?range=<range>` | Token/cost time-series data (ranges: `1h`, `3h`, `12h`, `24h`, `7d`, `30d`) |
+| `GET /api/activity/summary?range=<range>` | Aggregate usage summary (tokens, cost, session count) for a time range |
 
 ## Architecture
 
@@ -482,6 +496,9 @@ For detailed architecture documentation — message lifecycle, session managemen
 | `src/rate-limiter.ts` | Per-user rate limiting (sliding window) |
 | `src/dashboard-server.ts` | Web dashboard and REST API (`/health`, `/api/sessions`, `/api/projects`, `/api/status`) |
 | `src/logger.ts` | Structured logger with level filtering and JSON output |
+| `src/attachments.ts` | Download, validate, and clean up Discord message attachments |
+| `src/activity-engine.ts` | Reads Pulse JSONL events; computes token/cost/session metrics by time range |
+| `src/daemon.ts` | Systemd user service install/uninstall/status/logs |
 | `src/discord.ts` | Discord.js client, message routing, agent handoff loop, response chunking |
 
 ## Scripts
@@ -494,9 +511,16 @@ For detailed architecture documentation — message lifecycle, session managemen
 | `npm test` | Run tests once |
 | `npm run test:watch` | Run tests in watch mode |
 
+## Attachments
+
+Discord message attachments are automatically downloaded and passed to Claude as file paths. Claude can then use the `Read` tool to view them.
+
+**Defaults:** up to 5 attachments per message, 10 MB each, matching `image/*`, `text/*`, `application/pdf`, `application/json`. Configurable per-project via `maxAttachmentSizeMb`, `allowedMimeTypes`, and `maxAttachmentsPerMessage`.
+
+Attachment files are stored in `.mpg-attachments/` within the project directory and cleaned up on session end or gateway restart.
+
 ## Limitations
 
-- **Text only** — attachments and embeds are not forwarded to Claude
 - **One message at a time per project** — concurrent messages to the same project are queued
 - **Per-thread sessions** — each thread gets its own Claude session scoped to the parent channel's project; threads auto-archive after 60 minutes of inactivity
 - **Local only** — the gateway runs on the same machine as the project directories
