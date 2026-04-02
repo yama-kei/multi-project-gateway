@@ -1,11 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   writeTopicToDrive,
+  writeDeltaToDrive,
   readPendingManifest,
   writePendingManifest,
   removeFromManifest,
   type DriveWriterOptions,
   type PendingReviewManifest,
+  type DeltaContent,
+  type DeltaWriteOptions,
 } from '../../src/ayumi/drive-writer.js';
 import type { BrokerClient } from '../../src/broker-client.js';
 import type { FolderMap } from '../../src/ayumi/life-context-setup.js';
@@ -229,5 +232,81 @@ describe('removeFromManifest', () => {
     });
     const result = await removeFromManifest(client, testFolderMap, 'travel');
     expect(result).toBe(false);
+  });
+});
+
+describe('writeDeltaToDrive', () => {
+  const deltaOptions: DeltaWriteOptions = {
+    scanRange: { start: '2026-04-07', end: '2026-04-13' },
+    sourceCounts: { gmail: 5, calendar: 2 },
+  };
+
+  it('writes delta file with frontmatter for tier 1-2 topics', async () => {
+    const client = mockClient();
+    const delta: DeltaContent = {
+      topic: 'travel',
+      content: '## New Travel activity\n\n- 2026-04-10 Flight booking',
+      requiresApproval: false,
+    };
+
+    const result = await writeDeltaToDrive(client, testFolderMap, delta, deltaOptions);
+
+    expect(result.written).toBe(true);
+    expect(result.filesWritten).toEqual(['delta-2026-04-13.md']);
+    expect(client.driveWrite).toHaveBeenCalledWith(
+      'delta-2026-04-13.md',
+      expect.stringContaining('type: delta'),
+      'text',
+      'travel-id',
+    );
+    // Verify frontmatter format
+    const writtenContent = (client.driveWrite as ReturnType<typeof vi.fn>).mock.calls[0][1] as string;
+    expect(writtenContent).toContain('scan_range: 2026-04-07 to 2026-04-13');
+    expect(writtenContent).toContain('source_counts: { gmail: 5, calendar: 2 }');
+    expect(writtenContent).toContain('## New Travel activity');
+  });
+
+  it('sends tier-3 deltas to pending-review manifest', async () => {
+    const client = mockClient({
+      driveList: vi.fn().mockResolvedValue({ files: [] }),
+    });
+    const delta: DeltaContent = {
+      topic: 'finance',
+      content: '## New Finance activity\n\n- 2026-04-10 Payment received',
+      requiresApproval: true,
+    };
+
+    const result = await writeDeltaToDrive(client, testFolderMap, delta, deltaOptions);
+
+    expect(result.written).toBe(false);
+    expect(result.skippedReason).toBe('approval_required');
+    // Should write manifest, not the delta file directly
+    expect(client.driveWrite).toHaveBeenCalledWith(
+      'pending-review.json',
+      expect.stringContaining('"finance"'),
+      'text',
+      'meta-id',
+    );
+    // The manifest should contain the full delta content with frontmatter
+    const manifestContent = (client.driveWrite as ReturnType<typeof vi.fn>).mock.calls[0][1] as string;
+    const parsed = JSON.parse(manifestContent);
+    expect(parsed.topics.finance.summaryContent).toContain('type: delta');
+    expect(parsed.topics.finance.summaryContent).toContain('## New Finance activity');
+  });
+
+  it('uses scan range end date for file naming', async () => {
+    const client = mockClient();
+    const delta: DeltaContent = {
+      topic: 'work',
+      content: '## New Work activity',
+      requiresApproval: false,
+    };
+    const opts: DeltaWriteOptions = {
+      scanRange: { start: '2026-01-01', end: '2026-01-15' },
+      sourceCounts: { gmail: 10, calendar: 0 },
+    };
+
+    await writeDeltaToDrive(client, testFolderMap, delta, opts);
+    expect(client.driveWrite).toHaveBeenCalledWith('delta-2026-01-15.md', expect.any(String), 'text', 'work-id');
   });
 });

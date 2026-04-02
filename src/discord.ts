@@ -192,6 +192,9 @@ export function handleCommand(
       '`!curator pending` — list pending tier-3 topics for review',
       '`!curator approve <topic|all>` — approve tier-3 content to Drive',
       '`!curator reject <topic>` — discard pending tier-3 content',
+      '`!curator sync` — incremental scan since last checkpoint',
+      '`!curator seed <start> <end>` — full seed run for a date range',
+      '`!curator status` — show scan state summary',
       '`!help` — show this message',
     ].join('\n');
   }

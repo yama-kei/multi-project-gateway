@@ -14,6 +14,17 @@ export interface DriveWriteResult {
   skippedReason?: string;
 }
 
+export interface DeltaWriteOptions {
+  scanRange: { start: string; end: string };  // YYYY-MM-DD dates
+  sourceCounts: { gmail: number; calendar: number };
+}
+
+export interface DeltaContent {
+  topic: TopicName;
+  content: string;        // markdown body (without frontmatter)
+  requiresApproval: boolean;
+}
+
 export interface PendingTopicEntry {
   fileCount: number;
   totalSize: number;
@@ -70,6 +81,63 @@ export async function writeTopicToDrive(
     topic: summary.topic,
     written: true,
     filesWritten,
+  };
+}
+
+/**
+ * Write a delta file for an incremental sync.
+ * Delta files are named `delta-YYYY-MM-DD.md` using the scan range end date.
+ * Tier-3 deltas go through the pending-review manifest.
+ */
+export async function writeDeltaToDrive(
+  client: BrokerClient,
+  folderMap: FolderMap,
+  delta: DeltaContent,
+  options: DeltaWriteOptions,
+): Promise<DriveWriteResult> {
+  const folderId = folderMap.topics[delta.topic];
+  const fileName = `delta-${options.scanRange.end}.md`;
+
+  const frontmatter = [
+    '---',
+    'type: delta',
+    `scan_range: ${options.scanRange.start} to ${options.scanRange.end}`,
+    `source_counts: { gmail: ${options.sourceCounts.gmail}, calendar: ${options.sourceCounts.calendar} }`,
+    '---',
+    '',
+  ].join('\n');
+
+  const fullContent = frontmatter + delta.content;
+
+  // Tier-3 deltas go through approval flow
+  if (delta.requiresApproval) {
+    const existing = await readPendingManifest(client, folderMap);
+    const manifest: PendingReviewManifest = existing ?? {
+      createdAt: new Date().toISOString(),
+      topics: {},
+    };
+
+    manifest.topics[delta.topic] = {
+      fileCount: 1,
+      totalSize: fullContent.length,
+      preview: delta.content.slice(0, 200),
+      summaryContent: fullContent,
+    };
+    await writePendingManifest(client, folderMap, manifest);
+
+    return {
+      topic: delta.topic,
+      written: false,
+      filesWritten: [],
+      skippedReason: 'approval_required',
+    };
+  }
+
+  await client.driveWrite(fileName, fullContent, 'text', folderId);
+  return {
+    topic: delta.topic,
+    written: true,
+    filesWritten: [fileName],
   };
 }
 
