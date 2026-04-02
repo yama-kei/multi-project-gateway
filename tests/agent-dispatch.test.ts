@@ -1,6 +1,6 @@
 // tests/agent-dispatch.test.ts
 import { describe, it, expect } from 'vitest';
-import { parseAgentMention, parseAgentCommand, extractAskTarget, parseHandoffCommand, parseAllHandoffs, type AgentConfig } from '../src/agent-dispatch.js';
+import { parseAgentMention, parseAgentCommand, extractAskTarget, parseHandoffCommand, parseAllHandoffs, parseThreadName, stripThreadName, type AgentConfig } from '../src/agent-dispatch.js';
 
 const agents: Record<string, AgentConfig> = {
   pm: { role: 'Product Manager', prompt: 'You manage requirements.' },
@@ -309,5 +309,57 @@ describe('parseAllHandoffs', () => {
     expect(result).toHaveLength(2);
     expect(result[0].agentName).toBe('life-work');
     expect(result[1].agentName).toBe('life-social');
+  });
+});
+
+describe('parseThreadName', () => {
+  it('extracts thread name from first line', () => {
+    expect(parseThreadName('THREAD_NAME: Fix login\nContent here')).toBe('Fix login');
+  });
+
+  it('returns null when marker is absent', () => {
+    expect(parseThreadName('Just a regular message')).toBeNull();
+  });
+
+  it('trims whitespace from extracted name', () => {
+    expect(parseThreadName('THREAD_NAME:   Spaced title  \nBody')).toBe('Spaced title');
+  });
+
+  it('truncates names longer than 100 characters', () => {
+    const longName = 'A'.repeat(150);
+    const result = parseThreadName(`THREAD_NAME: ${longName}\nBody`);
+    expect(result).toHaveLength(100);
+  });
+
+  it('returns null for empty name after THREAD_NAME:', () => {
+    expect(parseThreadName('THREAD_NAME:   \nBody')).toBeNull();
+  });
+
+  it('does not match THREAD_NAME: in the middle of text', () => {
+    expect(parseThreadName('Some text\nTHREAD_NAME: Not first line')).toBeNull();
+  });
+});
+
+describe('stripThreadName', () => {
+  it('removes THREAD_NAME: line from text', () => {
+    expect(stripThreadName('THREAD_NAME: Fix login\nContent here')).toBe('Content here');
+  });
+
+  it('returns original text when no marker present', () => {
+    expect(stripThreadName('Just a regular message')).toBe('Just a regular message');
+  });
+
+  it('handles THREAD_NAME: as the only line', () => {
+    expect(stripThreadName('THREAD_NAME: Fix login')).toBe('');
+  });
+
+  it('preserves content after the stripped line', () => {
+    const text = 'THREAD_NAME: Title\nLine 1\nLine 2';
+    expect(stripThreadName(text)).toBe('Line 1\nLine 2');
+  });
+
+  it('does not strip THREAD_NAME: from middle of text', () => {
+    const text = 'Some text\nTHREAD_NAME: Not first line';
+    expect(stripThreadName(text)).toBe(text);
   });
 });
