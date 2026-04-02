@@ -3,7 +3,7 @@ import type { Router } from './router.js';
 import type { SessionManager } from './session-manager.js';
 import { type GatewayConfig, resolveAgentTimeout } from './config.js';
 import { buildToolArgs } from './claude-cli.js';
-import { parseAgentMention, parseAgentCommand, extractAskTarget, parseHandoffCommand, parseAllHandoffs } from './agent-dispatch.js';
+import { parseAgentMention, parseAgentCommand, extractAskTarget, parseHandoffCommand, parseAllHandoffs, parseThreadName, stripThreadName } from './agent-dispatch.js';
 import { sendAgentMessage, buildHandoffEmbed, buildFanOutEmbed } from './embed-format.js';
 import type { TurnCounter } from './turn-counter.js';
 import { hasAllowedRole } from './role-check.js';
@@ -231,12 +231,36 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
   // Build system prompt with optional Drive context injection (#161)
   async function buildSystemPrompt(agentName: string, agent: AgentConfig): Promise<string> {
     const base = `Your role: ${agent.role}\n\n${agent.prompt}`;
+    const threadNameInstruction = '\n\nIMPORTANT: On your FIRST response in a thread, start with a line `THREAD_NAME: <short title>` that summarizes the topic (max 100 chars). This names the Discord thread. Do NOT include this line on subsequent responses.';
     const ctx = await getAgentContext(agentName);
-    return ctx ? `${base}\n\n${ctx}` : base;
+    return ctx ? `${base}${threadNameInstruction}\n\n${ctx}` : `${base}${threadNameInstruction}`;
   }
 
   // Track last active agent per thread for routing plain replies (#48)
   const lastActiveAgent = new Map<string, { agentName: string; agent: AgentConfig }>();
+
+  // Track threads that have already been named to ensure once-per-lifecycle rename
+  const namedThreads = new Set<string>();
+
+  /** If text starts with THREAD_NAME:, rename the thread (once) and return stripped text. */
+  async function maybeRenameThread(channel: TextChannel | ThreadChannel, text: string): Promise<string> {
+    const threadName = parseThreadName(text);
+    if (!threadName) return text;
+    const stripped = stripThreadName(text);
+    if (channel.isThread() && !namedThreads.has(channel.id)) {
+      namedThreads.add(channel.id);
+      try {
+        await channel.setName(threadName);
+      } catch (err) {
+        console.error(`Failed to rename thread ${channel.id}:`, err instanceof Error ? err.message : err);
+      }
+    } else if (!channel.isThread()) {
+      // Non-thread channel — just strip the marker, no rename attempt
+    } else {
+      // Already named — just strip
+    }
+    return stripped;
+  }
 
   client.on(Events.MessageCreate, async (message: Message) => {
     if (message.author.bot) return;
@@ -460,9 +484,10 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
         await replyChannel.send('⚠️ Claude started a new session — previous conversation context may be lost.');
       }
 
+      const displayText = await maybeRenameThread(replyChannel, result.text);
       await sendAgentMessage(
         replyChannel,
-        result.text,
+        displayText,
         activeAgent?.agentName,
         activeAgent?.agent.role,
       );
@@ -567,9 +592,10 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
             const synthElapsed = ((Date.now() - fanOutStart) / 1000).toFixed(1);
             console.log(`[fan-out] thread=${replyChannel.id} synthesis complete in ${synthElapsed}s (${synthesisResult.text.length} chars)`);
 
+            const synthDisplay = await maybeRenameThread(replyChannel, synthesisResult.text);
             await sendAgentMessage(
               replyChannel,
-              synthesisResult.text,
+              synthDisplay,
               currentAgentName ?? 'life-router',
               originAgent?.role ?? 'Life Context Router',
             );
@@ -634,9 +660,10 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
           const elapsed = ((Date.now() - sendStart) / 1000).toFixed(1);
           console.log(`[handoff] thread=${replyChannel.id} ${handoff.agentName} responded in ${elapsed}s (${handoffResult.text.length} chars)`);
 
+          const handoffDisplay = await maybeRenameThread(replyChannel, handoffResult.text);
           await sendAgentMessage(
             replyChannel,
-            handoffResult.text,
+            handoffDisplay,
             handoff.agentName,
             handoff.agent.role,
           );
@@ -705,7 +732,8 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
         }
 
         await channel.send('🔄 Resumed after gateway restart — here is the pending response:');
-        await sendAgentMessage(channel as TextChannel | ThreadChannel, result.text, agentName, agentRole);
+        const orphanDisplay = await maybeRenameThread(channel as TextChannel | ThreadChannel, result.text);
+        await sendAgentMessage(channel as TextChannel | ThreadChannel, orphanDisplay, agentName, agentRole);
       } catch (err) {
         console.error(`Failed to deliver orphan result to ${threadId}:`, err);
       }
