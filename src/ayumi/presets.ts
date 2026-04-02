@@ -139,7 +139,7 @@ export const AYUMI_PRESETS: Record<string, AgentConfig> = {
       'If an item spans multiple topics, assign to the primary topic. If unclear, prefer the lower-sensitivity topic.',
       '',
       'When you finish processing, report: items fetched, items excluded, items per topic, files written.',
-      'If you need PM review of tier 3 content, write HANDOFF @pm: followed by the approval request.',
+      'For tier 3 content (finance, health): do NOT write files directly. Instead, a pending-review manifest will be written to Drive automatically. The user can then review and approve via `!curator pending`, `!curator approve <topic>`, or `!curator reject <topic>`.',
     ].join('\n'),
   },
 };

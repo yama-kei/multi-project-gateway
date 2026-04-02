@@ -10,6 +10,7 @@ import { hasAllowedRole } from './role-check.js';
 import { createRateLimiter } from './rate-limiter.js';
 import { downloadAttachments, buildAttachmentPrompt, type AttachmentConfig, DEFAULT_ATTACHMENT_CONFIG } from './attachments.js';
 import type { AgentConfig } from './config.js';
+import { handleCuratorCommand } from './ayumi/curator-commands.js';
 
 // Ayumi life-context module — optional, gracefully absent
 let getAgentContext: (agentName: string) => Promise<string | null> = async () => null;
@@ -188,6 +189,9 @@ export function handleCommand(
       '`!restart <name>` — reset a session (fresh context, keeps worktree)',
       '`!kill <name>` — force-close a project session',
       '`!agents` — list available agents for the current project',
+      '`!curator pending` — list pending tier-3 topics for review',
+      '`!curator approve <topic|all>` — approve tier-3 content to Drive',
+      '`!curator reject <topic>` — discard pending tier-3 content',
       '`!help` — show this message',
     ].join('\n');
   }
@@ -244,6 +248,15 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
       const parentId = message.channel.isThread() ? message.channel.parentId ?? undefined : undefined;
       const resolved = router.resolve(message.channelId, parentId);
       if (resolved) {
+        // Handle async !curator commands before sync handleCommand
+        if (message.content.match(/^!curator\b/i)) {
+          const curatorResponse = await handleCuratorCommand(message.content);
+          if (curatorResponse) {
+            await message.channel.send(curatorResponse);
+            return;
+          }
+        }
+
         const response = handleCommand(message.content, config, sessionManager, {
           channelId: resolved.channelId,
           projectName: resolved.name,

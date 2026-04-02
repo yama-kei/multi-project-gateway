@@ -11,7 +11,7 @@ export interface AgentMention {
 
 /** Built-in command names that take precedence over agent shorthand (!<agent>). */
 const BUILT_IN_COMMANDS = new Set([
-  'help', 'sessions', 'session', 'kill', 'restart', 'agents', 'ask',
+  'help', 'sessions', 'session', 'kill', 'restart', 'agents', 'ask', 'curator',
 ]);
 
 /**
