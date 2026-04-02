@@ -42,8 +42,9 @@ function getOrCreateClient(): BrokerClient | null {
 }
 
 async function loadFolderMap(client: BrokerClient): Promise<FolderMap | null> {
-  const searchResult = await client.driveSearch('folder-map.json');
-  const mapFile = searchResult.files.find((f) => f.name === 'folder-map.json');
+  // List the designated root folder (primes metadata cache so driveRead works)
+  const listing = await client.driveList();
+  const mapFile = listing.files.find((f) => f.name === 'folder-map.json');
   if (!mapFile) return null;
   const content = await client.driveRead(mapFile.file_id);
   return JSON.parse(content.content) as FolderMap;

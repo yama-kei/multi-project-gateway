@@ -18,21 +18,25 @@ const FOLDER_MAP = {
 
 function setupMockClient(overrides: Record<string, unknown> = {}) {
   const client = {
-    driveSearch: vi.fn().mockResolvedValue({
-      files: [{ file_id: 'map-file-id', name: 'folder-map.json' }],
-    }),
+    driveSearch: vi.fn().mockResolvedValue({ files: [] }),
     driveRead: vi.fn()
       .mockResolvedValueOnce({ content: JSON.stringify(FOLDER_MAP) }) // folder-map.json
       .mockResolvedValueOnce({ content: '# Work Summary\nDetails.' }) // summary.md
       .mockResolvedValueOnce({ content: '- 2025-01 Started job' }) // timeline.md
       .mockResolvedValueOnce({ content: '## People\n- Alice' }), // entities.md
-    driveList: vi.fn().mockResolvedValue({
-      files: [
-        { file_id: 'summary-id', name: 'summary.md' },
-        { file_id: 'timeline-id', name: 'timeline.md' },
-        { file_id: 'entities-id', name: 'entities.md' },
-      ],
-    }),
+    driveList: vi.fn()
+      // First call: root listing (for loadFolderMap)
+      .mockResolvedValueOnce({
+        files: [{ file_id: 'map-file-id', name: 'folder-map.json' }],
+      })
+      // Second call: topic folder listing
+      .mockResolvedValueOnce({
+        files: [
+          { file_id: 'summary-id', name: 'summary.md' },
+          { file_id: 'timeline-id', name: 'timeline.md' },
+          { file_id: 'entities-id', name: 'entities.md' },
+        ],
+      }),
     ...overrides,
   };
   mockCreateBrokerClient.mockReturnValue(client as any);
@@ -135,9 +139,16 @@ describe('loadLifeContext', () => {
 
     it('skips files not present in folder listing', async () => {
       const client = setupMockClient();
-      client.driveList.mockResolvedValue({
-        files: [{ file_id: 'summary-id', name: 'summary.md' }],
-      });
+      client.driveList
+        .mockReset()
+        // Root listing (for loadFolderMap)
+        .mockResolvedValueOnce({
+          files: [{ file_id: 'map-file-id', name: 'folder-map.json' }],
+        })
+        // Topic listing — only summary.md present
+        .mockResolvedValueOnce({
+          files: [{ file_id: 'summary-id', name: 'summary.md' }],
+        });
       // Only folder-map + summary reads
       client.driveRead
         .mockReset()
@@ -197,9 +208,9 @@ describe('loadLifeContext', () => {
       delete process.env.BROKER_ACTOR_ID;
     });
 
-    it('returns null when driveSearch throws', async () => {
+    it('returns null when root driveList throws', async () => {
       const client = setupMockClient();
-      client.driveSearch.mockRejectedValue(new Error('Network error'));
+      client.driveList.mockReset().mockRejectedValue(new Error('Network error'));
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
       const result = await loadLifeContext('life-work');
@@ -212,9 +223,9 @@ describe('loadLifeContext', () => {
       errorSpy.mockRestore();
     });
 
-    it('returns null when folder-map.json is not found', async () => {
+    it('returns null when folder-map.json is not found in root listing', async () => {
       const client = setupMockClient();
-      client.driveSearch.mockResolvedValue({ files: [] });
+      client.driveList.mockReset().mockResolvedValue({ files: [] });
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
       const result = await loadLifeContext('life-work');
@@ -228,7 +239,17 @@ describe('loadLifeContext', () => {
 
     it('returns null when topic folder is empty', async () => {
       const client = setupMockClient();
-      client.driveList.mockResolvedValue({ files: [] });
+      client.driveList
+        .mockReset()
+        // Root listing returns folder-map.json
+        .mockResolvedValueOnce({
+          files: [{ file_id: 'map-file-id', name: 'folder-map.json' }],
+        })
+        // Topic listing is empty
+        .mockResolvedValueOnce({ files: [] });
+      client.driveRead
+        .mockReset()
+        .mockResolvedValueOnce({ content: JSON.stringify(FOLDER_MAP) });
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       const result = await loadLifeContext('life-work');
