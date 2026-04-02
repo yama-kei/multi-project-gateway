@@ -27,32 +27,40 @@ graph LR
 | Worktree Manager | `worktree.ts` | Git worktree isolation per thread |
 | Embed Formatter | `embed-format.ts` | Chunks responses, builds Discord embeds |
 | Turn Counter | `turn-counter.ts` | Limits agent-to-agent handoff loops |
+| Attachments | `attachments.ts` | Download Discord attachments, validate MIME/size, build prompt |
+| Activity Engine | `activity-engine.ts` | Pulse event aggregation for usage metrics |
 | Dashboard Server | `dashboard-server.ts` | HTTP dashboard and REST API |
 
 ## Module map
 
 ```
 src/
-├── cli.ts              CLI entry point: start, init, status, logs
+├── cli.ts              CLI entry point: start, init, status, logs, daemon
 ├── index.ts            Re-exports for programmatic use
 ├── config.ts           Config loading, validation, defaults
 ├── discord.ts          Discord.js client, message handler, command parser, handoff loop
 ├── router.ts           Channel → project resolution
-├── agent-dispatch.ts   Parse @mentions, !ask, !<agent> commands
+├── agent-dispatch.ts   Parse @mentions, !ask, !<agent> commands; THREAD_NAME extraction
 ├── session-manager.ts  Session lifecycle, queue, persist, resume
 ├── session-store.ts    JSON file-based session persistence
 ├── claude-cli.ts       Spawn claude subprocess, parse JSON, build CLI args
+├── attachments.ts      Download, validate, and clean up Discord message attachments
 ├── worktree.ts         Git worktree create/remove/reconcile
 ├── embed-format.ts     Discord embed rendering and message chunking
 ├── rate-limiter.ts     Per-user sliding-window rate limiting
 ├── role-check.ts       Discord role-based access control
 ├── persona-presets.ts  Built-in agent templates (pm, engineer, qa, designer, devops)
 ├── turn-counter.ts     Track and limit agent-to-agent handoff turns
-├── dashboard-server.ts HTTP dashboard, REST API, and health endpoint
+├── dashboard-server.ts HTTP dashboard, REST API, activity metrics, and health endpoint
+├── activity-engine.ts  Reads Pulse JSONL events; token/cost/session metrics by time range
+├── daemon.ts           Systemd user service management (install, uninstall, status, logs)
 ├── health.ts           Pre-flight health checks
 ├── logger.ts           Structured JSON logging
 ├── resolve-home.ts     Config/session path resolution (~/.mpg, profiles)
-└── init.ts             Interactive setup wizard
+├── init.ts             Interactive setup wizard
+└── runtimes/
+    ├── claude-cli-runtime.ts  Direct subprocess runtime for claude --print
+    └── tmux-runtime.ts        Tmux-based runtime for persistent sessions across restarts
 ```
 
 ## Message lifecycle
@@ -379,5 +387,7 @@ The HTTP server (default port 3100) exposes:
 | `GET /api/sessions` | Active sessions with details |
 | `GET /api/projects` | Configured projects and agents |
 | `GET /api/status` | Combined status (version, health, sessions, projects) |
+| `GET /api/activity/timeline?range=<r>` | Token/cost time-series (ranges: `1h`, `3h`, `12h`, `24h`, `7d`, `30d`) |
+| `GET /api/activity/summary?range=<r>` | Aggregate usage summary (tokens, cost, session count) |
 
 Structured JSON logs are written to stdout and can be filtered with `mpg logs --project <name> --level <level>`.
