@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, statSync, rmSync, existsSync, watch } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, existsSync, watch, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildClaudeArgs, parseClaudeJsonOutput, friendlyError } from '../claude-cli.js';
 import type { AgentRuntime, SpawnOpts } from '../agent-runtime.js';
@@ -64,13 +64,18 @@ export class TmuxRuntime implements AgentRuntime {
     const timeoutSec = Math.ceil((timeoutMs + bufferMs) / 1000);
     const command = `timeout ${timeoutSec} claude ${escapedArgs.join(' ')} > ${shellEscape(outPath)} 2> ${shellEscape(errPath)}`;
 
+    // Write command to a script file to avoid tmux command-length limits
+    // (system prompts with life context can exceed tmux's buffer).
+    const scriptPath = join(outDir, 'run.sh');
+    writeFileSync(scriptPath, `#!/bin/sh\n${command}\n`, { mode: 0o755 });
+
     // Kill any stale session with the same name
     if (sessionExists(tmuxName)) {
       killSession(tmuxName);
     }
 
-    // Launch in tmux
-    createSession(tmuxName, command, { cwd: opts.cwd });
+    // Launch the script in tmux (short command string regardless of prompt size)
+    createSession(tmuxName, scriptPath, { cwd: opts.cwd });
 
     // Wait for Claude to finish by polling for tmux session exit + output file
     return this._waitForResult(tmuxName, sessionKey, outPath, errPath, timeoutMs);
