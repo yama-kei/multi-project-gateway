@@ -277,7 +277,7 @@ describe('loadLifeContext', () => {
 
       expect(result).toBeNull();
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('No files in work folder'),
+        expect.stringContaining('No .md files in work folder'),
       );
       warnSpy.mockRestore();
     });
