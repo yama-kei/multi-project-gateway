@@ -67,13 +67,13 @@ describe('life-router E2E', () => {
 
   describe('fallback behavior', () => {
     it('unmatched query does not produce a HANDOFF', () => {
-      const routerOutput = 'I can help with questions about your work, travel, social life, and hobbies.';
+      const routerOutput = 'I can help with questions about your work, travel, finance, health, social life, and hobbies.';
       const result = parseHandoffCommand(routerOutput, ALL_AGENTS);
       expect(result).toBeNull();
     });
 
     it('unmatched query produces empty array from parseAllHandoffs', () => {
-      const routerOutput = 'I can help with questions about your work, travel, social life, and hobbies.';
+      const routerOutput = 'I can help with questions about your work, travel, finance, health, social life, and hobbies.';
       const results = parseAllHandoffs(routerOutput, ALL_AGENTS);
       expect(results).toEqual([]);
     });
@@ -86,8 +86,8 @@ describe('life-router E2E', () => {
       expect(router.prompt).toMatch(/HANDOFF @life-work:/);
     });
 
-    it('lists all four topics as routing targets', () => {
-      for (const topic of ['work', 'travel', 'social', 'hobbies']) {
+    it('lists all six topics and curator as routing targets', () => {
+      for (const topic of ['work', 'travel', 'finance', 'health', 'social', 'hobbies', 'curator']) {
         expect(router.prompt).toContain(`life-${topic}`);
       }
     });

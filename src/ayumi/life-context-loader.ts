@@ -17,6 +17,8 @@ import type { TopicName } from './life-context-setup.js';
 const AGENT_TOPIC_MAP: Record<string, TopicName> = {
   'life-work': 'work',
   'life-travel': 'travel',
+  'life-finance': 'finance',
+  'life-health': 'health',
   'life-social': 'social',
   'life-hobbies': 'hobbies',
 };
