@@ -81,6 +81,28 @@ describe('persona-presets', () => {
     });
   });
 
+  describe('life-curator', () => {
+    const curator = PERSONA_PRESETS['life-curator'];
+
+    it('has contextPaths with all 6 topic authored.md files', () => {
+      expect(curator.contextPaths).toEqual([
+        '/life-context/work/authored.md',
+        '/life-context/travel/authored.md',
+        '/life-context/finance/authored.md',
+        '/life-context/health/authored.md',
+        '/life-context/social/authored.md',
+        '/life-context/hobbies/authored.md',
+      ]);
+    });
+
+    it('references !life-curator commands (not !curator)', () => {
+      expect(curator.prompt).toContain('!life-curator pending');
+      expect(curator.prompt).toContain('!life-curator approve');
+      expect(curator.prompt).toContain('!life-curator reject');
+      expect(curator.prompt).not.toContain('!curator pending');
+    });
+  });
+
   it('resolvePreset returns matching preset (case-insensitive)', () => {
     expect(resolvePreset('PM')).toEqual(PERSONA_PRESETS.pm);
     expect(resolvePreset('Engineer')).toEqual(PERSONA_PRESETS.engineer);

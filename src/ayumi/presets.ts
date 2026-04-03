@@ -256,7 +256,7 @@ export const AYUMI_PRESETS: Record<string, AgentConfig> = {
       '',
       '## Tier 3 approval flow',
       '',
-      'For tier 3 content (finance, health): do NOT write files directly. A pending-review manifest will be written to Drive automatically. The user reviews via `!curator pending`, `!curator approve <topic>`, or `!curator reject <topic>`.',
+      'For tier 3 content (finance, health): do NOT write files directly. A pending-review manifest will be written to Drive automatically. The user reviews via `!life-curator pending`, `!life-curator approve <topic>`, or `!life-curator reject <topic>`.',
       '',
       'Always confirm with the user before writing to Drive unless trust mode is enabled. Show classification and summary before committing.',
       '',
@@ -264,5 +264,13 @@ export const AYUMI_PRESETS: Record<string, AgentConfig> = {
       '',
       'Error handling: Never silently fail. If a URL cannot be fetched or content cannot be extracted, report the specific issue and ask how to proceed.',
     ].join('\n'),
+    contextPaths: [
+      '/life-context/work/authored.md',
+      '/life-context/travel/authored.md',
+      '/life-context/finance/authored.md',
+      '/life-context/health/authored.md',
+      '/life-context/social/authored.md',
+      '/life-context/hobbies/authored.md',
+    ],
   },
 };
