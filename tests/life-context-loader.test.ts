@@ -13,6 +13,8 @@ const mockCreateBrokerClient = vi.mocked(createBrokerClient);
 const TOPIC_FOLDERS = [
   { file_id: 'work-id', name: 'work', mime_type: 'application/vnd.google-apps.folder' },
   { file_id: 'travel-id', name: 'travel', mime_type: 'application/vnd.google-apps.folder' },
+  { file_id: 'finance-id', name: 'finance', mime_type: 'application/vnd.google-apps.folder' },
+  { file_id: 'health-id', name: 'health', mime_type: 'application/vnd.google-apps.folder' },
   { file_id: 'social-id', name: 'social', mime_type: 'application/vnd.google-apps.folder' },
   { file_id: 'hobbies-id', name: 'hobbies', mime_type: 'application/vnd.google-apps.folder' },
   { file_id: 'meta-id', name: '_meta', mime_type: 'application/vnd.google-apps.folder' },
@@ -119,7 +121,7 @@ describe('loadLifeContext', () => {
   });
 
   describe('non-life agents return null', () => {
-    it.each(['life-router', 'curator', 'pm', 'engineer', 'unknown'])('%s returns null', async (name) => {
+    it.each(['life-router', 'life-curator', 'pm', 'engineer', 'unknown'])('%s returns null', async (name) => {
       const result = await loadLifeContext(name);
       expect(result).toBeNull();
     });

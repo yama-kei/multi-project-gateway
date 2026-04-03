@@ -2,12 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { PERSONA_PRESETS, resolvePreset } from '../src/persona-presets.js';
 
 describe('persona-presets', () => {
-  it('includes pm, engineer, qa, designer, devops, curator, and life-context presets', () => {
+  it('includes pm, engineer, qa, designer, devops, life-curator, and life-context presets', () => {
     expect(Object.keys(PERSONA_PRESETS)).toEqual(
       expect.arrayContaining([
-        'pm', 'engineer', 'qa', 'designer', 'devops', 'curator',
-        'life-work', 'life-travel', 'life-social', 'life-hobbies',
-        'life-router',
+        'pm', 'engineer', 'qa', 'designer', 'devops', 'life-curator',
+        'life-work', 'life-travel', 'life-finance', 'life-health',
+        'life-social', 'life-hobbies', 'life-router',
       ]),
     );
   });
@@ -20,7 +20,7 @@ describe('persona-presets', () => {
   });
 
   describe('life-context topic agents', () => {
-    const LIFE_PRESETS = ['life-work', 'life-travel', 'life-social', 'life-hobbies'] as const;
+    const LIFE_PRESETS = ['life-work', 'life-travel', 'life-finance', 'life-health', 'life-social', 'life-hobbies'] as const;
 
     it('each references LIFE CONTEXT DATA section for knowledge source', () => {
       for (const name of LIFE_PRESETS) {
@@ -28,9 +28,16 @@ describe('persona-presets', () => {
       }
     });
 
-    it('each instructs to cite specific details and say when info is missing', () => {
-      for (const name of LIFE_PRESETS) {
+    it('each instructs how to cite context and say when info is missing', () => {
+      const TIER_12 = ['life-work', 'life-travel', 'life-social', 'life-hobbies'] as const;
+      const TIER_3 = ['life-finance', 'life-health'] as const;
+
+      for (const name of TIER_12) {
         expect(PERSONA_PRESETS[name].prompt).toContain('Cite specific details');
+      }
+      expect(PERSONA_PRESETS['life-finance'].prompt).toContain('Cite patterns and trends');
+      expect(PERSONA_PRESETS['life-health'].prompt).toContain('Summarize patterns and timelines');
+      for (const name of LIFE_PRESETS) {
         expect(PERSONA_PRESETS[name].prompt).toContain("don't have information");
       }
     });
@@ -49,11 +56,14 @@ describe('persona-presets', () => {
       expect(router.role).toBe('Life Context Router');
     });
 
-    it('references all 4 topic agents', () => {
+    it('references all 6 topic agents and the curator', () => {
       expect(router.prompt).toContain('life-work');
       expect(router.prompt).toContain('life-travel');
+      expect(router.prompt).toContain('life-finance');
+      expect(router.prompt).toContain('life-health');
       expect(router.prompt).toContain('life-social');
       expect(router.prompt).toContain('life-hobbies');
+      expect(router.prompt).toContain('life-curator');
     });
 
     it('includes HANDOFF dispatch instruction', () => {
@@ -67,7 +77,29 @@ describe('persona-presets', () => {
 
     it('includes fallback for off-topic queries', () => {
       expect(router.prompt).toContain('off-topic');
-      expect(router.prompt).toContain('I can help with questions about your work, travel, social life, and hobbies');
+      expect(router.prompt).toContain('I can help with questions about your work, travel, finance, health, social life, and hobbies');
+    });
+  });
+
+  describe('life-curator', () => {
+    const curator = PERSONA_PRESETS['life-curator'];
+
+    it('has contextPaths with all 6 topic authored.md files', () => {
+      expect(curator.contextPaths).toEqual([
+        '/life-context/work/authored.md',
+        '/life-context/travel/authored.md',
+        '/life-context/finance/authored.md',
+        '/life-context/health/authored.md',
+        '/life-context/social/authored.md',
+        '/life-context/hobbies/authored.md',
+      ]);
+    });
+
+    it('references !life-curator commands (not !curator)', () => {
+      expect(curator.prompt).toContain('!life-curator pending');
+      expect(curator.prompt).toContain('!life-curator approve');
+      expect(curator.prompt).toContain('!life-curator reject');
+      expect(curator.prompt).not.toContain('!curator pending');
     });
   });
 

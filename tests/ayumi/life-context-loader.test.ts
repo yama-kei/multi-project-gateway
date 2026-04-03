@@ -77,7 +77,7 @@ function setupDriveFolders(topicFiles: DriveFile[]) {
 
 describe('loadLifeContext', () => {
   it('returns null for non-life-context agents', async () => {
-    const result = await loadLifeContext('curator');
+    const result = await loadLifeContext('life-curator');
     expect(result).toBeNull();
   });
 
