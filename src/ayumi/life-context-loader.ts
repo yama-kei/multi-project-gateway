@@ -1,16 +1,23 @@
 /**
- * Loads life-context data from Google Drive for topic agents.
- * Maps agent names (life-work, life-travel, etc.) to Drive topics
- * and reads all .md files from each topic folder dynamically.
+ * Loads life-context data for topic agents.
  *
- * Navigates the Drive folder tree directly:
- *   driveSearch("life-context") → driveList(life-context/) → find topic folder
- *   → driveList(topic/) → driveRead(all .md files)
+ * Primary path: reads from local Obsidian vault via filesystem.
+ * Fallback path: reads from Google Drive via broker (when VAULT_PATH is not set).
  *
- * Files are sorted by modified date (newest first). A per-topic size budget
- * ensures context doesn't exceed token limits — oldest content is dropped first.
+ * Agent name → topic → vault path mapping:
+ *   life-work    → vault/topics/work/
+ *   life-travel  → vault/topics/travel/
+ *   life-social  → vault/topics/social/
+ *   life-hobbies → vault/topics/hobbies/
+ *   life-finance → vault/topics/_sensitive/finance/
+ *   life-health  → vault/topics/_sensitive/health/
+ *
+ * Files read: summary.md, timeline.md, entities.md (when they exist).
+ * Missing files are skipped gracefully — a new or empty vault still works.
  */
 
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { createBrokerClient, type BrokerClient, type DriveFile } from '../broker-client.js';
 import type { TopicName } from './life-context-setup.js';
 
@@ -23,21 +30,114 @@ const AGENT_TOPIC_MAP: Record<string, TopicName> = {
   'life-hobbies': 'hobbies',
 };
 
+const SENSITIVE_TOPICS: TopicName[] = ['finance', 'health'];
+
+/** Files to load from each topic folder, in order. */
+const TOPIC_FILES = ['summary.md', 'timeline.md', 'entities.md'];
+
 /** Maximum bytes of context content per topic before truncation. */
 export const DEFAULT_TOPIC_SIZE_BUDGET = 8 * 1024; // 8 KB
 
 /** Re-resolve folder IDs after this many milliseconds (5 minutes). */
 const FOLDER_CACHE_TTL_MS = 5 * 60 * 1000;
 
-// Module-level singleton broker client
+// Module-level singleton broker client (for Drive fallback)
 let brokerClient: BrokerClient | null = null;
 let envWarned = false;
 
 // Cache the life-context folder ID and its topic subfolder IDs across calls.
-// Expires after FOLDER_CACHE_TTL_MS to pick up Drive folder changes without restart.
 let lifeContextFolderId: string | null = null;
 let topicFolderIds: Record<string, string> | null = null;
 let folderCacheTime = 0;
+
+/**
+ * Resolve the vault directory path for a topic.
+ */
+function topicVaultPath(vaultPath: string, topic: TopicName): string {
+  if (SENSITIVE_TOPICS.includes(topic)) {
+    return join(vaultPath, 'topics', '_sensitive', topic);
+  }
+  return join(vaultPath, 'topics', topic);
+}
+
+/**
+ * Load life-context from the local vault filesystem.
+ * Reads summary.md, timeline.md, entities.md from the topic directory.
+ * Missing files are skipped gracefully.
+ */
+async function loadFromVault(
+  vaultPath: string,
+  topic: TopicName,
+  sizeBudget: number,
+): Promise<string | null> {
+  const dir = topicVaultPath(vaultPath, topic);
+  const sections: string[] = [];
+  let totalSize = 0;
+  let filesIncluded = 0;
+
+  for (const fileName of TOPIC_FILES) {
+    try {
+      const content = await readFile(join(dir, fileName), 'utf-8');
+      // Strip frontmatter for context injection (agents don't need YAML metadata)
+      const stripped = content.replace(/^---[\s\S]*?---\n*/, '');
+      const section = `## ${fileName}\n${stripped}`;
+      const sectionSize = new TextEncoder().encode(section).length;
+
+      if (totalSize + sectionSize > sizeBudget && sections.length > 0) {
+        const remaining = TOPIC_FILES.length - filesIncluded;
+        if (remaining > 0) {
+          sections.push(`[truncated: ${remaining} file${remaining > 1 ? 's' : ''} omitted due to size budget]`);
+        }
+        break;
+      }
+
+      sections.push(section);
+      totalSize += sectionSize;
+      filesIncluded++;
+    } catch {
+      // File doesn't exist — skip gracefully
+      continue;
+    }
+  }
+
+  if (sections.length === 0) return null;
+
+  return `--- LIFE CONTEXT DATA ---\n\n${sections.join('\n\n')}\n\n--- END LIFE CONTEXT DATA ---`;
+}
+
+/**
+ * Load life-context for the given agent.
+ *
+ * If VAULT_PATH is set, reads from local vault filesystem (primary path).
+ * Otherwise, falls back to Drive via broker (legacy path).
+ *
+ * @param agentName Agent preset name (e.g., 'life-work', 'life-travel')
+ * @param sizeBudget Maximum bytes of content per topic (default: DEFAULT_TOPIC_SIZE_BUDGET)
+ * @returns Formatted context string, or null if not a life-context agent or loading fails
+ */
+export async function loadLifeContext(
+  agentName: string,
+  sizeBudget: number = DEFAULT_TOPIC_SIZE_BUDGET,
+): Promise<string | null> {
+  const topic = AGENT_TOPIC_MAP[agentName];
+  if (!topic) return null;
+
+  // Primary path: local vault
+  const vaultPath = process.env.VAULT_PATH;
+  if (vaultPath) {
+    try {
+      return await loadFromVault(vaultPath, topic, sizeBudget);
+    } catch (err) {
+      console.error(`[life-context-loader] Error loading vault context for ${agentName}:`, err);
+      return null;
+    }
+  }
+
+  // Fallback: Drive via broker
+  return loadFromDrive(agentName, topic, sizeBudget);
+}
+
+// ---- Drive fallback (legacy path) ----
 
 function getOrCreateClient(): BrokerClient | null {
   if (brokerClient) return brokerClient;
@@ -60,25 +160,16 @@ function getOrCreateClient(): BrokerClient | null {
   return brokerClient;
 }
 
-/**
- * Discover the topic folder ID by navigating the Drive tree:
- * 1. Search for "life-context" folder
- * 2. List its children to find topic subfolders
- * 3. Return the folder ID for the requested topic
- */
 async function resolveTopicFolderId(client: BrokerClient, topic: string): Promise<string | null> {
-  // Invalidate cache after TTL
   if (topicFolderIds && Date.now() - folderCacheTime > FOLDER_CACHE_TTL_MS) {
     lifeContextFolderId = null;
     topicFolderIds = null;
   }
 
-  // Use cached topic folder IDs if available
   if (topicFolderIds) {
     return topicFolderIds[topic] ?? null;
   }
 
-  // Find the life-context folder
   if (!lifeContextFolderId) {
     const searchResult = await client.driveSearch('life-context');
     const lcFolder = searchResult.files.find(
@@ -91,7 +182,6 @@ async function resolveTopicFolderId(client: BrokerClient, topic: string): Promis
     lifeContextFolderId = lcFolder.file_id;
   }
 
-  // List life-context/ to discover topic subfolders (also primes metadata cache)
   const listing = await client.driveList(lifeContextFolderId);
   topicFolderIds = {};
   for (const file of listing.files) {
@@ -104,22 +194,11 @@ async function resolveTopicFolderId(client: BrokerClient, topic: string): Promis
   return topicFolderIds[topic] ?? null;
 }
 
-/**
- * Load life-context files from Drive for the given agent.
- * Reads all .md files in the topic folder, sorted by modified date (newest first).
- * Applies a per-topic size budget, dropping oldest content first.
- *
- * @param agentName Agent preset name (e.g., 'life-work', 'life-travel')
- * @param sizeBudget Maximum bytes of content per topic (default: DEFAULT_TOPIC_SIZE_BUDGET)
- * @returns Formatted context string, or null if not a life-context agent or loading fails
- */
-export async function loadLifeContext(
+async function loadFromDrive(
   agentName: string,
-  sizeBudget: number = DEFAULT_TOPIC_SIZE_BUDGET,
+  topic: TopicName,
+  sizeBudget: number,
 ): Promise<string | null> {
-  const topic = AGENT_TOPIC_MAP[agentName];
-  if (!topic) return null;
-
   const client = getOrCreateClient();
   if (!client) return null;
 
@@ -132,7 +211,6 @@ export async function loadLifeContext(
 
     const listing = await client.driveList(folderId);
 
-    // Filter to .md files only, sorted by modified_at descending (newest first)
     const mdFiles = listing.files
       .filter((f) => f.name.endsWith('.md'))
       .sort((a, b) => (b.modified_at ?? '').localeCompare(a.modified_at ?? ''));
@@ -142,7 +220,6 @@ export async function loadLifeContext(
       return null;
     }
 
-    // Read files and apply size budget (newest first, drop oldest when over budget)
     const sections: string[] = [];
     let totalSize = 0;
     let filesIncluded = 0;
@@ -153,7 +230,6 @@ export async function loadLifeContext(
       const sectionSize = new TextEncoder().encode(section).length;
 
       if (totalSize + sectionSize > sizeBudget && sections.length > 0) {
-        // Budget exceeded — stop including more files
         const omitted = mdFiles.length - filesIncluded;
         if (omitted > 0) {
           sections.push(`[truncated: ${omitted} file${omitted > 1 ? 's' : ''} omitted due to size budget]`);
