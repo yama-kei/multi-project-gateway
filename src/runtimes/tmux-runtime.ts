@@ -66,8 +66,14 @@ export class TmuxRuntime implements AgentRuntime {
 
     // Write command to a script file to avoid tmux command-length limits
     // (system prompts with life context can exceed tmux's buffer).
+    // Forward BROKER_* env vars so the Claude CLI process can access the
+    // HouseholdOS broker API (used by curator and other Ayumi agents).
+    const envExports = ['BROKER_URL', 'BROKER_API_SECRET', 'BROKER_TENANT_ID', 'BROKER_ACTOR_ID']
+      .filter((k) => process.env[k])
+      .map((k) => `export ${k}=${shellEscape(process.env[k]!)}`)
+      .join('\n');
     const scriptPath = join(outDir, 'run.sh');
-    writeFileSync(scriptPath, `#!/bin/sh\n${command}\n`, { mode: 0o755 });
+    writeFileSync(scriptPath, `#!/bin/sh\n${envExports ? envExports + '\n' : ''}${command}\n`, { mode: 0o755 });
 
     // Kill any stale session with the same name
     if (sessionExists(tmuxName)) {
