@@ -8,6 +8,7 @@
 import { loadLifeContext } from './life-context-loader.js';
 
 export { loadLifeContext };
+export { writeTopicToVault, type VaultWriterOptions, type VaultWriteResult } from './vault-writer.js';
 
 /**
  * Get agent context for the given agent name.

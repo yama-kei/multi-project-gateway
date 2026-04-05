@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { summarizeTopic, type TopicSummaryResult } from '../../src/ayumi/topic-summarizer.js';
+import { summarizeTopic, applyWikilinks, type TopicSummaryResult } from '../../src/ayumi/topic-summarizer.js';
 import type { ClassifiedItem } from '../../src/ayumi/extraction-pipeline.js';
 
 function makeItem(overrides: Partial<ClassifiedItem> = {}): ClassifiedItem {
@@ -78,5 +78,73 @@ describe('summarizeTopic', () => {
   it('handles empty item list', () => {
     const result = summarizeTopic('travel', []);
     expect(result.files.summary).toContain('No items');
+  });
+
+  it('does not return entities for tier 3 topics', () => {
+    const items: ClassifiedItem[] = [
+      makeItem({ topic: 'finance', tier: 3 }),
+    ];
+    const result = summarizeTopic('finance', items);
+    expect(result.entities).toBeUndefined();
+  });
+
+  it('returns entity info for tier 1-2 topics', () => {
+    const items: ClassifiedItem[] = [
+      makeItem({ from: 'tanaka.kenji@company.com' }),
+      makeItem({ from: 'suzuki.yui@company.com' }),
+      makeItem({ from: 'tanaka.kenji@company.com', sourceId: 'msg2' }),
+    ];
+
+    const result = summarizeTopic('work', items);
+
+    expect(result.entities).toBeDefined();
+    expect(result.entities!.length).toBe(2);
+
+    const tanaka = result.entities!.find((e) => e.name === 'Tanaka Kenji');
+    expect(tanaka).toBeDefined();
+    expect(tanaka!.type).toBe('person');
+    expect(tanaka!.aliases).toContain('tanaka.kenji@company.com');
+
+    const suzuki = result.entities!.find((e) => e.name === 'Suzuki Yui');
+    expect(suzuki).toBeDefined();
+  });
+
+  it('generates wikilinks in entities.md table', () => {
+    const items: ClassifiedItem[] = [
+      makeItem({ from: 'tanaka.kenji@company.com' }),
+    ];
+
+    const result = summarizeTopic('work', items);
+
+    expect(result.files.entities).toContain('[[Tanaka Kenji]]');
+  });
+});
+
+describe('applyWikilinks', () => {
+  it('wraps known entity names in [[wikilinks]]', () => {
+    const entities = new Set(['Tanaka Kenji', 'Project Aurora']);
+    const text = 'Met with Tanaka Kenji to discuss Project Aurora.';
+    const result = applyWikilinks(text, entities);
+    expect(result).toBe('Met with [[Tanaka Kenji]] to discuss [[Project Aurora]].');
+  });
+
+  it('does not double-link already linked names', () => {
+    const entities = new Set(['Tanaka Kenji']);
+    const text = 'Met with [[Tanaka Kenji]] today.';
+    const result = applyWikilinks(text, entities);
+    expect(result).toBe('Met with [[Tanaka Kenji]] today.');
+  });
+
+  it('does not link partial matches', () => {
+    const entities = new Set(['Tanaka Kenji']);
+    const text = 'TanakaKenji is not a match.';
+    const result = applyWikilinks(text, entities);
+    expect(result).not.toContain('[[');
+  });
+
+  it('handles empty entity set', () => {
+    const text = 'No entities here.';
+    const result = applyWikilinks(text, new Set());
+    expect(result).toBe(text);
   });
 });
