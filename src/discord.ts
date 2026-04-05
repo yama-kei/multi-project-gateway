@@ -473,6 +473,7 @@ export function createDiscordBot(router: Router, sessionManager: SessionManager,
         {
           worktree: replyChannel.isThread() ? true : undefined,
           systemPrompt,
+          timeoutMs: activeAgent ? resolveAgentTimeout(activeAgent.agent, config.defaults) : config.defaults.agentTimeoutMs,
           extraArgs: toolArgs.length > 0 ? toolArgs : undefined,
           guildId: message.guildId ?? undefined,
         },
