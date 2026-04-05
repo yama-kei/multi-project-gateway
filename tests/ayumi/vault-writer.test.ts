@@ -1,7 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { writeTopicToVault, generateFrontmatter, topicDir, type VaultWriterOptions } from '../../src/ayumi/vault-writer.js';
+import {
+  writeTopicToVault,
+  generateFrontmatter,
+  topicDir,
+  readVaultPendingManifest,
+  writeVaultPendingManifest,
+  addToVaultPendingManifest,
+  removeFromVaultManifest,
+  type VaultWriterOptions,
+} from '../../src/ayumi/vault-writer.js';
 import type { TopicSummaryResult } from '../../src/ayumi/topic-summarizer.js';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -249,5 +258,124 @@ describe('writeTopicToVault', () => {
     const matches = content.match(/---/g);
     expect(matches?.length).toBe(2); // opening and closing ---
     expect(content).toContain('tier: 2'); // correct tier, not the old tier: 1
+  });
+
+  it('writes tier 3 content to pending manifest when not approved', async () => {
+    const summary: TopicSummaryResult = {
+      topic: 'health',
+      files: { summary: '# Health — Summary\n\n2 items.' },
+      requiresApproval: true,
+      itemCount: 2,
+    };
+
+    const result = await writeTopicToVault(summary, defaultOptions());
+
+    expect(result.written).toBe(false);
+    expect(result.skippedReason).toBe('approval_required');
+
+    // Verify manifest was written
+    const manifest = await readVaultPendingManifest(tempDir);
+    expect(manifest).not.toBeNull();
+    expect(manifest!.topics.health).toBeDefined();
+    expect(manifest!.topics.health.summaryContent).toContain('# Health — Summary');
+  });
+});
+
+describe('vault pending manifest', () => {
+  it('readVaultPendingManifest returns null when no manifest exists', async () => {
+    const result = await readVaultPendingManifest(tempDir);
+    expect(result).toBeNull();
+  });
+
+  it('readVaultPendingManifest returns null for empty manifest', async () => {
+    await mkdir(join(tempDir, '_meta'), { recursive: true });
+    await writeFile(join(tempDir, '_meta', 'pending-review.json'), '{}');
+    const result = await readVaultPendingManifest(tempDir);
+    expect(result).toBeNull();
+  });
+
+  it('writeVaultPendingManifest creates _meta dir and writes manifest', async () => {
+    const manifest = {
+      createdAt: '2026-04-01T10:00:00Z',
+      topics: {
+        finance: { fileCount: 1, totalSize: 100, preview: 'preview', summaryContent: 'full content' },
+      },
+    };
+    await writeVaultPendingManifest(tempDir, manifest);
+
+    const content = await readFile(join(tempDir, '_meta', 'pending-review.json'), 'utf-8');
+    const parsed = JSON.parse(content);
+    expect(parsed.topics.finance.summaryContent).toBe('full content');
+  });
+
+  it('writeVaultPendingManifest clears manifest when empty', async () => {
+    await writeVaultPendingManifest(tempDir, { createdAt: '2026-04-01T10:00:00Z', topics: {} });
+    const content = await readFile(join(tempDir, '_meta', 'pending-review.json'), 'utf-8');
+    expect(content).toBe('{}');
+  });
+
+  it('writeVaultPendingManifest clears manifest when null', async () => {
+    await writeVaultPendingManifest(tempDir, null);
+    const content = await readFile(join(tempDir, '_meta', 'pending-review.json'), 'utf-8');
+    expect(content).toBe('{}');
+  });
+
+  it('addToVaultPendingManifest adds a topic', async () => {
+    const summary: TopicSummaryResult = {
+      topic: 'finance',
+      files: { summary: '# Finance Summary\n\nSensitive data.' },
+      requiresApproval: true,
+      itemCount: 3,
+    };
+    await addToVaultPendingManifest(tempDir, summary);
+
+    const manifest = await readVaultPendingManifest(tempDir);
+    expect(manifest).not.toBeNull();
+    expect(manifest!.topics.finance).toBeDefined();
+    expect(manifest!.topics.finance.summaryContent).toContain('# Finance Summary');
+    expect(manifest!.topics.finance.preview.length).toBeLessThanOrEqual(200);
+  });
+
+  it('addToVaultPendingManifest appends to existing manifest', async () => {
+    const summary1: TopicSummaryResult = {
+      topic: 'finance',
+      files: { summary: '# Finance' },
+      requiresApproval: true,
+      itemCount: 1,
+    };
+    const summary2: TopicSummaryResult = {
+      topic: 'health',
+      files: { summary: '# Health' },
+      requiresApproval: true,
+      itemCount: 2,
+    };
+    await addToVaultPendingManifest(tempDir, summary1);
+    await addToVaultPendingManifest(tempDir, summary2);
+
+    const manifest = await readVaultPendingManifest(tempDir);
+    expect(Object.keys(manifest!.topics)).toEqual(['finance', 'health']);
+  });
+
+  it('removeFromVaultManifest removes a topic', async () => {
+    const manifest = {
+      createdAt: '2026-04-01T10:00:00Z',
+      topics: {
+        finance: { fileCount: 1, totalSize: 100, preview: 'p', summaryContent: 'full' },
+        health: { fileCount: 1, totalSize: 80, preview: 'p2', summaryContent: 'full2' },
+      },
+    };
+    await writeVaultPendingManifest(tempDir, manifest);
+
+    const removed = await removeFromVaultManifest(tempDir, 'finance');
+    expect(removed).toBe(true);
+
+    const updated = await readVaultPendingManifest(tempDir);
+    expect(updated!.topics.health).toBeDefined();
+    expect(updated!.topics.finance).toBeUndefined();
+  });
+
+  it('removeFromVaultManifest returns false for unknown topic', async () => {
+    const removed = await removeFromVaultManifest(tempDir, 'travel');
+    expect(removed).toBe(false);
   });
 });
