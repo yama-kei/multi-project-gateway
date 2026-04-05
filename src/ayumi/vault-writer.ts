@@ -16,7 +16,9 @@ import type { TopicSummaryResult, EntityInfo } from './topic-summarizer.js';
 import type { TopicName } from './life-context-setup.js';
 import type { BrokerClient } from '../broker-client.js';
 import type { FolderMap } from './life-context-setup.js';
-import { writeTopicToDrive, type DriveWriterOptions } from './drive-writer.js';
+import { writeTopicToDrive, type DriveWriterOptions, type PendingReviewManifest, type PendingTopicEntry } from './drive-writer.js';
+
+export type { PendingReviewManifest, PendingTopicEntry };
 
 export interface VaultWriterOptions {
   vaultPath: string;
@@ -127,16 +129,9 @@ export async function writeTopicToVault(
   const dir = topicDir(vaultPath, topic);
   const dateRange = computeDateRange(summary);
 
-  // Tier 3 requires approval — skip vault write too
+  // Tier 3 requires approval — write to pending manifest instead
   if (summary.requiresApproval && !options.driveOptions?.approved) {
-    // Still write to Drive pending manifest if backup is enabled
-    if (options.driveBackupEnabled && options.brokerClient && options.folderMap) {
-      try {
-        await writeTopicToDrive(options.brokerClient, options.folderMap, summary, options.driveOptions);
-      } catch (err) {
-        console.warn(`[vault-writer] Drive backup failed for pending ${topic}:`, err);
-      }
-    }
+    await addToVaultPendingManifest(vaultPath, summary);
     return {
       topic,
       written: false,
@@ -319,4 +314,86 @@ async function appendAuditLog(
   if (lines.length > 0) {
     await appendFile(logPath, lines.join('\n') + '\n');
   }
+}
+
+// ---- Vault-based pending review manifest ----
+
+const MANIFEST_NAME = 'pending-review.json';
+
+/**
+ * Read the pending-review manifest from the vault _meta folder.
+ * Returns null if no manifest exists or the file is empty/invalid.
+ */
+export async function readVaultPendingManifest(
+  vaultPath: string,
+): Promise<PendingReviewManifest | null> {
+  try {
+    const content = await readFile(join(vaultPath, '_meta', MANIFEST_NAME), 'utf-8');
+    const parsed = JSON.parse(content);
+    if (!parsed.topics || Object.keys(parsed.topics).length === 0) return null;
+    return parsed as PendingReviewManifest;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write (or clear) the pending-review manifest in the vault _meta folder.
+ */
+export async function writeVaultPendingManifest(
+  vaultPath: string,
+  manifest: PendingReviewManifest | null,
+): Promise<void> {
+  const metaDir = join(vaultPath, '_meta');
+  await mkdir(metaDir, { recursive: true });
+  const filePath = join(metaDir, MANIFEST_NAME);
+
+  if (!manifest || Object.keys(manifest.topics).length === 0) {
+    await writeFile(filePath, '{}');
+    return;
+  }
+  await writeFile(filePath, JSON.stringify(manifest, null, 2));
+}
+
+/**
+ * Add a tier-3 topic summary to the vault pending-review manifest.
+ */
+export async function addToVaultPendingManifest(
+  vaultPath: string,
+  summary: TopicSummaryResult,
+): Promise<void> {
+  const existing = await readVaultPendingManifest(vaultPath);
+  const manifest: PendingReviewManifest = existing ?? {
+    createdAt: new Date().toISOString(),
+    topics: {},
+  };
+
+  const fileCount = Object.values(summary.files).filter(Boolean).length;
+  const totalSize = Object.values(summary.files)
+    .filter((v): v is string => typeof v === 'string')
+    .reduce((sum, content) => sum + content.length, 0);
+  const preview = summary.files.summary.slice(0, 200);
+
+  manifest.topics[summary.topic] = {
+    fileCount,
+    totalSize,
+    preview,
+    summaryContent: summary.files.summary,
+  };
+  await writeVaultPendingManifest(vaultPath, manifest);
+}
+
+/**
+ * Remove a topic from the vault pending manifest.
+ * Returns true if the topic was found and removed.
+ */
+export async function removeFromVaultManifest(
+  vaultPath: string,
+  topic: string,
+): Promise<boolean> {
+  const manifest = await readVaultPendingManifest(vaultPath);
+  if (!manifest || !(topic in manifest.topics)) return false;
+  delete manifest.topics[topic];
+  await writeVaultPendingManifest(vaultPath, manifest);
+  return true;
 }

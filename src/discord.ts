@@ -190,7 +190,7 @@ export function handleCommand(
       '`!kill <name>` — force-close a project session',
       '`!agents` — list available agents for the current project',
       '`!curator pending` — list pending tier-3 topics for review',
-      '`!curator approve <topic|all>` — approve tier-3 content to Drive',
+      '`!curator approve <topic|all>` — approve tier-3 content to vault',
       '`!curator reject <topic>` — discard pending tier-3 content',
       '`!help` — show this message',
     ].join('\n');

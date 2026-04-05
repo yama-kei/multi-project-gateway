@@ -86,20 +86,19 @@ describe('persona-presets', () => {
 
     it('has contextPaths with all 6 topic authored.md files', () => {
       expect(curator.contextPaths).toEqual([
-        '/life-context/work/authored.md',
-        '/life-context/travel/authored.md',
-        '/life-context/finance/authored.md',
-        '/life-context/health/authored.md',
-        '/life-context/social/authored.md',
-        '/life-context/hobbies/authored.md',
+        'topics/work/authored.md',
+        'topics/travel/authored.md',
+        'topics/_sensitive/finance/authored.md',
+        'topics/_sensitive/health/authored.md',
+        'topics/social/authored.md',
+        'topics/hobbies/authored.md',
       ]);
     });
 
-    it('references !life-curator commands (not !curator)', () => {
-      expect(curator.prompt).toContain('!life-curator pending');
-      expect(curator.prompt).toContain('!life-curator approve');
-      expect(curator.prompt).toContain('!life-curator reject');
-      expect(curator.prompt).not.toContain('!curator pending');
+    it('references !curator commands for approval flow', () => {
+      expect(curator.prompt).toContain('!curator pending');
+      expect(curator.prompt).toContain('!curator approve');
+      expect(curator.prompt).toContain('!curator reject');
     });
   });
 
