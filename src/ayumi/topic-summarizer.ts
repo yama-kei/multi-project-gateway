@@ -159,7 +159,8 @@ function generateTimeline(title: string, items: ClassifiedItem[], entityNames: S
 
   for (const item of sorted) {
     const date = item.date.split('T')[0];
-    const source = item.source === 'gmail' ? '📧' : '📅';
+    const sourceEmoji: Record<string, string> = { gmail: '📧', calendar: '📅', web: '🌐', local: '📄' };
+    const source = sourceEmoji[item.source] ?? '📎';
     const line = `- ${date} ${source} ${item.subject}`;
     lines.push(applyWikilinks(line, entityNames));
   }
