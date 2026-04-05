@@ -1,13 +1,15 @@
 /**
  * Reads local markdown files and converts them to ClassifiedItems.
- * Used by the curator pipeline to ingest locally authored content.
+ * Used by the curator agent to ingest locally authored content
+ * when the user provides file paths or a directory in chat.
  *
- * Directory source: CURATOR_LOCAL_DIR env var or explicit parameter.
- * Reads all .md files (non-recursive) from the directory.
+ * Primary interfaces:
+ * - readLocalFiles(paths) — accepts specific file paths from the agent
+ * - readLocalDirectory(dir) — reads all .md files from a directory
  */
 
 import { readdir, readFile, stat } from 'node:fs/promises';
-import { join, basename } from 'node:path';
+import { join, basename, dirname } from 'node:path';
 import type { ClassifiedItem } from './extraction-pipeline.js';
 import { classifyTopic } from './extraction-pipeline.js';
 
@@ -73,14 +75,65 @@ export function extractDate(
 }
 
 /**
- * Read all .md files from a directory and return ClassifiedItems.
- * Non-recursive — only reads files directly in the given directory.
+ * Classify a single file and return a ClassifiedItem.
  */
-export async function readAndClassifyLocalFiles(
-  dirPath: string,
+async function classifyFile(filePath: string): Promise<ClassifiedItem | null> {
+  try {
+    const fileStat = await stat(filePath);
+    if (!fileStat.isFile()) return null;
+
+    const filename = basename(filePath);
+    const content = await readFile(filePath, 'utf-8');
+    const { body } = parseFrontmatter(content);
+    const title = extractTitle(content, filename);
+    const date = extractDate(content, filename, fileStat.mtime);
+    const snippet = body.replace(/^#.*\n+/, '').trim().slice(0, 200);
+
+    const topic = classifyTopic(title, snippet, filename);
+
+    return {
+      sourceId: filePath,
+      source: 'local',
+      topic,
+      tier: TOPIC_TIER_MAP[topic],
+      subject: title,
+      date,
+      from: filePath,
+      snippet,
+      body,
+    };
+  } catch (err) {
+    console.warn(`[local-reader] Failed to read ${filePath}:`, err);
+    return null;
+  }
+}
+
+/**
+ * Read specific file paths and return ClassifiedItems.
+ * The agent calls this directly with paths from user chat.
+ * Non-.md files and errors are skipped gracefully.
+ */
+export async function readLocalFiles(
+  paths: string[],
 ): Promise<ClassifiedItem[]> {
   const items: ClassifiedItem[] = [];
 
+  for (const filePath of paths) {
+    const item = await classifyFile(filePath);
+    if (item) items.push(item);
+  }
+
+  return items;
+}
+
+/**
+ * Read all .md files from a directory and return ClassifiedItems.
+ * Non-recursive — only reads files directly in the given directory.
+ * The agent calls this when the user says "process all files in /path/to/dir".
+ */
+export async function readLocalDirectory(
+  dirPath: string,
+): Promise<ClassifiedItem[]> {
   let entries: string[];
   try {
     entries = await readdir(dirPath);
@@ -90,45 +143,7 @@ export async function readAndClassifyLocalFiles(
   }
 
   const mdFiles = entries.filter((f) => f.endsWith('.md'));
+  const paths = mdFiles.map((f) => join(dirPath, f));
 
-  for (const filename of mdFiles) {
-    const filePath = join(dirPath, filename);
-    try {
-      const fileStat = await stat(filePath);
-      if (!fileStat.isFile()) continue;
-
-      const content = await readFile(filePath, 'utf-8');
-      const { body } = parseFrontmatter(content);
-      const title = extractTitle(content, filename);
-      const date = extractDate(content, filename, fileStat.mtime);
-      const snippet = body.replace(/^#.*\n+/, '').trim().slice(0, 200);
-
-      const topic = classifyTopic(title, snippet, filename);
-
-      items.push({
-        sourceId: filePath,
-        source: 'local',
-        topic,
-        tier: TOPIC_TIER_MAP[topic],
-        subject: title,
-        date,
-        from: filePath,
-        snippet,
-        body,
-      });
-    } catch (err) {
-      console.warn(`[local-reader] Failed to read ${filePath}:`, err);
-    }
-  }
-
-  return items;
-}
-
-/**
- * Resolve the local source directory.
- * Priority: explicit param > CURATOR_LOCAL_DIR env.
- */
-export function resolveLocalDir(dirPath?: string): string | null {
-  if (dirPath) return dirPath;
-  return process.env.CURATOR_LOCAL_DIR ?? null;
+  return readLocalFiles(paths);
 }

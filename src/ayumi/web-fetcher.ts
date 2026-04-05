@@ -1,15 +1,12 @@
 /**
  * Fetches and extracts article text from web URLs.
- * Used by the curator pipeline to ingest authored content (blog posts, articles).
+ * Used by the curator agent to ingest authored content (blog posts, articles)
+ * when the user provides URLs in chat.
  *
- * URL sources can come from:
- * - CURATOR_URLS env var (comma-separated)
- * - $VAULT_PATH/_identity/authored-sources.md (one URL per line)
- * - Direct function call with a URL list
+ * Primary interface: fetchUrls(urls) — accepts URLs directly from the agent.
+ * Optional: parseUrlList() can parse a markdown file of URLs (e.g. authored-sources.md).
  */
 
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import type { ClassifiedItem } from './extraction-pipeline.js';
 import { classifyTopic } from './extraction-pipeline.js';
 
@@ -86,36 +83,8 @@ export function extractBody(html: string): string {
 }
 
 /**
- * Load URL list from configured sources.
- * Priority: explicit urls param > CURATOR_URLS env > authored-sources.md in vault.
- */
-export async function loadUrlSources(
-  urls?: string[],
-  vaultPath?: string,
-): Promise<string[]> {
-  if (urls && urls.length > 0) return urls;
-
-  // Try CURATOR_URLS env var
-  const envUrls = process.env.CURATOR_URLS;
-  if (envUrls) {
-    return envUrls.split(',').map((u) => u.trim()).filter(Boolean);
-  }
-
-  // Try authored-sources.md in vault
-  if (vaultPath) {
-    try {
-      const content = await readFile(join(vaultPath, '_identity', 'authored-sources.md'), 'utf-8');
-      return parseUrlList(content);
-    } catch {
-      // File doesn't exist — no URLs
-    }
-  }
-
-  return [];
-}
-
-/**
  * Parse a markdown file containing URLs (one per line, optionally in a list).
+ * Useful for reading $VAULT_PATH/_identity/authored-sources.md.
  */
 export function parseUrlList(content: string): string[] {
   return content
@@ -158,9 +127,10 @@ export async function fetchUrl(url: string): Promise<WebFetchResult> {
 
 /**
  * Fetch multiple URLs and return ClassifiedItems.
+ * The agent calls this directly with URLs from user chat.
  * Errors on individual URLs are logged and skipped.
  */
-export async function fetchAndClassifyUrls(
+export async function fetchUrls(
   urls: string[],
 ): Promise<ClassifiedItem[]> {
   const items: ClassifiedItem[] = [];

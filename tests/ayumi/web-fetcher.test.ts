@@ -5,12 +5,8 @@ import {
   extractBody,
   stripTags,
   parseUrlList,
-  fetchAndClassifyUrls,
-  loadUrlSources,
+  fetchUrls,
 } from '../../src/ayumi/web-fetcher.js';
-import { mkdtemp, writeFile, rm, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 
 describe('extractTitle', () => {
   it('extracts from <title> tag', () => {
@@ -103,50 +99,7 @@ describe('parseUrlList', () => {
   });
 });
 
-describe('loadUrlSources', () => {
-  let tempDir: string;
-
-  beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'web-fetcher-test-'));
-    delete process.env.CURATOR_URLS;
-  });
-
-  afterEach(async () => {
-    delete process.env.CURATOR_URLS;
-    await rm(tempDir, { recursive: true, force: true });
-  });
-
-  it('returns explicit URLs when provided', async () => {
-    const result = await loadUrlSources(['https://a.com', 'https://b.com']);
-    expect(result).toEqual(['https://a.com', 'https://b.com']);
-  });
-
-  it('reads from CURATOR_URLS env var', async () => {
-    process.env.CURATOR_URLS = 'https://a.com,https://b.com';
-    const result = await loadUrlSources();
-    expect(result).toEqual(['https://a.com', 'https://b.com']);
-  });
-
-  it('reads from vault _identity/authored-sources.md', async () => {
-    await mkdir(join(tempDir, '_identity'), { recursive: true });
-    await writeFile(
-      join(tempDir, '_identity', 'authored-sources.md'),
-      '# Sources\n\n- https://blog.example.com/post-1\n- https://blog.example.com/post-2\n',
-    );
-    const result = await loadUrlSources(undefined, tempDir);
-    expect(result).toEqual([
-      'https://blog.example.com/post-1',
-      'https://blog.example.com/post-2',
-    ]);
-  });
-
-  it('returns empty when no sources configured', async () => {
-    const result = await loadUrlSources();
-    expect(result).toEqual([]);
-  });
-});
-
-describe('fetchAndClassifyUrls', () => {
+describe('fetchUrls', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn());
   });
@@ -172,7 +125,7 @@ describe('fetchAndClassifyUrls', () => {
       text: () => Promise.resolve(mockHtml),
     });
 
-    const result = await fetchAndClassifyUrls(['https://blog.example.com/tokyo-trip']);
+    const result = await fetchUrls(['https://blog.example.com/tokyo-trip']);
 
     expect(result).toHaveLength(1);
     expect(result[0].source).toBe('web');
@@ -180,6 +133,27 @@ describe('fetchAndClassifyUrls', () => {
     expect(result[0].topic).toBe('travel');
     expect(result[0].from).toBe('https://blog.example.com/tokyo-trip');
     expect(result[0].body).toContain('trip to Tokyo');
+  });
+
+  it('fetches multiple URLs', async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve('<html><head><title>Post A</title></head><body><article>Content A</article></body></html>'),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve('<html><head><title>Post B</title></head><body><article>Content B</article></body></html>'),
+      });
+
+    const result = await fetchUrls([
+      'https://example.com/a',
+      'https://example.com/b',
+    ]);
+
+    expect(result).toHaveLength(2);
+    expect(result[0].subject).toBe('Post A');
+    expect(result[1].subject).toBe('Post B');
   });
 
   it('skips URLs that fail to fetch', async () => {
@@ -190,7 +164,7 @@ describe('fetchAndClassifyUrls', () => {
         text: () => Promise.resolve('<html><head><title>Good</title></head><body><article>Content</article></body></html>'),
       });
 
-    const result = await fetchAndClassifyUrls([
+    const result = await fetchUrls([
       'https://bad.example.com/broken',
       'https://good.example.com/works',
     ]);
@@ -205,7 +179,12 @@ describe('fetchAndClassifyUrls', () => {
       status: 404,
     });
 
-    const result = await fetchAndClassifyUrls(['https://example.com/missing']);
+    const result = await fetchUrls(['https://example.com/missing']);
     expect(result).toHaveLength(0);
+  });
+
+  it('returns empty array for empty URL list', async () => {
+    const result = await fetchUrls([]);
+    expect(result).toEqual([]);
   });
 });
