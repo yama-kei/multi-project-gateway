@@ -10,7 +10,7 @@ export interface ExtractionOptions {
 
 export interface ClassifiedItem {
   sourceId: string;
-  source: 'gmail' | 'calendar';
+  source: 'gmail' | 'calendar' | 'web' | 'local';
   topic: TopicName;
   tier: 1 | 2 | 3;
   subject: string;
