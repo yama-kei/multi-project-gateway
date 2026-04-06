@@ -11,6 +11,17 @@ const mockDriveRead = vi.fn();
 const mockDriveSearch = vi.fn();
 const mockDriveCreateFolder = vi.fn();
 
+const fixedFolderMap = {
+  root: 'root-id',
+  topics: { work: 'work-id', travel: 'travel-id', finance: 'finance-id', health: 'health-id', social: 'social-id', hobbies: 'hobbies-id' },
+  meta: 'meta-id',
+};
+
+// Return a complete folder-map.json from driveSearch so ensureLifeContextFolders resolves immediately
+mockDriveSearch.mockResolvedValue({
+  files: [{ file_id: 'map-id', name: 'folder-map.json', mime_type: 'text/plain', size_bytes: 200, modified_at: null, web_view_link: null }],
+});
+
 vi.mock('../../src/broker-client.js', () => ({
   createBrokerClientFromEnv: () => ({
     health: vi.fn(),
@@ -22,16 +33,6 @@ vi.mock('../../src/broker-client.js', () => ({
     driveSearch: mockDriveSearch,
     driveCreateFolder: mockDriveCreateFolder,
     driveList: mockDriveList,
-  }),
-}));
-
-// Mock life-context-setup to return a fixed folder map (for Drive fallback)
-vi.mock('../../src/ayumi/life-context-setup.js', () => ({
-  TOPIC_FOLDERS: ['work', 'travel', 'finance', 'health', 'social', 'hobbies'],
-  ensureLifeContextFolders: vi.fn().mockResolvedValue({
-    root: 'root-id',
-    topics: { work: 'work-id', travel: 'travel-id', finance: 'finance-id', health: 'health-id', social: 'social-id', hobbies: 'hobbies-id' },
-    meta: 'meta-id',
   }),
 }));
 
@@ -54,14 +55,28 @@ const sampleManifest = {
 };
 
 function setupManifestInDrive(manifest: object | null) {
+  // driveRead is called for folder-map.json (by ensureLifeContextFolders) and for manifest
+  mockDriveRead.mockImplementation((fileId: string) => {
+    if (fileId === 'map-id') {
+      return Promise.resolve({
+        name: 'folder-map.json',
+        mime_type: 'text/plain',
+        content: JSON.stringify(fixedFolderMap),
+      });
+    }
+    if (fileId === 'manifest-id' && manifest) {
+      return Promise.resolve({
+        name: 'pending-review.json',
+        mime_type: 'text/plain',
+        content: JSON.stringify(manifest),
+      });
+    }
+    return Promise.reject(new Error(`Unknown file: ${fileId}`));
+  });
+
   if (manifest) {
     mockDriveList.mockResolvedValue({
       files: [{ file_id: 'manifest-id', name: 'pending-review.json', mime_type: 'text/plain', size_bytes: 100, modified_at: '2026-04-01T10:00:00Z', web_view_link: null }],
-    });
-    mockDriveRead.mockResolvedValue({
-      name: 'pending-review.json',
-      mime_type: 'text/plain',
-      content: JSON.stringify(manifest),
     });
   } else {
     mockDriveList.mockResolvedValue({ files: [] });
