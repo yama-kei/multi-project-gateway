@@ -19,9 +19,9 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createBrokerClient, type BrokerClient, type DriveFile } from '../broker-client.js';
-import type { TopicName } from './life-context-setup.js';
+import type { Topic } from 'ayumi';
 
-const AGENT_TOPIC_MAP: Record<string, TopicName> = {
+const AGENT_TOPIC_MAP: Record<string, Topic> = {
   'life-work': 'work',
   'life-travel': 'travel',
   'life-finance': 'finance',
@@ -30,7 +30,7 @@ const AGENT_TOPIC_MAP: Record<string, TopicName> = {
   'life-hobbies': 'hobbies',
 };
 
-const SENSITIVE_TOPICS: TopicName[] = ['finance', 'health'];
+const SENSITIVE_TOPICS: Topic[] = ['finance', 'health'];
 
 /** Files to load from each topic folder, in order. */
 const TOPIC_FILES = ['summary.md', 'timeline.md', 'entities.md'];
@@ -53,7 +53,7 @@ let folderCacheTime = 0;
 /**
  * Resolve the vault directory path for a topic.
  */
-function topicVaultPath(vaultPath: string, topic: TopicName): string {
+function topicVaultPath(vaultPath: string, topic: Topic): string {
   if (SENSITIVE_TOPICS.includes(topic)) {
     return join(vaultPath, 'topics', '_sensitive', topic);
   }
@@ -67,7 +67,7 @@ function topicVaultPath(vaultPath: string, topic: TopicName): string {
  */
 async function loadFromVault(
   vaultPath: string,
-  topic: TopicName,
+  topic: Topic,
   sizeBudget: number,
 ): Promise<string | null> {
   const dir = topicVaultPath(vaultPath, topic);
@@ -196,7 +196,7 @@ async function resolveTopicFolderId(client: BrokerClient, topic: string): Promis
 
 async function loadFromDrive(
   agentName: string,
-  topic: TopicName,
+  topic: Topic,
   sizeBudget: number,
 ): Promise<string | null> {
   const client = getOrCreateClient();
