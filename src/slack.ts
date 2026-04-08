@@ -188,10 +188,15 @@ export function createSlackBot(
     if (msg.text.startsWith('!')) {
       // Handle async !curator commands
       if (msg.text.match(/^!curator\b/i)) {
-        const { handleCuratorCommand } = await import('./ayumi/curator-commands.js');
-        const curatorResponse = await handleCuratorCommand(msg.text);
-        if (curatorResponse) {
-          await say({ text: curatorResponse, thread_ts: threadTs ?? msg.ts });
+        try {
+          const { handleCuratorCommand } = await import('./ayumi/curator-commands.js');
+          const curatorResponse = await handleCuratorCommand(msg.text);
+          if (curatorResponse) {
+            await say({ text: curatorResponse, thread_ts: threadTs ?? msg.ts });
+            return;
+          }
+        } catch {
+          await say({ text: 'Curator commands are not available (ayumi module not installed).', thread_ts: threadTs ?? msg.ts });
           return;
         }
       }

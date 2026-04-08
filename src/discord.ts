@@ -11,8 +11,6 @@ import { hasAllowedRole } from './role-check.js';
 import { createRateLimiter } from './rate-limiter.js';
 import { downloadAttachments, buildAttachmentPrompt, type AttachmentConfig, DEFAULT_ATTACHMENT_CONFIG } from './attachments.js';
 import type { AgentConfig } from './config.js';
-import { handleCuratorCommand } from './ayumi/curator-commands.js';
-
 // Ayumi life-context module — optional, gracefully absent
 let getAgentContext: (agentName: string) => Promise<string | null> = async () => null;
 try {
@@ -20,6 +18,15 @@ try {
   getAgentContext = ayumi.getAgentContext;
 } catch {
   // Ayumi module not available — no life context injection
+}
+
+// Ayumi curator commands — optional, gracefully absent
+let handleCuratorCommand: ((text: string) => Promise<string | null>) | null = null;
+try {
+  const curatorModule = await import('./ayumi/curator-commands.js');
+  handleCuratorCommand = curatorModule.handleCuratorCommand;
+} catch {
+  // Ayumi module not available — curator commands disabled
 }
 
 export function chunkMessage(text: string, limit: number): string[] {
@@ -176,7 +183,7 @@ export function handleCommand(
   }
 
   if (cmd === '!help') {
-    return [
+    const lines = [
       '**Gateway commands**',
       '`!ask <agent> <message>` — dispatch a message to a named agent',
       '`!<agent> <message>` — shorthand for `!ask`',
@@ -185,11 +192,16 @@ export function handleCommand(
       '`!restart <name>` — reset a session (fresh context, keeps worktree)',
       '`!kill <name>` — force-close a project session',
       '`!agents` — list available agents for the current project',
-      '`!curator pending` — list pending tier-3 topics for review',
-      '`!curator approve <topic|all>` — approve tier-3 content to vault',
-      '`!curator reject <topic>` — discard pending tier-3 content',
-      '`!help` — show this message',
-    ].join('\n');
+    ];
+    if (handleCuratorCommand) {
+      lines.push(
+        '`!curator pending` — list pending tier-3 topics for review',
+        '`!curator approve <topic|all>` — approve tier-3 content to vault',
+        '`!curator reject <topic>` — discard pending tier-3 content',
+      );
+    }
+    lines.push('`!help` — show this message');
+    return lines.join('\n');
   }
 
   return null;
@@ -271,9 +283,14 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
       if (resolved) {
         // Handle async !curator commands before sync handleCommand
         if (message.content.match(/^!curator\b/i)) {
-          const curatorResponse = await handleCuratorCommand(message.content);
-          if (curatorResponse) {
-            await message.channel.send(curatorResponse);
+          if (handleCuratorCommand) {
+            const curatorResponse = await handleCuratorCommand(message.content);
+            if (curatorResponse) {
+              await message.channel.send(curatorResponse);
+              return;
+            }
+          } else {
+            await message.channel.send('Curator commands are not available (ayumi module not installed).');
             return;
           }
         }
