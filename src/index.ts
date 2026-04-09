@@ -10,9 +10,13 @@ import { createAdapter } from './create-adapter.js';
 
 loadEnv();
 
-const token = process.env.DISCORD_BOT_TOKEN;
+const platform = process.env.CHAT_PLATFORM ?? 'discord';
+const token = platform === 'slack'
+  ? process.env.SLACK_BOT_TOKEN
+  : process.env.DISCORD_BOT_TOKEN;
 if (!token) {
-  console.error('DISCORD_BOT_TOKEN environment variable is required');
+  const envVar = platform === 'slack' ? 'SLACK_BOT_TOKEN' : 'DISCORD_BOT_TOKEN';
+  console.error(`${envVar} environment variable is required`);
   process.exit(1);
 }
 

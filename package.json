@@ -17,9 +17,12 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "ayumi": "github:yama-kei/ayumi#main",
+    "@slack/bolt": "^4.6.0",
     "discord.js": "^14.14.0",
     "dotenv": "^16.4.0"
+  },
+  "optionalDependencies": {
+    "ayumi": "github:yama-kei/ayumi#main"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

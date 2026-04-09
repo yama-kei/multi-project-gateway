@@ -113,9 +113,13 @@ function start() {
     loadEnv({ path: envPath });
   }
 
-  const token = process.env.DISCORD_BOT_TOKEN;
+  const platform = process.env.CHAT_PLATFORM ?? 'discord';
+  const token = platform === 'slack'
+    ? process.env.SLACK_BOT_TOKEN
+    : process.env.DISCORD_BOT_TOKEN;
   if (!token) {
-    console.error('DISCORD_BOT_TOKEN is not set. Run `mpg init` or set it in .env');
+    const envVar = platform === 'slack' ? 'SLACK_BOT_TOKEN' : 'DISCORD_BOT_TOKEN';
+    console.error(`${envVar} is not set. Run \`mpg init\` or set it in .env`);
     process.exit(1);
   }
 
