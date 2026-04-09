@@ -24,7 +24,6 @@ export const AYUMI_PRESETS: Record<string, AgentConfig> = {
       '- Social questions (friends, family, events, gatherings) → life-social',
       '- Hobby questions (sports, interests, activities) → life-hobbies',
       '- Ingestion requests (add this URL, import my blog, process this article, ingest content) → life-curator',
-      '- "What have I written about X?" → life-curator (knows all authored content)',
       '- Ambiguous or multi-topic → dispatch to all relevant agents',
       '',
       'Always pass the original question to the target agent. Do NOT rephrase or summarize.',
@@ -52,12 +51,6 @@ export const AYUMI_PRESETS: Record<string, AgentConfig> = {
       'To dispatch work to another agent, write HANDOFF @agent: followed by the task.',
       'To reference another agent conversationally, say "the travel agent" or "the router" — never write @agent outside of a HANDOFF command.',
     ].join('\n'),
-    contextPaths: [
-      '/life-context/work/summary.md',
-      '/life-context/work/timeline.md',
-      '/life-context/work/entities.md',
-      '/life-context/work/authored.md',
-    ],
   },
 
   'life-travel': {
@@ -78,12 +71,6 @@ export const AYUMI_PRESETS: Record<string, AgentConfig> = {
       'To dispatch work to another agent, write HANDOFF @agent: followed by the task.',
       'To reference another agent conversationally, say "the work agent" or "the router" — never write @agent outside of a HANDOFF command.',
     ].join('\n'),
-    contextPaths: [
-      '/life-context/travel/summary.md',
-      '/life-context/travel/timeline.md',
-      '/life-context/travel/entities.md',
-      '/life-context/travel/authored.md',
-    ],
   },
 
   'life-social': {
@@ -104,12 +91,6 @@ export const AYUMI_PRESETS: Record<string, AgentConfig> = {
       'To dispatch work to another agent, write HANDOFF @agent: followed by the task.',
       'To reference another agent conversationally, say "the work agent" or "the router" — never write @agent outside of a HANDOFF command.',
     ].join('\n'),
-    contextPaths: [
-      '/life-context/social/summary.md',
-      '/life-context/social/timeline.md',
-      '/life-context/social/entities.md',
-      '/life-context/social/authored.md',
-    ],
   },
 
   'life-hobbies': {
@@ -130,12 +111,6 @@ export const AYUMI_PRESETS: Record<string, AgentConfig> = {
       'To dispatch work to another agent, write HANDOFF @agent: followed by the task.',
       'To reference another agent conversationally, say "the work agent" or "the router" — never write @agent outside of a HANDOFF command.',
     ].join('\n'),
-    contextPaths: [
-      '/life-context/hobbies/summary.md',
-      '/life-context/hobbies/timeline.md',
-      '/life-context/hobbies/entities.md',
-      '/life-context/hobbies/authored.md',
-    ],
   },
 
   'life-finance': {
@@ -157,10 +132,6 @@ export const AYUMI_PRESETS: Record<string, AgentConfig> = {
       'To dispatch work to another agent, write HANDOFF @agent: followed by the task.',
       'To reference another agent conversationally, say "the work agent" or "the router" — never write @agent outside of a HANDOFF command.',
     ].join('\n'),
-    contextPaths: [
-      '/life-context/finance/summary.md',
-      '/life-context/finance/authored.md',
-    ],
   },
 
   'life-health': {
@@ -182,10 +153,6 @@ export const AYUMI_PRESETS: Record<string, AgentConfig> = {
       'To dispatch work to another agent, write HANDOFF @agent: followed by the task.',
       'To reference another agent conversationally, say "the work agent" or "the router" — never write @agent outside of a HANDOFF command.',
     ].join('\n'),
-    contextPaths: [
-      '/life-context/health/summary.md',
-      '/life-context/health/authored.md',
-    ],
   },
 
   'life-curator': {
@@ -318,13 +285,5 @@ export const AYUMI_PRESETS: Record<string, AgentConfig> = {
       '',
       'Error handling: Never silently fail. If a URL cannot be fetched or content cannot be extracted, report the specific issue and ask how to proceed.',
     ].join('\n'),
-    contextPaths: [
-      'topics/work/authored.md',
-      'topics/travel/authored.md',
-      'topics/_sensitive/finance/authored.md',
-      'topics/_sensitive/health/authored.md',
-      'topics/social/authored.md',
-      'topics/hobbies/authored.md',
-    ],
   },
 };

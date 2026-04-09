@@ -12,11 +12,12 @@
  *   life-finance → vault/topics/_sensitive/finance/
  *   life-health  → vault/topics/_sensitive/health/
  *
- * Files read: summary.md, timeline.md, entities.md (when they exist).
- * Missing files are skipped gracefully — a new or empty vault still works.
+ * Files read: all .md files in the topic directory (sorted alphabetically).
+ * Also loads _identity/writing-style.md for every topic agent.
+ * Missing files/directories are skipped gracefully — a new or empty vault still works.
  */
 
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createBrokerClient, type BrokerClient, type DriveFile } from '../broker-client.js';
 import type { Topic } from 'ayumi';
@@ -32,11 +33,8 @@ const AGENT_TOPIC_MAP: Record<string, Topic> = {
 
 const SENSITIVE_TOPICS: Topic[] = ['finance', 'health'];
 
-/** Files to load from each topic folder, in order. */
-const TOPIC_FILES = ['summary.md', 'timeline.md', 'entities.md'];
-
 /** Maximum bytes of context content per topic before truncation. */
-export const DEFAULT_TOPIC_SIZE_BUDGET = 8 * 1024; // 8 KB
+export const DEFAULT_TOPIC_SIZE_BUDGET = 24 * 1024; // 24 KB
 
 /** Re-resolve folder IDs after this many milliseconds (5 minutes). */
 const FOLDER_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -62,8 +60,9 @@ function topicVaultPath(vaultPath: string, topic: Topic): string {
 
 /**
  * Load life-context from the local vault filesystem.
- * Reads summary.md, timeline.md, entities.md from the topic directory.
- * Missing files are skipped gracefully.
+ * Reads all .md files from the topic directory (sorted alphabetically).
+ * Also appends _identity/writing-style.md if it exists.
+ * Missing directories are handled gracefully.
  */
 async function loadFromVault(
   vaultPath: string,
@@ -71,11 +70,24 @@ async function loadFromVault(
   sizeBudget: number,
 ): Promise<string | null> {
   const dir = topicVaultPath(vaultPath, topic);
+
+  // Dynamically discover all .md files in the topic directory
+  let mdFileNames: string[];
+  try {
+    const entries = await readdir(dir);
+    mdFileNames = entries.filter((f) => f.endsWith('.md')).sort();
+  } catch {
+    // Directory doesn't exist — skip gracefully
+    return null;
+  }
+
+  if (mdFileNames.length === 0) return null;
+
   const sections: string[] = [];
   let totalSize = 0;
   let filesIncluded = 0;
 
-  for (const fileName of TOPIC_FILES) {
+  for (const fileName of mdFileNames) {
     try {
       const content = await readFile(join(dir, fileName), 'utf-8');
       // Strip frontmatter for context injection (agents don't need YAML metadata)
@@ -84,7 +96,7 @@ async function loadFromVault(
       const sectionSize = new TextEncoder().encode(section).length;
 
       if (totalSize + sectionSize > sizeBudget && sections.length > 0) {
-        const remaining = TOPIC_FILES.length - filesIncluded;
+        const remaining = mdFileNames.length - filesIncluded;
         if (remaining > 0) {
           sections.push(`[truncated: ${remaining} file${remaining > 1 ? 's' : ''} omitted due to size budget]`);
         }
@@ -95,9 +107,23 @@ async function loadFromVault(
       totalSize += sectionSize;
       filesIncluded++;
     } catch {
-      // File doesn't exist — skip gracefully
       continue;
     }
+  }
+
+  // Append _identity/writing-style.md if it exists
+  try {
+    const writingStylePath = join(vaultPath, '_identity', 'writing-style.md');
+    const content = await readFile(writingStylePath, 'utf-8');
+    const stripped = content.replace(/^---[\s\S]*?---\n*/, '');
+    const section = `## writing-style.md\n${stripped}`;
+    const sectionSize = new TextEncoder().encode(section).length;
+
+    if (totalSize + sectionSize <= sizeBudget || sections.length === 0) {
+      sections.push(section);
+    }
+  } catch {
+    // writing-style.md doesn't exist — skip gracefully
   }
 
   if (sections.length === 0) return null;

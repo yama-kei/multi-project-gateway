@@ -4,7 +4,6 @@ import { isValidLogLevel, type LogLevel } from './logger.js';
 export interface AgentConfig {
   role: string;
   prompt: string;
-  contextPaths?: string[];
   timeoutMs?: number;
 }
 
