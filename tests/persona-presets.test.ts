@@ -84,15 +84,8 @@ describe('persona-presets', () => {
   describe('life-curator', () => {
     const curator = PERSONA_PRESETS['life-curator'];
 
-    it('has contextPaths with all 6 topic authored.md files', () => {
-      expect(curator.contextPaths).toEqual([
-        'topics/work/authored.md',
-        'topics/travel/authored.md',
-        'topics/_sensitive/finance/authored.md',
-        'topics/_sensitive/health/authored.md',
-        'topics/social/authored.md',
-        'topics/hobbies/authored.md',
-      ]);
+    it('does not have contextPaths (dead code removed)', () => {
+      expect(curator).not.toHaveProperty('contextPaths');
     });
 
     it('references !curator commands for approval flow', () => {

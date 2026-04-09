@@ -109,11 +109,12 @@ describe('loadLifeContext — vault path', () => {
     expect(result).toBeNull();
   });
 
-  it('loads files from local vault when VAULT_PATH is set', async () => {
+  it('loads all .md files from local vault when VAULT_PATH is set', async () => {
     process.env.VAULT_PATH = tempDir;
     await setupVaultTopic('work', {
       'summary.md': '---\ntier: 2\n---\n# Work Summary\n\nProject updates.',
       'timeline.md': '---\ntier: 2\n---\n# Timeline\n\n- 2026-03-15 Meeting',
+      'authored.md': '# Authored\n\nBlog post about work.',
     });
 
     const result = await loadLifeContext('life-work');
@@ -123,6 +124,8 @@ describe('loadLifeContext — vault path', () => {
     expect(result).toContain('Project updates.');
     expect(result).toContain('## timeline.md');
     expect(result).toContain('Meeting');
+    expect(result).toContain('## authored.md');
+    expect(result).toContain('Blog post about work.');
     expect(result).toContain('--- END LIFE CONTEXT DATA ---');
   });
 
@@ -139,9 +142,8 @@ describe('loadLifeContext — vault path', () => {
     expect(result).toContain('Content.');
   });
 
-  it('skips missing files gracefully', async () => {
+  it('loads only the files that exist in the directory', async () => {
     process.env.VAULT_PATH = tempDir;
-    // Only summary.md exists — timeline.md and entities.md are missing
     await setupVaultTopic('work', {
       'summary.md': '# Work\n\nJust a summary.',
     });
@@ -149,8 +151,8 @@ describe('loadLifeContext — vault path', () => {
     const result = await loadLifeContext('life-work');
 
     expect(result).toContain('Just a summary.');
-    expect(result).not.toContain('## timeline.md');
-    expect(result).not.toContain('## entities.md');
+    // Only summary.md exists in the directory
+    expect(result).toContain('## summary.md');
   });
 
   it('returns null when topic directory does not exist', async () => {
@@ -171,21 +173,85 @@ describe('loadLifeContext — vault path', () => {
     expect(result).toContain('Abstract overview.');
   });
 
+  it('reads all .md files dynamically, not just hardcoded names', async () => {
+    process.env.VAULT_PATH = tempDir;
+    await setupVaultTopic('work', {
+      'summary.md': '# Summary\nOverview.',
+      'authored.md': '# Authored\nBlog posts.',
+      'weekly-report.md': '# Weekly\nReport data.',
+    });
+
+    const result = await loadLifeContext('life-work');
+
+    expect(result).toContain('## summary.md');
+    expect(result).toContain('## authored.md');
+    expect(result).toContain('## weekly-report.md');
+  });
+
+  it('loads _identity/writing-style.md and appends to context', async () => {
+    process.env.VAULT_PATH = tempDir;
+    await setupVaultTopic('work', {
+      'summary.md': '# Summary\nWork overview.',
+    });
+    // Create _identity/writing-style.md
+    await mkdir(join(tempDir, '_identity'), { recursive: true });
+    await writeFile(join(tempDir, '_identity', 'writing-style.md'), '---\ntype: identity\n---\n# Writing Style\n\nCasual, concise.');
+
+    const result = await loadLifeContext('life-work');
+
+    expect(result).toContain('## summary.md');
+    expect(result).toContain('## writing-style.md');
+    expect(result).toContain('Casual, concise.');
+    // Frontmatter should be stripped
+    expect(result).not.toContain('type: identity');
+  });
+
+  it('works without _identity/writing-style.md', async () => {
+    process.env.VAULT_PATH = tempDir;
+    await setupVaultTopic('work', {
+      'summary.md': '# Summary\nWork overview.',
+    });
+    // No _identity directory created
+
+    const result = await loadLifeContext('life-work');
+
+    expect(result).toContain('## summary.md');
+    expect(result).not.toContain('writing-style');
+  });
+
+  it('sorts vault files alphabetically', async () => {
+    process.env.VAULT_PATH = tempDir;
+    await setupVaultTopic('hobbies', {
+      'cycling.md': '# Cycling\nRoad biking.',
+      'authored.md': '# Authored\nBlog posts.',
+      'summary.md': '# Summary\nOverview.',
+    });
+
+    const result = await loadLifeContext('life-hobbies');
+
+    // Alphabetical: authored.md, cycling.md, summary.md
+    const authoredIdx = result!.indexOf('## authored.md');
+    const cyclingIdx = result!.indexOf('## cycling.md');
+    const summaryIdx = result!.indexOf('## summary.md');
+    expect(authoredIdx).toBeLessThan(cyclingIdx);
+    expect(cyclingIdx).toBeLessThan(summaryIdx);
+  });
+
   it('applies size budget when reading from vault', async () => {
     process.env.VAULT_PATH = tempDir;
     const largeContent = 'x'.repeat(200);
     await setupVaultTopic('work', {
-      'summary.md': `# Summary\n${largeContent}`,
-      'timeline.md': `# Timeline\n${largeContent}`,
-      'entities.md': `# Entities\n${largeContent}`,
+      'a-summary.md': `# Summary\n${largeContent}`,
+      'b-timeline.md': `# Timeline\n${largeContent}`,
+      'c-entities.md': `# Entities\n${largeContent}`,
     });
 
-    // Budget fits ~2 files
+    // Budget fits ~2 files (alphabetical order: a-summary, b-timeline, c-entities)
     const result = await loadLifeContext('life-work', 500);
 
-    expect(result).toContain('## summary.md');
-    expect(result).toContain('## timeline.md');
-    expect(result).not.toContain('## entities.md');
+    expect(result).toContain('## a-summary.md');
+    expect(result).toContain('## b-timeline.md');
+    expect(result).not.toContain('## c-entities.md');
     expect(result).toContain('[truncated');
   });
 });
