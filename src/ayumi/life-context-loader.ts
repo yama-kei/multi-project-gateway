@@ -295,6 +295,34 @@ async function loadFromDrive(agentName: string, topic: Topic): Promise<string | 
   }
 }
 
+/**
+ * Build `--allowed-tools` patterns that scope Read/Grep/Glob to the agent's
+ * topic directory. Returns null for non-life-context agents or when
+ * VAULT_PATH is unset (there is nothing to scope to).
+ *
+ * Replaces any gateway-default allowed-tools list for the target agent so
+ * that, e.g., @life-hobbies cannot Read vault/topics/_sensitive/finance/ or
+ * any path outside vault/topics/hobbies/.
+ */
+export function getLifeContextToolArgs(agentName: string): string[] | null {
+  const topic = AGENT_TOPIC_MAP[agentName];
+  if (!topic) return null;
+
+  const vaultPath = process.env.VAULT_PATH;
+  if (!vaultPath) return null;
+
+  const topicRoot = topicVaultPath(vaultPath, topic);
+  const writingStyle = join(vaultPath, '_identity', 'writing-style.md');
+
+  return [
+    '--allowed-tools',
+    `Read(${topicRoot}/**)`,
+    `Grep(${topicRoot}/**)`,
+    `Glob(${topicRoot}/**)`,
+    `Read(${writingStyle})`,
+  ];
+}
+
 /** Reset module-level state (for testing). */
 export function _resetForTest(): void {
   brokerClient = null;

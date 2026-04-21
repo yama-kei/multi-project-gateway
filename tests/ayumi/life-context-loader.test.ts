@@ -401,3 +401,87 @@ describe('buildVaultIndex — local filesystem', () => {
     expect(index!.files.map((f) => f.name)).toContain('summary.md');
   });
 });
+
+// ---- getLifeContextToolArgs tests ----
+
+describe('getLifeContextToolArgs', () => {
+  it('returns null for non-life-context agents', () => {
+    process.env.VAULT_PATH = '/data/vault';
+    expect(getLifeContextToolArgs('life-curator')).toBeNull();
+    expect(getLifeContextToolArgs('pm')).toBeNull();
+    expect(getLifeContextToolArgs('unknown')).toBeNull();
+  });
+
+  it('returns null when VAULT_PATH is not set', () => {
+    delete process.env.VAULT_PATH;
+    expect(getLifeContextToolArgs('life-hobbies')).toBeNull();
+  });
+
+  it('emits --allowed-tools scoped to the hobbies topic root', () => {
+    process.env.VAULT_PATH = '/data/vault';
+    const args = getLifeContextToolArgs('life-hobbies');
+    expect(args).toEqual([
+      '--allowed-tools',
+      'Read(/data/vault/topics/hobbies/**)',
+      'Grep(/data/vault/topics/hobbies/**)',
+      'Glob(/data/vault/topics/hobbies/**)',
+      'Read(/data/vault/_identity/writing-style.md)',
+    ]);
+  });
+
+  it('scopes sensitive topics to topics/_sensitive/<topic>/', () => {
+    process.env.VAULT_PATH = '/data/vault';
+    const args = getLifeContextToolArgs('life-finance');
+    expect(args).toContain('Read(/data/vault/topics/_sensitive/finance/**)');
+    expect(args).toContain('Grep(/data/vault/topics/_sensitive/finance/**)');
+  });
+
+  it('isolates sensitive topics from each other and from tier-1/2 topics', () => {
+    process.env.VAULT_PATH = '/data/vault';
+    const finance = getLifeContextToolArgs('life-finance')!.join(' ');
+    // Finance agent must not reach health
+    expect(finance).not.toContain('/_sensitive/health');
+    // Finance agent must not reach non-sensitive topics
+    expect(finance).not.toContain('/topics/work');
+    expect(finance).not.toContain('/topics/hobbies');
+    expect(finance).not.toContain('/topics/travel');
+    expect(finance).not.toContain('/topics/social');
+  });
+
+  it('isolates non-sensitive topics from sensitive topics and siblings', () => {
+    process.env.VAULT_PATH = '/data/vault';
+    const hobbies = getLifeContextToolArgs('life-hobbies')!.join(' ');
+    expect(hobbies).not.toContain('/_sensitive/');
+    expect(hobbies).not.toContain('/topics/work');
+    expect(hobbies).not.toContain('/topics/travel');
+    expect(hobbies).not.toContain('/topics/social');
+  });
+
+  it('does not grant unscoped Read or Grep', () => {
+    process.env.VAULT_PATH = '/data/vault';
+    const args = getLifeContextToolArgs('life-hobbies')!;
+    // Each pattern-bearing tool entry must include the path scope
+    for (const entry of args) {
+      if (entry === '--allowed-tools') continue;
+      if (/^(Read|Grep|Glob)$/.test(entry)) {
+        throw new Error(`unscoped tool granted: ${entry}`);
+      }
+    }
+  });
+
+  it('emits patterns for all six life-* topic agents', () => {
+    process.env.VAULT_PATH = '/data/vault';
+    for (const [agent, expectedPath] of [
+      ['life-work', '/data/vault/topics/work/'],
+      ['life-travel', '/data/vault/topics/travel/'],
+      ['life-social', '/data/vault/topics/social/'],
+      ['life-hobbies', '/data/vault/topics/hobbies/'],
+      ['life-finance', '/data/vault/topics/_sensitive/finance/'],
+      ['life-health', '/data/vault/topics/_sensitive/health/'],
+    ] as const) {
+      const args = getLifeContextToolArgs(agent);
+      expect(args, `agent ${agent}`).not.toBeNull();
+      expect(args!.join(' '), `agent ${agent}`).toContain(`Read(${expectedPath}**)`);
+    }
+  });
+});
