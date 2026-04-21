@@ -15,8 +15,9 @@
  * The loader emits a compact *index* of the topic's vault: summary.md body
  * (if present), a file listing with sizes and frontmatter descriptions, and
  * the _identity/writing-style.md body. The agent fetches individual files
- * on demand via the Read/Grep/Glob tools, which the Discord/Slack adapters
- * scope to the topic root via getLifeContextToolArgs().
+ * on demand via the Read/Grep/Glob tools. The Discord/Slack adapters spawn
+ * the CLI from the topic directory (see getLifeContextRunArgs) so the
+ * default CWD-scoped permission model confines reads to that topic.
  */
 
 import { readFile, readdir } from 'node:fs/promises';
@@ -295,16 +296,30 @@ async function loadFromDrive(agentName: string, topic: Topic): Promise<string | 
   }
 }
 
+export interface LifeContextRunArgs {
+  /** CWD to spawn Claude from — the topic directory. */
+  cwd: string;
+  /** Extra CLI args, notably `--add-dir` to grant writing-style.md access. */
+  extraArgs: string[];
+}
+
 /**
- * Build `--allowed-tools` patterns that scope Read/Grep/Glob to the agent's
- * topic directory. Returns null for non-life-context agents or when
- * VAULT_PATH is unset (there is nothing to scope to).
+ * Build the CLI spawn parameters that scope a topic agent's filesystem
+ * access to its topic directory. Returns null for non-life-context agents
+ * or when VAULT_PATH is unset.
  *
- * Replaces any gateway-default allowed-tools list for the target agent so
- * that, e.g., @life-hobbies cannot Read vault/topics/_sensitive/finance/ or
- * any path outside vault/topics/hobbies/.
+ * The Claude CLI scopes Read/Grep/Glob to the process CWD by default (when
+ * permission checks are enforced). We spawn from the topic directory so
+ * the agent cannot read sibling topics — e.g. @life-hobbies cannot read
+ * vault/topics/_sensitive/finance/ or vault/topics/work/. We then add
+ * vault/_identity/ via --add-dir so the agent can read writing-style.md.
+ *
+ * Note: --allowed-tools path patterns were tried first but the CLI's
+ * permission matcher does not restrict CWD-scoped reads via --allowed-tools
+ * (it's an extension mechanism for tools like Bash(git *), not a restrictor
+ * for filesystem reads). CWD scoping is the enforceable mechanism.
  */
-export function getLifeContextToolArgs(agentName: string): string[] | null {
+export function getLifeContextRunArgs(agentName: string): LifeContextRunArgs | null {
   const topic = AGENT_TOPIC_MAP[agentName];
   if (!topic) return null;
 
@@ -312,15 +327,12 @@ export function getLifeContextToolArgs(agentName: string): string[] | null {
   if (!vaultPath) return null;
 
   const topicRoot = topicVaultPath(vaultPath, topic);
-  const writingStyle = join(vaultPath, '_identity', 'writing-style.md');
+  const identityDir = join(vaultPath, '_identity');
 
-  return [
-    '--allowed-tools',
-    `Read(${topicRoot}/**)`,
-    `Grep(${topicRoot}/**)`,
-    `Glob(${topicRoot}/**)`,
-    `Read(${writingStyle})`,
-  ];
+  return {
+    cwd: topicRoot,
+    extraArgs: ['--add-dir', identityDir],
+  };
 }
 
 /** Reset module-level state (for testing). */

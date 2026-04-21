@@ -13,26 +13,35 @@ import { downloadAttachments, buildAttachmentPrompt, type AttachmentConfig, DEFA
 import type { AgentConfig } from './config.js';
 // Ayumi life-context module — optional, gracefully absent
 let getAgentContext: (agentName: string) => Promise<string | null> = async () => null;
-let getLifeContextToolArgs: (agentName: string) => string[] | null = () => null;
+interface LifeContextRunArgs { cwd: string; extraArgs: string[] }
+let getLifeContextRunArgs: (agentName: string) => LifeContextRunArgs | null = () => null;
 try {
   const ayumi = await import('./ayumi/index.js');
   getAgentContext = ayumi.getAgentContext;
-  getLifeContextToolArgs = ayumi.getLifeContextToolArgs;
+  getLifeContextRunArgs = ayumi.getLifeContextRunArgs;
 } catch {
   // Ayumi module not available — no life context injection
 }
 
 /**
- * Resolve the CLI extraArgs for a send: if the agent is a life-context
- * topic agent, its topic-scoped --allowed-tools patterns replace the
- * gateway-default tool list. Otherwise the gateway default is used.
+ * Resolve the CLI spawn parameters (cwd + extraArgs) for a send. For a
+ * life-context topic agent, the CWD is switched to the topic directory
+ * and --add-dir is added so the agent can still read _identity/. For all
+ * other agents, the project cwd and gateway-default tool args are used.
  */
-function resolveExtraArgs(agentName: string | undefined, defaultArgs: string[]): string[] | undefined {
+function resolveLifeContextRun(
+  agentName: string | undefined,
+  defaultCwd: string,
+  defaultExtraArgs: string[],
+): { cwd: string; extraArgs: string[] | undefined } {
   if (agentName) {
-    const scoped = getLifeContextToolArgs(agentName);
-    if (scoped) return scoped;
+    const run = getLifeContextRunArgs(agentName);
+    if (run) return { cwd: run.cwd, extraArgs: run.extraArgs };
   }
-  return defaultArgs.length > 0 ? defaultArgs : undefined;
+  return {
+    cwd: defaultCwd,
+    extraArgs: defaultExtraArgs.length > 0 ? defaultExtraArgs : undefined,
+  };
 }
 
 // Ayumi curator commands — optional, gracefully absent
@@ -495,15 +504,16 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
         return;
       }
 
+      const primarySpawn = resolveLifeContextRun(activeAgent?.agentName, resolved.directory, toolArgs);
       const result = await sessionManager.send(
         sessionKey,
-        resolved.directory,
+        primarySpawn.cwd,
         userPrompt,
         {
           worktree: replyChannel.isThread() ? true : undefined,
           systemPrompt,
           timeoutMs: activeAgent ? resolveAgentTimeout(activeAgent.agent, config.defaults) : config.defaults.agentTimeoutMs,
-          extraArgs: resolveExtraArgs(activeAgent?.agentName, toolArgs),
+          extraArgs: primarySpawn.extraArgs,
           guildId: message.guildId ?? undefined,
         },
       );
@@ -571,11 +581,12 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
               const key = `${threadId}:${handoff.agentName}`;
               const sysPrompt = await buildSystemPrompt(handoff.agentName, handoff.agent);
               const fanOutTimeout = Math.min(resolveAgentTimeout(handoff.agent, config.defaults), 5 * 60 * 1000);
+              const spawn = resolveLifeContextRun(handoff.agentName, resolved.directory, toolArgs);
               return {
                 agentName: handoff.agentName,
                 result: await sessionManager.send(
-                  key, resolved.directory, responseText,
-                  { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: sysPrompt, timeoutMs: fanOutTimeout, extraArgs: resolveExtraArgs(handoff.agentName, toolArgs) },
+                  key, spawn.cwd, responseText,
+                  { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: sysPrompt, timeoutMs: fanOutTimeout, extraArgs: spawn.extraArgs },
                 ),
               };
             });
@@ -608,9 +619,10 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
 
             let synthesisResult;
             try {
+              const synthSpawn = resolveLifeContextRun(currentAgentName ?? undefined, resolved.directory, toolArgs);
               synthesisResult = await sessionManager.send(
-                originKey, resolved.directory, synthesisPrompt,
-                { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: originSysPrompt, timeoutMs: originAgent ? resolveAgentTimeout(originAgent, config.defaults) : config.defaults.agentTimeoutMs, extraArgs: resolveExtraArgs(currentAgentName ?? undefined, toolArgs) },
+                originKey, synthSpawn.cwd, synthesisPrompt,
+                { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: originSysPrompt, timeoutMs: originAgent ? resolveAgentTimeout(originAgent, config.defaults) : config.defaults.agentTimeoutMs, extraArgs: synthSpawn.extraArgs },
               );
             } catch (synthErr) {
               const msg = synthErr instanceof Error ? synthErr.message : String(synthErr);
@@ -672,11 +684,12 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
 
           let handoffResult;
           try {
+            const handoffSpawn = resolveLifeContextRun(handoff.agentName, resolved.directory, toolArgs);
             handoffResult = await sessionManager.send(
               handoffKey,
-              resolved.directory,
+              handoffSpawn.cwd,
               responseText,
-              { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: handoffPrompt, timeoutMs: resolveAgentTimeout(handoff.agent, config.defaults), extraArgs: resolveExtraArgs(handoff.agentName, toolArgs) },
+              { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: handoffPrompt, timeoutMs: resolveAgentTimeout(handoff.agent, config.defaults), extraArgs: handoffSpawn.extraArgs },
             );
           } catch (handoffErr) {
             const msg = handoffErr instanceof Error ? handoffErr.message : String(handoffErr);
