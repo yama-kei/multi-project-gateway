@@ -13,11 +13,26 @@ import { handleCommand } from './discord.js';
 
 // Ayumi life-context module — optional, gracefully absent
 let getAgentContext: (agentName: string) => Promise<string | null> = async () => null;
+let getLifeContextToolArgs: (agentName: string) => string[] | null = () => null;
 try {
   const ayumi = await import('./ayumi/index.js');
   getAgentContext = ayumi.getAgentContext;
+  getLifeContextToolArgs = ayumi.getLifeContextToolArgs;
 } catch {
   // Ayumi module not available — no life context injection
+}
+
+/**
+ * Resolve the CLI extraArgs for a send: if the agent is a life-context
+ * topic agent, its topic-scoped --allowed-tools patterns replace the
+ * gateway-default tool list. Otherwise the gateway default is used.
+ */
+function resolveExtraArgs(agentName: string | undefined, defaultArgs: string[]): string[] | undefined {
+  if (agentName) {
+    const scoped = getLifeContextToolArgs(agentName);
+    if (scoped) return scoped;
+  }
+  return defaultArgs.length > 0 ? defaultArgs : undefined;
 }
 
 /** Slack message text limit (~4000 chars, with margin). */
@@ -316,7 +331,7 @@ export function createSlackBot(
           worktree: isThread ? true : undefined,
           systemPrompt,
           timeoutMs: activeAgent ? resolveAgentTimeout(activeAgent.agent, config.defaults) : config.defaults.agentTimeoutMs,
-          extraArgs: toolArgs.length > 0 ? toolArgs : undefined,
+          extraArgs: resolveExtraArgs(activeAgent?.agentName, toolArgs),
         },
       );
 
@@ -396,7 +411,7 @@ export function createSlackBot(
                 agentName: handoff.agentName,
                 result: await sessionManager.send(
                   key, resolved.directory, responseText,
-                  { worktree: true, systemPrompt: sysPrompt, timeoutMs: fanOutTimeout, extraArgs: toolArgs.length > 0 ? toolArgs : undefined },
+                  { worktree: true, systemPrompt: sysPrompt, timeoutMs: fanOutTimeout, extraArgs: resolveExtraArgs(handoff.agentName, toolArgs) },
                 ),
               };
             });
@@ -428,7 +443,7 @@ export function createSlackBot(
             try {
               synthesisResult = await sessionManager.send(
                 originKey, resolved.directory, synthesisPrompt,
-                { worktree: true, systemPrompt: originSysPrompt, timeoutMs: originAgent ? resolveAgentTimeout(originAgent, config.defaults) : config.defaults.agentTimeoutMs, extraArgs: toolArgs.length > 0 ? toolArgs : undefined },
+                { worktree: true, systemPrompt: originSysPrompt, timeoutMs: originAgent ? resolveAgentTimeout(originAgent, config.defaults) : config.defaults.agentTimeoutMs, extraArgs: resolveExtraArgs(currentAgentName ?? undefined, toolArgs) },
               );
             } catch (synthErr) {
               const errMsg = synthErr instanceof Error ? synthErr.message : String(synthErr);
@@ -493,7 +508,7 @@ export function createSlackBot(
               handoffKey,
               resolved.directory,
               responseText,
-              { worktree: true, systemPrompt: handoffPrompt, timeoutMs: resolveAgentTimeout(handoff.agent, config.defaults), extraArgs: toolArgs.length > 0 ? toolArgs : undefined },
+              { worktree: true, systemPrompt: handoffPrompt, timeoutMs: resolveAgentTimeout(handoff.agent, config.defaults), extraArgs: resolveExtraArgs(handoff.agentName, toolArgs) },
             );
           } catch (handoffErr) {
             const errMsg = handoffErr instanceof Error ? handoffErr.message : String(handoffErr);
