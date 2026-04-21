@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { parseClaudeJsonOutput, buildClaudeArgs, buildToolArgs, friendlyError, runClaude } from '../src/claude-cli.js';
+import { parseClaudeJsonOutput, buildClaudeArgs, buildToolArgs, composeClaudeArgs, friendlyError, runClaude } from '../src/claude-cli.js';
 
 describe('parseClaudeJsonOutput', () => {
   it('extracts result text and session_id from JSON output', () => {
@@ -284,5 +284,58 @@ describe('runClaude timeout', () => {
     const result = runClaude('/tmp', [], 'test', undefined, undefined, 200);
     await expect(result).rejects.toThrow(/timed out/i);
   }, 5_000);
+});
+
+describe('composeClaudeArgs', () => {
+  it('returns a copy of defaults when extras is undefined', () => {
+    const defaults = ['--output-format', 'json'];
+    const result = composeClaudeArgs(defaults, undefined);
+    expect(result).toEqual(['--output-format', 'json']);
+    expect(result).not.toBe(defaults);
+  });
+
+  it('returns a copy of defaults when extras is empty', () => {
+    const defaults = ['--output-format', 'json'];
+    expect(composeClaudeArgs(defaults, [])).toEqual(['--output-format', 'json']);
+  });
+
+  it('concatenates defaults + extras when extras has no permission flags', () => {
+    expect(composeClaudeArgs(['--output-format', 'json'], ['--model', 'opus']))
+      .toEqual(['--output-format', 'json', '--model', 'opus']);
+  });
+
+  it('strips --dangerously-skip-permissions when extras supplies --allowed-tools', () => {
+    const defaults = ['--dangerously-skip-permissions', '--output-format', 'json'];
+    const extras = ['--allowed-tools', 'Read(/vault/topics/hobbies/**)'];
+    expect(composeClaudeArgs(defaults, extras))
+      .toEqual(['--output-format', 'json', '--allowed-tools', 'Read(/vault/topics/hobbies/**)']);
+  });
+
+  it('strips --dangerously-skip-permissions when extras supplies --disallowed-tools', () => {
+    const defaults = ['--dangerously-skip-permissions', '--output-format', 'json'];
+    const extras = ['--disallowed-tools', 'Bash'];
+    expect(composeClaudeArgs(defaults, extras))
+      .toEqual(['--output-format', 'json', '--disallowed-tools', 'Bash']);
+  });
+
+  it('strips --dangerously-skip-permissions when extras supplies --add-dir', () => {
+    const defaults = ['--dangerously-skip-permissions', '--output-format', 'json'];
+    const extras = ['--add-dir', '/vault/_identity'];
+    expect(composeClaudeArgs(defaults, extras))
+      .toEqual(['--output-format', 'json', '--add-dir', '/vault/_identity']);
+  });
+
+  it('keeps --dangerously-skip-permissions when extras has no permission flags', () => {
+    const defaults = ['--dangerously-skip-permissions', '--output-format', 'json'];
+    const extras = ['--model', 'opus'];
+    expect(composeClaudeArgs(defaults, extras))
+      .toEqual(['--dangerously-skip-permissions', '--output-format', 'json', '--model', 'opus']);
+  });
+
+  it('does not mutate the defaults array when stripping', () => {
+    const defaults = ['--dangerously-skip-permissions', '--output-format', 'json'];
+    composeClaudeArgs(defaults, ['--allowed-tools', 'Read(/x/**)']);
+    expect(defaults).toEqual(['--dangerously-skip-permissions', '--output-format', 'json']);
+  });
 });
 

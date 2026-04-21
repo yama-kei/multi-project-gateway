@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import type { ClaudeResult } from './claude-cli.js';
+import { composeClaudeArgs, type ClaudeResult } from './claude-cli.js';
 import type { AgentRuntime } from './agent-runtime.js';
 import type { SessionStore, PersistedSession } from './session-store.js';
 import type { PulseEmitter } from './pulse-events.js';
@@ -165,7 +165,7 @@ export function createSessionManager(defaults: {
 
     while (session.queue.length > 0) {
       const item = session.queue.shift()!;
-      const effectiveArgs = item.extraArgs ? [...defaults.claudeArgs, ...item.extraArgs] : defaults.claudeArgs;
+      const effectiveArgs = composeClaudeArgs(defaults.claudeArgs, item.extraArgs);
       await acquireSlot();
       if (pulseEmitter) {
         // Session keys are "threadId:agentName" for agent sessions, "threadId" for default

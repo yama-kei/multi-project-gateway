@@ -9,9 +9,10 @@
  * `import { ... } from 'ayumi'` directly.
  */
 
-import { loadLifeContext } from './life-context-loader.js';
+import { loadLifeContext, getLifeContextRunArgs } from './life-context-loader.js';
 
-export { loadLifeContext };
+export { loadLifeContext, getLifeContextRunArgs };
+export type { LifeContextRunArgs } from './life-context-loader.js';
 
 // Re-export ayumi pipeline primitives that other MPG modules may need
 export type { Topic, DriveBroker, ExtractedContent, ClassificationResult, ArticleSummary, LLMComplete } from 'ayumi';

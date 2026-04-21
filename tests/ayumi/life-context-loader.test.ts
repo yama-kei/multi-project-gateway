@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { loadLifeContext, _resetForTest, DEFAULT_TOPIC_SIZE_BUDGET } from '../../src/ayumi/life-context-loader.js';
+import { loadLifeContext, _resetForTest, buildVaultIndex, getLifeContextRunArgs } from '../../src/ayumi/life-context-loader.js';
 import type { BrokerClient, DriveFile, DriveListResult, DriveReadResult, DriveSearchResult } from '../../src/broker-client.js';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -109,27 +109,29 @@ describe('loadLifeContext — vault path', () => {
     expect(result).toBeNull();
   });
 
-  it('loads all .md files from local vault when VAULT_PATH is set', async () => {
+  it('emits an index block with summary body and file listing', async () => {
     process.env.VAULT_PATH = tempDir;
     await setupVaultTopic('work', {
-      'summary.md': '---\ntier: 2\n---\n# Work Summary\n\nProject updates.',
+      'summary.md': '---\ntier: 2\ndescription: work overview\n---\n# Work Summary\n\nProject updates.',
       'timeline.md': '---\ntier: 2\n---\n# Timeline\n\n- 2026-03-15 Meeting',
       'authored.md': '# Authored\n\nBlog post about work.',
     });
 
     const result = await loadLifeContext('life-work');
 
-    expect(result).toContain('--- LIFE CONTEXT DATA ---');
-    expect(result).toContain('## summary.md');
+    expect(result).toContain('--- LIFE CONTEXT INDEX ---');
+    expect(result).toContain('--- END LIFE CONTEXT INDEX ---');
+    // summary.md body is inlined
+    expect(result).toContain('# Work Summary');
     expect(result).toContain('Project updates.');
-    expect(result).toContain('## timeline.md');
-    expect(result).toContain('Meeting');
-    expect(result).toContain('## authored.md');
-    expect(result).toContain('Blog post about work.');
-    expect(result).toContain('--- END LIFE CONTEXT DATA ---');
+    // Other files appear in the listing (by name + size), NOT their bodies
+    expect(result).toMatch(/- timeline\.md \(/);
+    expect(result).toMatch(/- authored\.md \(/);
+    expect(result).not.toContain('- 2026-03-15 Meeting');
+    expect(result).not.toContain('Blog post about work.');
   });
 
-  it('strips frontmatter from vault files', async () => {
+  it('strips frontmatter from the inlined summary body', async () => {
     process.env.VAULT_PATH = tempDir;
     await setupVaultTopic('work', {
       'summary.md': '---\ntier: 2\ntopic: work\ntype: summary\n---\n# Work Summary\n\nContent.',
@@ -142,7 +144,7 @@ describe('loadLifeContext — vault path', () => {
     expect(result).toContain('Content.');
   });
 
-  it('loads only the files that exist in the directory', async () => {
+  it('inlines summary body when only summary.md exists', async () => {
     process.env.VAULT_PATH = tempDir;
     await setupVaultTopic('work', {
       'summary.md': '# Work\n\nJust a summary.',
@@ -150,14 +152,12 @@ describe('loadLifeContext — vault path', () => {
 
     const result = await loadLifeContext('life-work');
 
-    expect(result).toContain('Just a summary.');
-    // Only summary.md exists in the directory
     expect(result).toContain('## summary.md');
+    expect(result).toContain('Just a summary.');
   });
 
   it('returns null when topic directory does not exist', async () => {
     process.env.VAULT_PATH = tempDir;
-    // No files created
     const result = await loadLifeContext('life-work');
     expect(result).toBeNull();
   });
@@ -170,10 +170,11 @@ describe('loadLifeContext — vault path', () => {
 
     const result = await loadLifeContext('life-finance');
 
+    expect(result).toContain('## summary.md');
     expect(result).toContain('Abstract overview.');
   });
 
-  it('reads all .md files dynamically, not just hardcoded names', async () => {
+  it('lists all .md files dynamically in the index, not just hardcoded names', async () => {
     process.env.VAULT_PATH = tempDir;
     await setupVaultTopic('work', {
       'summary.md': '# Summary\nOverview.',
@@ -183,26 +184,28 @@ describe('loadLifeContext — vault path', () => {
 
     const result = await loadLifeContext('life-work');
 
-    expect(result).toContain('## summary.md');
-    expect(result).toContain('## authored.md');
-    expect(result).toContain('## weekly-report.md');
+    // summary body inlined
+    expect(result).toContain('# Summary');
+    // other files appear by name in the listing
+    expect(result).toMatch(/- authored\.md /);
+    expect(result).toMatch(/- weekly-report\.md /);
   });
 
-  it('loads _identity/writing-style.md and appends to context', async () => {
+  it('inlines _identity/writing-style.md body when present', async () => {
     process.env.VAULT_PATH = tempDir;
     await setupVaultTopic('work', {
       'summary.md': '# Summary\nWork overview.',
     });
-    // Create _identity/writing-style.md
     await mkdir(join(tempDir, '_identity'), { recursive: true });
-    await writeFile(join(tempDir, '_identity', 'writing-style.md'), '---\ntype: identity\n---\n# Writing Style\n\nCasual, concise.');
+    await writeFile(
+      join(tempDir, '_identity', 'writing-style.md'),
+      '---\ntype: identity\n---\n# Writing Style\n\nCasual, concise.',
+    );
 
     const result = await loadLifeContext('life-work');
 
-    expect(result).toContain('## summary.md');
     expect(result).toContain('## writing-style.md');
     expect(result).toContain('Casual, concise.');
-    // Frontmatter should be stripped
     expect(result).not.toContain('type: identity');
   });
 
@@ -211,48 +214,48 @@ describe('loadLifeContext — vault path', () => {
     await setupVaultTopic('work', {
       'summary.md': '# Summary\nWork overview.',
     });
-    // No _identity directory created
 
     const result = await loadLifeContext('life-work');
 
-    expect(result).toContain('## summary.md');
+    expect(result).toContain('# Summary');
     expect(result).not.toContain('writing-style');
   });
 
-  it('sorts vault files alphabetically', async () => {
+  it('lists files alphabetically in the index', async () => {
     process.env.VAULT_PATH = tempDir;
     await setupVaultTopic('hobbies', {
       'cycling.md': '# Cycling\nRoad biking.',
       'authored.md': '# Authored\nBlog posts.',
-      'summary.md': '# Summary\nOverview.',
+      'mountains.md': '# Mountains\nMountaineering.',
     });
 
     const result = await loadLifeContext('life-hobbies');
 
-    // Alphabetical: authored.md, cycling.md, summary.md
-    const authoredIdx = result!.indexOf('## authored.md');
-    const cyclingIdx = result!.indexOf('## cycling.md');
-    const summaryIdx = result!.indexOf('## summary.md');
+    // Alphabetical in the listing: authored.md, cycling.md, mountains.md
+    const authoredIdx = result!.indexOf('- authored.md');
+    const cyclingIdx = result!.indexOf('- cycling.md');
+    const mountainsIdx = result!.indexOf('- mountains.md');
+    expect(authoredIdx).toBeGreaterThan(-1);
     expect(authoredIdx).toBeLessThan(cyclingIdx);
-    expect(cyclingIdx).toBeLessThan(summaryIdx);
+    expect(cyclingIdx).toBeLessThan(mountainsIdx);
   });
 
-  it('applies size budget when reading from vault', async () => {
+  it('index block stays small regardless of topic file count', async () => {
     process.env.VAULT_PATH = tempDir;
-    const largeContent = 'x'.repeat(200);
-    await setupVaultTopic('work', {
-      'a-summary.md': `# Summary\n${largeContent}`,
-      'b-timeline.md': `# Timeline\n${largeContent}`,
-      'c-entities.md': `# Entities\n${largeContent}`,
-    });
+    const bigBody = 'x'.repeat(20_000);
+    const files: Record<string, string> = { 'summary.md': '# Hobbies\nShort summary.' };
+    for (let i = 0; i < 50; i++) {
+      files[`file-${String(i).padStart(3, '0')}.md`] = `# File ${i}\n${bigBody}`;
+    }
+    await setupVaultTopic('hobbies', files);
 
-    // Budget fits ~2 files (alphabetical order: a-summary, b-timeline, c-entities)
-    const result = await loadLifeContext('life-work', 500);
+    const result = await loadLifeContext('life-hobbies');
 
-    expect(result).toContain('## a-summary.md');
-    expect(result).toContain('## b-timeline.md');
-    expect(result).not.toContain('## c-entities.md');
-    expect(result).toContain('[truncated');
+    expect(result).not.toBeNull();
+    // Bodies of non-summary files must NOT be inlined
+    expect(result).not.toContain(bigBody);
+    // Block should stay small — index only, no file bodies
+    expect(result!.length).toBeLessThan(10 * 1024);
   });
 });
 
@@ -285,7 +288,7 @@ describe('loadLifeContext — Drive fallback', () => {
     expect(result).toBeNull();
   });
 
-  it('loads a single .md file', async () => {
+  it('inlines summary.md body and emits the index block', async () => {
     setupDriveFolders([
       makeDriveFile('summary.md', '2026-03-15T00:00:00Z'),
     ]);
@@ -296,155 +299,55 @@ describe('loadLifeContext — Drive fallback', () => {
     } satisfies DriveReadResult);
 
     const result = await loadLifeContext('life-work');
-    expect(result).toContain('--- LIFE CONTEXT DATA ---');
+    expect(result).toContain('--- LIFE CONTEXT INDEX ---');
     expect(result).toContain('## summary.md');
     expect(result).toContain('Key project updates.');
-    expect(result).toContain('--- END LIFE CONTEXT DATA ---');
+    expect(result).toContain('--- END LIFE CONTEXT INDEX ---');
   });
 
-  it('loads multiple .md files sorted by modified date (newest first)', async () => {
+  it('lists non-summary files by name only (no body inlined)', async () => {
     setupDriveFolders([
-      makeDriveFile('entities.md', '2026-03-01T00:00:00Z'),
       makeDriveFile('summary.md', '2026-03-15T00:00:00Z'),
       makeDriveFile('timeline.md', '2026-03-10T00:00:00Z'),
+      makeDriveFile('entities.md', '2026-03-01T00:00:00Z'),
     ]);
     (mockClient.driveRead as ReturnType<typeof vi.fn>).mockImplementation((fileId: string) => {
-      const contentMap: Record<string, string> = {
-        'id-summary.md': '# Summary\nNewest content',
-        'id-timeline.md': '# Timeline\nMiddle content',
-        'id-entities.md': '# Entities\nOldest content',
-      };
       return Promise.resolve({
         name: fileId.replace('id-', ''),
         mime_type: 'text/plain',
-        content: contentMap[fileId] ?? '',
+        content: `# Heading\nBody for ${fileId}`,
       } satisfies DriveReadResult);
     });
 
     const result = await loadLifeContext('life-work');
-    expect(result).not.toBeNull();
-
-    // Verify ordering: summary (newest) before timeline before entities (oldest)
-    const summaryIdx = result!.indexOf('## summary.md');
-    const timelineIdx = result!.indexOf('## timeline.md');
-    const entitiesIdx = result!.indexOf('## entities.md');
-    expect(summaryIdx).toBeLessThan(timelineIdx);
-    expect(timelineIdx).toBeLessThan(entitiesIdx);
+    // summary.md body inlined
+    expect(result).toContain('Body for id-summary.md');
+    // Other files appear by name in the listing, NOT their bodies
+    expect(result).toMatch(/- timeline\.md /);
+    expect(result).toMatch(/- entities\.md /);
+    expect(result).not.toContain('Body for id-timeline.md');
+    expect(result).not.toContain('Body for id-entities.md');
+    // Drive loader only reads summary.md's content
+    expect(mockClient.driveRead).toHaveBeenCalledTimes(1);
   });
 
-  it('backward compatible: existing 3-file folders produce same sections', async () => {
-    setupDriveFolders([
-      makeDriveFile('summary.md', '2026-03-15T00:00:00Z'),
-      makeDriveFile('timeline.md', '2026-03-14T00:00:00Z'),
-      makeDriveFile('entities.md', '2026-03-13T00:00:00Z'),
-    ]);
-    (mockClient.driveRead as ReturnType<typeof vi.fn>).mockImplementation((fileId: string) => {
-      const contentMap: Record<string, string> = {
-        'id-summary.md': '# Work — Summary\n\nProject updates.',
-        'id-timeline.md': '# Work — Timeline\n\n- 2026-03-15 Meeting',
-        'id-entities.md': '# Work — Entities\n\n## People\n- Alice',
-      };
-      return Promise.resolve({
-        name: fileId.replace('id-', ''),
-        mime_type: 'text/plain',
-        content: contentMap[fileId] ?? '',
-      } satisfies DriveReadResult);
-    });
-
-    const result = await loadLifeContext('life-work');
-    expect(result).toContain('## summary.md');
-    expect(result).toContain('## timeline.md');
-    expect(result).toContain('## entities.md');
-    expect(result).toContain('Project updates.');
-    expect(result).toContain('Meeting');
-    expect(result).toContain('Alice');
-  });
-
-  it('reads all .md files, not just hardcoded names', async () => {
+  it('lists all .md files in the index, excludes non-.md files', async () => {
     setupDriveFolders([
       makeDriveFile('summary.md', '2026-03-15T00:00:00Z'),
       makeDriveFile('weekly-report.md', '2026-03-14T00:00:00Z'),
       makeDriveFile('notes.md', '2026-03-13T00:00:00Z'),
       { ...makeDriveFile('data.json', '2026-03-16T00:00:00Z'), name: 'data.json' },
     ]);
-    (mockClient.driveRead as ReturnType<typeof vi.fn>).mockImplementation((fileId: string) => {
-      return Promise.resolve({
-        name: fileId.replace('id-', ''),
-        mime_type: 'text/plain',
-        content: `Content of ${fileId}`,
-      } satisfies DriveReadResult);
-    });
-
-    const result = await loadLifeContext('life-work');
-    expect(result).toContain('## summary.md');
-    expect(result).toContain('## weekly-report.md');
-    expect(result).toContain('## notes.md');
-    // Should NOT include non-.md files
-    expect(result).not.toContain('data.json');
-  });
-
-  it('truncates oldest files when over size budget', async () => {
-    // Create files where each is ~100 bytes of content
-    const largeContent = 'x'.repeat(100);
-    setupDriveFolders([
-      makeDriveFile('newest.md', '2026-03-15T00:00:00Z'),
-      makeDriveFile('middle.md', '2026-03-10T00:00:00Z'),
-      makeDriveFile('oldest.md', '2026-03-05T00:00:00Z'),
-    ]);
-    (mockClient.driveRead as ReturnType<typeof vi.fn>).mockImplementation((fileId: string) => {
-      return Promise.resolve({
-        name: fileId.replace('id-', ''),
-        mime_type: 'text/plain',
-        content: largeContent,
-      } satisfies DriveReadResult);
-    });
-
-    // Set budget to fit ~2 files (each section is "## name\n" + content ≈ 115 bytes)
-    const result = await loadLifeContext('life-work', 250);
-    expect(result).toContain('## newest.md');
-    expect(result).toContain('## middle.md');
-    expect(result).not.toContain('## oldest.md');
-    expect(result).toContain('[truncated: 1 file omitted due to size budget]');
-  });
-
-  it('truncates multiple files with correct count', async () => {
-    const largeContent = 'x'.repeat(200);
-    setupDriveFolders([
-      makeDriveFile('file1.md', '2026-03-15T00:00:00Z'),
-      makeDriveFile('file2.md', '2026-03-10T00:00:00Z'),
-      makeDriveFile('file3.md', '2026-03-05T00:00:00Z'),
-      makeDriveFile('file4.md', '2026-03-01T00:00:00Z'),
-    ]);
-    (mockClient.driveRead as ReturnType<typeof vi.fn>).mockImplementation((fileId: string) => {
-      return Promise.resolve({
-        name: fileId.replace('id-', ''),
-        mime_type: 'text/plain',
-        content: largeContent,
-      } satisfies DriveReadResult);
-    });
-
-    // Budget fits only ~1 file
-    const result = await loadLifeContext('life-work', 250);
-    expect(result).toContain('## file1.md');
-    expect(result).not.toContain('## file2.md');
-    expect(result).toContain('[truncated: 3 files omitted due to size budget]');
-  });
-
-  it('always includes at least the first file even if over budget', async () => {
-    const largeContent = 'x'.repeat(1000);
-    setupDriveFolders([
-      makeDriveFile('big.md', '2026-03-15T00:00:00Z'),
-    ]);
     (mockClient.driveRead as ReturnType<typeof vi.fn>).mockResolvedValue({
-      name: 'big.md',
+      name: 'summary.md',
       mime_type: 'text/plain',
-      content: largeContent,
+      content: '# Summary\nInlined.',
     } satisfies DriveReadResult);
 
-    // Budget is tiny but we should still get the first file
-    const result = await loadLifeContext('life-work', 10);
-    expect(result).toContain('## big.md');
-    expect(result).not.toContain('[truncated');
+    const result = await loadLifeContext('life-work');
+    expect(result).toMatch(/- weekly-report\.md /);
+    expect(result).toMatch(/- notes\.md /);
+    expect(result).not.toContain('data.json');
   });
 
   it('works for different agent names', async () => {
@@ -459,5 +362,108 @@ describe('loadLifeContext — Drive fallback', () => {
 
     const result = await loadLifeContext('life-travel');
     expect(result).toContain('Trip plans.');
+  });
+});
+
+// ---- buildVaultIndex tests ----
+
+describe('buildVaultIndex — local filesystem', () => {
+  it('lists .md files in a topic directory with size and description', async () => {
+    await setupVaultTopic('hobbies', {
+      'summary.md': '---\ndescription: hobbies overview\n---\n# Hobbies\n\nOverview.',
+      'mountains.md': '---\ndescription: mountaineering log 2004-2019\n---\n# Mountains\n\nBody.',
+      'cycling.md': '# Cycling\n\nNo frontmatter.',
+    });
+
+    const index = await buildVaultIndex(tempDir, 'hobbies');
+
+    expect(index).not.toBeNull();
+    expect(index!.summary).toContain('# Hobbies');
+    expect(index!.files.map((f) => f.name).sort()).toEqual(['cycling.md', 'mountains.md', 'summary.md']);
+
+    const mountains = index!.files.find((f) => f.name === 'mountains.md')!;
+    expect(mountains.description).toBe('mountaineering log 2004-2019');
+    expect(mountains.sizeBytes).toBeGreaterThan(0);
+
+    const cycling = index!.files.find((f) => f.name === 'cycling.md')!;
+    expect(cycling.description).toBeNull();
+  });
+
+  it('returns null when the topic directory does not exist', async () => {
+    const index = await buildVaultIndex(tempDir, 'hobbies');
+    expect(index).toBeNull();
+  });
+
+  it('resolves sensitive topics to topics/_sensitive/', async () => {
+    await setupVaultTopic('finance', { 'summary.md': '# Finance\n\nAbstract.' }, true);
+    const index = await buildVaultIndex(tempDir, 'finance');
+    expect(index).not.toBeNull();
+    expect(index!.files.map((f) => f.name)).toContain('summary.md');
+  });
+});
+
+// ---- getLifeContextRunArgs tests ----
+
+describe('getLifeContextRunArgs', () => {
+  it('returns null for non-life-context agents', () => {
+    process.env.VAULT_PATH = '/data/vault';
+    expect(getLifeContextRunArgs('life-curator')).toBeNull();
+    expect(getLifeContextRunArgs('pm')).toBeNull();
+    expect(getLifeContextRunArgs('unknown')).toBeNull();
+  });
+
+  it('returns null when VAULT_PATH is not set', () => {
+    delete process.env.VAULT_PATH;
+    expect(getLifeContextRunArgs('life-hobbies')).toBeNull();
+  });
+
+  it('returns topic-directory cwd + --add-dir for _identity for life-hobbies', () => {
+    process.env.VAULT_PATH = '/data/vault';
+    expect(getLifeContextRunArgs('life-hobbies')).toEqual({
+      cwd: '/data/vault/topics/hobbies',
+      extraArgs: ['--add-dir', '/data/vault/_identity'],
+    });
+  });
+
+  it('routes sensitive topics through topics/_sensitive/<topic>', () => {
+    process.env.VAULT_PATH = '/data/vault';
+    expect(getLifeContextRunArgs('life-finance')).toEqual({
+      cwd: '/data/vault/topics/_sensitive/finance',
+      extraArgs: ['--add-dir', '/data/vault/_identity'],
+    });
+  });
+
+  it('isolates each sensitive topic from its sibling', () => {
+    process.env.VAULT_PATH = '/data/vault';
+    const finance = getLifeContextRunArgs('life-finance')!;
+    const health = getLifeContextRunArgs('life-health')!;
+    expect(finance.cwd).not.toContain('/health');
+    expect(health.cwd).not.toContain('/finance');
+  });
+
+  it('does not let non-sensitive topics reach sensitive dirs via cwd', () => {
+    process.env.VAULT_PATH = '/data/vault';
+    const hobbies = getLifeContextRunArgs('life-hobbies')!;
+    expect(hobbies.cwd).not.toContain('/_sensitive/');
+    expect(hobbies.cwd).not.toContain('/topics/work');
+    // --add-dir grants only _identity, never another topic
+    expect(hobbies.extraArgs.join(' ')).not.toContain('/_sensitive/');
+    expect(hobbies.extraArgs.join(' ')).not.toContain('/topics/');
+  });
+
+  it('emits correct cwd for all six life-* topic agents', () => {
+    process.env.VAULT_PATH = '/data/vault';
+    for (const [agent, expectedCwd] of [
+      ['life-work', '/data/vault/topics/work'],
+      ['life-travel', '/data/vault/topics/travel'],
+      ['life-social', '/data/vault/topics/social'],
+      ['life-hobbies', '/data/vault/topics/hobbies'],
+      ['life-finance', '/data/vault/topics/_sensitive/finance'],
+      ['life-health', '/data/vault/topics/_sensitive/health'],
+    ] as const) {
+      const run = getLifeContextRunArgs(agent);
+      expect(run, `agent ${agent}`).not.toBeNull();
+      expect(run!.cwd, `agent ${agent}`).toBe(expectedCwd);
+    }
   });
 });

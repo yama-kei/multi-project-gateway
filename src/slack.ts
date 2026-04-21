@@ -13,11 +13,35 @@ import { handleCommand } from './discord.js';
 
 // Ayumi life-context module — optional, gracefully absent
 let getAgentContext: (agentName: string) => Promise<string | null> = async () => null;
+interface LifeContextRunArgs { cwd: string; extraArgs: string[] }
+let getLifeContextRunArgs: (agentName: string) => LifeContextRunArgs | null = () => null;
 try {
   const ayumi = await import('./ayumi/index.js');
   getAgentContext = ayumi.getAgentContext;
+  getLifeContextRunArgs = ayumi.getLifeContextRunArgs;
 } catch {
   // Ayumi module not available — no life context injection
+}
+
+/**
+ * Resolve the CLI spawn parameters (cwd + extraArgs) for a send. For a
+ * life-context topic agent, the CWD is switched to the topic directory
+ * and --add-dir is added so the agent can still read _identity/. For all
+ * other agents, the project cwd and gateway-default tool args are used.
+ */
+function resolveLifeContextRun(
+  agentName: string | undefined,
+  defaultCwd: string,
+  defaultExtraArgs: string[],
+): { cwd: string; extraArgs: string[] | undefined } {
+  if (agentName) {
+    const run = getLifeContextRunArgs(agentName);
+    if (run) return { cwd: run.cwd, extraArgs: run.extraArgs };
+  }
+  return {
+    cwd: defaultCwd,
+    extraArgs: defaultExtraArgs.length > 0 ? defaultExtraArgs : undefined,
+  };
 }
 
 /** Slack message text limit (~4000 chars, with margin). */
@@ -308,15 +332,16 @@ export function createSlackBot(
         return;
       }
 
+      const primarySpawn = resolveLifeContextRun(activeAgent?.agentName, resolved.directory, toolArgs);
       const result = await sessionManager.send(
         sessionKey,
-        resolved.directory,
+        primarySpawn.cwd,
         userPrompt,
         {
           worktree: isThread ? true : undefined,
           systemPrompt,
           timeoutMs: activeAgent ? resolveAgentTimeout(activeAgent.agent, config.defaults) : config.defaults.agentTimeoutMs,
-          extraArgs: toolArgs.length > 0 ? toolArgs : undefined,
+          extraArgs: primarySpawn.extraArgs,
         },
       );
 
@@ -392,11 +417,12 @@ export function createSlackBot(
               const key = `${replyThreadTs}:${handoff.agentName}`;
               const sysPrompt = await buildSystemPrompt(handoff.agentName, handoff.agent);
               const fanOutTimeout = Math.min(resolveAgentTimeout(handoff.agent, config.defaults), 5 * 60 * 1000);
+              const spawn = resolveLifeContextRun(handoff.agentName, resolved.directory, toolArgs);
               return {
                 agentName: handoff.agentName,
                 result: await sessionManager.send(
-                  key, resolved.directory, responseText,
-                  { worktree: true, systemPrompt: sysPrompt, timeoutMs: fanOutTimeout, extraArgs: toolArgs.length > 0 ? toolArgs : undefined },
+                  key, spawn.cwd, responseText,
+                  { worktree: true, systemPrompt: sysPrompt, timeoutMs: fanOutTimeout, extraArgs: spawn.extraArgs },
                 ),
               };
             });
@@ -426,9 +452,10 @@ export function createSlackBot(
 
             let synthesisResult;
             try {
+              const synthSpawn = resolveLifeContextRun(currentAgentName ?? undefined, resolved.directory, toolArgs);
               synthesisResult = await sessionManager.send(
-                originKey, resolved.directory, synthesisPrompt,
-                { worktree: true, systemPrompt: originSysPrompt, timeoutMs: originAgent ? resolveAgentTimeout(originAgent, config.defaults) : config.defaults.agentTimeoutMs, extraArgs: toolArgs.length > 0 ? toolArgs : undefined },
+                originKey, synthSpawn.cwd, synthesisPrompt,
+                { worktree: true, systemPrompt: originSysPrompt, timeoutMs: originAgent ? resolveAgentTimeout(originAgent, config.defaults) : config.defaults.agentTimeoutMs, extraArgs: synthSpawn.extraArgs },
               );
             } catch (synthErr) {
               const errMsg = synthErr instanceof Error ? synthErr.message : String(synthErr);
@@ -489,11 +516,12 @@ export function createSlackBot(
 
           let handoffResult;
           try {
+            const handoffSpawn = resolveLifeContextRun(handoff.agentName, resolved.directory, toolArgs);
             handoffResult = await sessionManager.send(
               handoffKey,
-              resolved.directory,
+              handoffSpawn.cwd,
               responseText,
-              { worktree: true, systemPrompt: handoffPrompt, timeoutMs: resolveAgentTimeout(handoff.agent, config.defaults), extraArgs: toolArgs.length > 0 ? toolArgs : undefined },
+              { worktree: true, systemPrompt: handoffPrompt, timeoutMs: resolveAgentTimeout(handoff.agent, config.defaults), extraArgs: handoffSpawn.extraArgs },
             );
           } catch (handoffErr) {
             const errMsg = handoffErr instanceof Error ? handoffErr.message : String(handoffErr);
