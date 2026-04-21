@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **2026-04-21 architecture correction.** Step 5.4 probes revealed that the CLI's `--allowed-tools 'Read(path/**)'` patterns do NOT restrict filesystem reads — they're an extension mechanism (cf. `Bash(git *)`), not a restrictor for tools like `Read`. The enforceable mechanism is **CWD-based scoping**: `Read`/`Grep`/`Glob` are scoped to the process CWD by default, and `--add-dir` extends that scope. Tasks 3 and 4 (originally written around `--allowed-tools` patterns) are superseded by **Tasks 3B and 4B** below. The `getLifeContextToolArgs` helper is replaced by `getLifeContextRunArgs`, which returns `{ cwd, extraArgs }` — the adapter spawns the CLI from the topic directory with `--add-dir <vault>/_identity`. Task 4B (`composeClaudeArgs`) is still needed to strip `--dangerously-skip-permissions` from gateway defaults when an enforcement flag is present, since the production config sets it by default.
+
 **Goal:** Replace the 24 KB pre-loaded vault block for topic agents (`@life-hobbies` etc.) with a lightweight index plus topic-scoped `Read`/`Grep`/`Glob` tools, so agents can fetch only the files they need and large files like `mountains.md` (107 KB) become reachable.
 
-**Architecture:** `loadLifeContext(agentName)` keeps its signature but now returns an **index** — `summary.md` content (if present) plus a file listing with per-file size + frontmatter description — instead of concatenated file bodies. A new `getLifeContextToolArgs(agentName)` returns scoped `--allowed-tools` patterns like `Read(<vault>/topics/<topic>/**)` that the Discord/Slack adapters merge into the CLI invocation. The agent uses the built-in `Read`/`Grep`/`Glob` tools; Claude CLI's permission matcher enforces the topic boundary.
+**Architecture (corrected):** `loadLifeContext(agentName)` returns an **index** — `summary.md` content (if present) plus a file listing with per-file size + frontmatter description — instead of concatenated file bodies. A new `getLifeContextRunArgs(agentName)` returns `{ cwd: <topic-dir>, extraArgs: ['--add-dir', <vault>/_identity] }`; the Discord/Slack adapters spawn `claude` from that CWD with those extras. The agent uses the built-in `Read`/`Grep`/`Glob` tools; Claude CLI's default CWD-scoping (plus `--add-dir` for writing-style.md) enforces the topic boundary.
 
 **Tech Stack:** TypeScript, Node.js `fs/promises`, Vitest. No new dependencies.
 
@@ -508,6 +510,188 @@ Expected: the 23 pre-existing failures in `tests/activity-engine.test.ts` and `t
 ```bash
 git add -A
 git commit -m "feat(mpg): wire life-context tool scoping into Discord and Slack adapters"
+```
+
+---
+
+### Task 4B: Make --allowed-tools actually enforce in production
+
+**Added 2026-04-21 after Task 5.4 probe surfaced the issue.**
+
+Gateway default `claudeArgs` contains `--dangerously-skip-permissions` (see `config.json`), which bypasses the CLI's permission matcher. The current `session-manager.ts:168` composition `[...defaults.claudeArgs, ...item.extraArgs]` puts both flags on the command line. Empirically, `--dangerously-skip-permissions` wins: the scoped `--allowed-tools` patterns are ignored and any file is readable. This defeats the sensitive-topic isolation acceptance criterion from yama-kei/ayumi#64.
+
+Fix: when the caller supplies `--allowed-tools` (or `--disallowed-tools`) via `extraArgs`, strip `--dangerously-skip-permissions` from the default args before composing. The two flags are contradictory — an explicit allowlist implies the caller wants enforcement, so honor that.
+
+**Files:**
+- Modify: `src/claude-cli.ts` — add `composeClaudeArgs` helper
+- Modify: `src/session-manager.ts` — use it at line 168
+- Modify: `tests/claude-cli.test.ts` — unit-test the helper
+
+- [ ] **Step 4B.1: Failing test for composeClaudeArgs in tests/claude-cli.test.ts**
+
+Add a new `describe` block:
+
+```typescript
+describe('composeClaudeArgs', () => {
+  it('returns defaults when extras is undefined', () => {
+    expect(composeClaudeArgs(['--output-format', 'json'], undefined))
+      .toEqual(['--output-format', 'json']);
+  });
+
+  it('returns defaults when extras is empty', () => {
+    expect(composeClaudeArgs(['--output-format', 'json'], []))
+      .toEqual(['--output-format', 'json']);
+  });
+
+  it('concatenates defaults + extras when extras has no permission flags', () => {
+    expect(composeClaudeArgs(['--output-format', 'json'], ['--model', 'opus']))
+      .toEqual(['--output-format', 'json', '--model', 'opus']);
+  });
+
+  it('strips --dangerously-skip-permissions when extras supplies --allowed-tools', () => {
+    const defaults = ['--dangerously-skip-permissions', '--output-format', 'json'];
+    const extras = ['--allowed-tools', 'Read(/vault/topics/hobbies/**)'];
+    expect(composeClaudeArgs(defaults, extras))
+      .toEqual(['--output-format', 'json', '--allowed-tools', 'Read(/vault/topics/hobbies/**)']);
+  });
+
+  it('strips --dangerously-skip-permissions when extras supplies --disallowed-tools', () => {
+    const defaults = ['--dangerously-skip-permissions', '--output-format', 'json'];
+    const extras = ['--disallowed-tools', 'Bash'];
+    expect(composeClaudeArgs(defaults, extras))
+      .toEqual(['--output-format', 'json', '--disallowed-tools', 'Bash']);
+  });
+
+  it('keeps --dangerously-skip-permissions when extras has no permission flags', () => {
+    const defaults = ['--dangerously-skip-permissions', '--output-format', 'json'];
+    const extras = ['--model', 'opus'];
+    expect(composeClaudeArgs(defaults, extras))
+      .toEqual(['--dangerously-skip-permissions', '--output-format', 'json', '--model', 'opus']);
+  });
+});
+```
+
+Run: `npx vitest run tests/claude-cli.test.ts -t composeClaudeArgs` — expect import/undefined failure.
+
+- [ ] **Step 4B.2: Implement composeClaudeArgs in src/claude-cli.ts**
+
+Add after `buildToolArgs`:
+
+```typescript
+/**
+ * Compose the final CLI base args: gateway defaults plus per-send extras.
+ *
+ * When extras contain --allowed-tools or --disallowed-tools, strip
+ * --dangerously-skip-permissions from defaults. The flags are contradictory:
+ * an explicit allow/deny list implies the caller wants permission
+ * enforcement; --dangerously-skip-permissions would bypass it.
+ */
+export function composeClaudeArgs(defaults: string[], extras: string[] | undefined): string[] {
+  if (!extras || extras.length === 0) return [...defaults];
+  const hasPermissionFlag = extras.includes('--allowed-tools') || extras.includes('--disallowed-tools');
+  const base = hasPermissionFlag
+    ? defaults.filter((a) => a !== '--dangerously-skip-permissions')
+    : defaults;
+  return [...base, ...extras];
+}
+```
+
+Run tests, confirm pass.
+
+- [ ] **Step 4B.3: Use composeClaudeArgs in session-manager.ts**
+
+Replace `src/session-manager.ts:168`:
+
+```typescript
+// old
+const effectiveArgs = item.extraArgs ? [...defaults.claudeArgs, ...item.extraArgs] : defaults.claudeArgs;
+// new
+const effectiveArgs = composeClaudeArgs(defaults.claudeArgs, item.extraArgs);
+```
+
+Add the import at the top.
+
+- [ ] **Step 4B.4: Type-check and run full suite**
+
+```bash
+npx tsc --noEmit && npm test -- --reporter=default 2>&1 | tail -30
+```
+
+- [ ] **Step 4B.5: Commit**
+
+```bash
+git add -A
+git commit -m "fix(mpg): strip --dangerously-skip-permissions when an allowlist is supplied"
+```
+
+---
+
+### Task 4C: Replace --allowed-tools scoping with CWD + --add-dir
+
+**Added 2026-04-21 after further probing showed `--allowed-tools 'Read(pattern)'` does not restrict filesystem reads.** The CLI treats `--allowed-tools` as an extension mechanism (e.g. `Bash(git *)`) and does not use it to *restrict* the default CWD-scoped `Read`/`Grep`/`Glob` permission. To actually scope a topic agent to its directory, we must **spawn the CLI with `cwd` set to the topic directory** and use `--add-dir <vault>/_identity` to grant access to `writing-style.md` outside that CWD.
+
+This supersedes the `--allowed-tools`-based scoping introduced in Tasks 3 and 4.
+
+**Files:**
+- Modify: `src/ayumi/life-context-loader.ts` — replace `getLifeContextToolArgs` with `getLifeContextRunArgs` (returns `{ cwd, extraArgs }`)
+- Modify: `src/ayumi/index.ts` — re-export `getLifeContextRunArgs` + `LifeContextRunArgs` type
+- Modify: `src/discord.ts`, `src/slack.ts` — `resolveExtraArgs` → `resolveLifeContextRun`; each of the 4 send call sites now takes `cwd` and `extraArgs` from the helper
+- Modify: `src/claude-cli.ts` (`composeClaudeArgs`) — add `--add-dir` to the list of flags that trigger stripping of `--dangerously-skip-permissions`
+- Modify: `tests/ayumi/life-context-loader.test.ts` — rewrite the scoping tests to assert on `{ cwd, extraArgs }`
+- Modify: `tests/claude-cli.test.ts` — add `--add-dir` case
+
+- [ ] **Step 4C.1: `getLifeContextRunArgs` shape**
+
+```typescript
+export interface LifeContextRunArgs {
+  cwd: string;          // topic directory, e.g. <vault>/topics/hobbies
+  extraArgs: string[];  // ['--add-dir', '<vault>/_identity']
+}
+export function getLifeContextRunArgs(agentName: string): LifeContextRunArgs | null;
+```
+
+Returns `null` for non-topic agents or when `VAULT_PATH` is unset.
+
+- [ ] **Step 4C.2: Adapter wiring** — both `discord.ts` and `slack.ts` get an identical helper:
+
+```typescript
+function resolveLifeContextRun(
+  agentName: string | undefined,
+  defaultCwd: string,
+  defaultExtraArgs: string[],
+): { cwd: string; extraArgs: string[] | undefined } {
+  if (agentName) {
+    const run = getLifeContextRunArgs(agentName);
+    if (run) return { cwd: run.cwd, extraArgs: run.extraArgs };
+  }
+  return {
+    cwd: defaultCwd,
+    extraArgs: defaultExtraArgs.length > 0 ? defaultExtraArgs : undefined,
+  };
+}
+```
+
+Each of the 4 `sessionManager.send` call sites in each file:
+
+```typescript
+const spawn = resolveLifeContextRun(agentName, resolved.directory, toolArgs);
+await sessionManager.send(key, spawn.cwd, msg, { ..., extraArgs: spawn.extraArgs });
+```
+
+- [ ] **Step 4C.3: Extend composeClaudeArgs** — add `--add-dir` to the set of flags that strip `--dangerously-skip-permissions` (update both the implementation and test).
+
+- [ ] **Step 4C.4: Empirical E2E probe (critical)**
+
+From a neutral CWD, spawn `claude` with the production-style defaults AND the scoped cwd/extraArgs. Confirm:
+1. In-scope Read succeeds (hobbies/summary.md)
+2. Cross-topic Read denied (work/summary.md → `permission_denials` non-empty)
+3. Writing-style read succeeds (via `--add-dir`)
+
+- [ ] **Step 4C.5: Commit**
+
+```bash
+git add -A
+git commit -m "fix(mpg): scope topic agents via CWD + --add-dir instead of --allowed-tools"
 ```
 
 ---
