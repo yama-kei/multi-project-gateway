@@ -84,6 +84,25 @@ export function buildToolArgs(
   return args;
 }
 
+const PERMISSION_FLAGS = ['--allowed-tools', '--disallowed-tools', '--add-dir'] as const;
+
+/**
+ * Compose the final CLI base args: gateway defaults plus per-send extras.
+ *
+ * When extras contain any permission-aware flag (--allowed-tools,
+ * --disallowed-tools, --add-dir), strip --dangerously-skip-permissions from
+ * defaults. Those flags imply the caller wants permission enforcement, and
+ * --dangerously-skip-permissions would bypass the check entirely.
+ */
+export function composeClaudeArgs(defaults: string[], extras: string[] | undefined): string[] {
+  if (!extras || extras.length === 0) return [...defaults];
+  const hasPermissionFlag = PERMISSION_FLAGS.some((flag) => extras.includes(flag));
+  const base = hasPermissionFlag
+    ? defaults.filter((a) => a !== '--dangerously-skip-permissions')
+    : defaults;
+  return [...base, ...extras];
+}
+
 export function buildClaudeArgs(
   baseArgs: string[],
   prompt: string,
