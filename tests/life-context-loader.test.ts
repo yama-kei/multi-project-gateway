@@ -142,20 +142,22 @@ describe('loadLifeContext', () => {
       delete process.env.BROKER_ACTOR_ID;
     });
 
-    it('returns formatted context string with all three files', async () => {
+    it('emits an index block with summary body inlined and other files listed', async () => {
       setupMockClient();
 
       const result = await loadLifeContext('life-work');
 
       expect(result).not.toBeNull();
-      expect(result).toContain('--- LIFE CONTEXT DATA ---');
-      expect(result).toContain('--- END LIFE CONTEXT DATA ---');
+      expect(result).toContain('--- LIFE CONTEXT INDEX ---');
+      expect(result).toContain('--- END LIFE CONTEXT INDEX ---');
+      // summary.md body is inlined
       expect(result).toContain('## summary.md');
       expect(result).toContain('# Work Summary');
-      expect(result).toContain('## timeline.md');
-      expect(result).toContain('- 2025-01 Started job');
-      expect(result).toContain('## entities.md');
-      expect(result).toContain('## People');
+      // Other files appear by name in the listing, not their bodies
+      expect(result).toMatch(/- timeline\.md /);
+      expect(result).toMatch(/- entities\.md /);
+      expect(result).not.toContain('- 2025-01 Started job');
+      expect(result).not.toContain('## People');
     });
 
     it('skips files not present in folder listing', async () => {

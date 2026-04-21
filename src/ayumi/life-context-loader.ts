@@ -12,9 +12,11 @@
  *   life-finance → vault/topics/_sensitive/finance/
  *   life-health  → vault/topics/_sensitive/health/
  *
- * Files read: all .md files in the topic directory (sorted alphabetically).
- * Also loads _identity/writing-style.md for every topic agent.
- * Missing files/directories are skipped gracefully — a new or empty vault still works.
+ * The loader emits a compact *index* of the topic's vault: summary.md body
+ * (if present), a file listing with sizes and frontmatter descriptions, and
+ * the _identity/writing-style.md body. The agent fetches individual files
+ * on demand via the Read/Grep/Glob tools, which the Discord/Slack adapters
+ * scope to the topic root via getLifeContextToolArgs().
  */
 
 import { readFile, readdir } from 'node:fs/promises';
@@ -32,9 +34,6 @@ const AGENT_TOPIC_MAP: Record<string, Topic> = {
 };
 
 const SENSITIVE_TOPICS: Topic[] = ['finance', 'health'];
-
-/** Maximum bytes of context content per topic before truncation. */
-export const DEFAULT_TOPIC_SIZE_BUDGET = 24 * 1024; // 24 KB
 
 /** Re-resolve folder IDs after this many milliseconds (5 minutes). */
 const FOLDER_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -121,76 +120,53 @@ export async function buildVaultIndex(vaultPath: string, topic: Topic): Promise<
 }
 
 /**
- * Load life-context from the local vault filesystem.
- * Reads all .md files from the topic directory (sorted alphabetically).
- * Also appends _identity/writing-style.md if it exists.
- * Missing directories are handled gracefully.
+ * Format a VaultIndex and optional writing-style body into an agent-facing
+ * block. Kept separate so vault and Drive loaders share a single format.
  */
-async function loadFromVault(
-  vaultPath: string,
-  topic: Topic,
-  sizeBudget: number,
-): Promise<string | null> {
-  const dir = topicVaultPath(vaultPath, topic);
+function formatIndexBlock(index: VaultIndex, writingStyleBody: string | null): string {
+  const lines: string[] = ['--- LIFE CONTEXT INDEX ---', ''];
 
-  // Dynamically discover all .md files in the topic directory
-  let mdFileNames: string[];
+  if (index.summary) {
+    lines.push('## summary.md', index.summary, '');
+  }
+
+  lines.push('## Available files in this topic');
+  lines.push('Use the Read tool to fetch any of these when relevant to the question.');
+  lines.push('Use the Grep tool to search across them.');
+  lines.push('');
+  for (const file of index.files) {
+    if (file.name === 'summary.md') continue;
+    const sizeKb = (file.sizeBytes / 1024).toFixed(1);
+    const desc = file.description ? ` — ${file.description}` : '';
+    lines.push(`- ${file.name} (${sizeKb} KB)${desc}`);
+  }
+  lines.push('');
+
+  if (writingStyleBody) {
+    lines.push('## writing-style.md', writingStyleBody, '');
+  }
+
+  lines.push('--- END LIFE CONTEXT INDEX ---');
+  return lines.join('\n');
+}
+
+/**
+ * Emit the index block for a local-filesystem vault. Returns null when the
+ * topic directory is missing or empty.
+ */
+async function loadFromVault(vaultPath: string, topic: Topic): Promise<string | null> {
+  const index = await buildVaultIndex(vaultPath, topic);
+  if (!index) return null;
+
+  let writingStyleBody: string | null = null;
   try {
-    const entries = await readdir(dir);
-    mdFileNames = entries.filter((f) => f.endsWith('.md')).sort();
+    const content = await readFile(join(vaultPath, '_identity', 'writing-style.md'), 'utf-8');
+    writingStyleBody = stripFrontmatter(content);
   } catch {
-    // Directory doesn't exist — skip gracefully
-    return null;
+    // writing-style.md missing — continue without it
   }
 
-  if (mdFileNames.length === 0) return null;
-
-  const sections: string[] = [];
-  let totalSize = 0;
-  let filesIncluded = 0;
-
-  for (const fileName of mdFileNames) {
-    try {
-      const content = await readFile(join(dir, fileName), 'utf-8');
-      // Strip frontmatter for context injection (agents don't need YAML metadata)
-      const stripped = content.replace(/^---[\s\S]*?---\n*/, '');
-      const section = `## ${fileName}\n${stripped}`;
-      const sectionSize = new TextEncoder().encode(section).length;
-
-      if (totalSize + sectionSize > sizeBudget && sections.length > 0) {
-        const remaining = mdFileNames.length - filesIncluded;
-        if (remaining > 0) {
-          sections.push(`[truncated: ${remaining} file${remaining > 1 ? 's' : ''} omitted due to size budget]`);
-        }
-        break;
-      }
-
-      sections.push(section);
-      totalSize += sectionSize;
-      filesIncluded++;
-    } catch {
-      continue;
-    }
-  }
-
-  // Append _identity/writing-style.md if it exists
-  try {
-    const writingStylePath = join(vaultPath, '_identity', 'writing-style.md');
-    const content = await readFile(writingStylePath, 'utf-8');
-    const stripped = content.replace(/^---[\s\S]*?---\n*/, '');
-    const section = `## writing-style.md\n${stripped}`;
-    const sectionSize = new TextEncoder().encode(section).length;
-
-    if (totalSize + sectionSize <= sizeBudget || sections.length === 0) {
-      sections.push(section);
-    }
-  } catch {
-    // writing-style.md doesn't exist — skip gracefully
-  }
-
-  if (sections.length === 0) return null;
-
-  return `--- LIFE CONTEXT DATA ---\n\n${sections.join('\n\n')}\n\n--- END LIFE CONTEXT DATA ---`;
+  return formatIndexBlock(index, writingStyleBody);
 }
 
 /**
@@ -200,29 +176,24 @@ async function loadFromVault(
  * Otherwise, falls back to Drive via broker (legacy path).
  *
  * @param agentName Agent preset name (e.g., 'life-work', 'life-travel')
- * @param sizeBudget Maximum bytes of content per topic (default: DEFAULT_TOPIC_SIZE_BUDGET)
- * @returns Formatted context string, or null if not a life-context agent or loading fails
+ * @returns Index block to inject into the agent's system prompt, or null
+ *          if not a life-context agent or loading fails.
  */
-export async function loadLifeContext(
-  agentName: string,
-  sizeBudget: number = DEFAULT_TOPIC_SIZE_BUDGET,
-): Promise<string | null> {
+export async function loadLifeContext(agentName: string): Promise<string | null> {
   const topic = AGENT_TOPIC_MAP[agentName];
   if (!topic) return null;
 
-  // Primary path: local vault
   const vaultPath = process.env.VAULT_PATH;
   if (vaultPath) {
     try {
-      return await loadFromVault(vaultPath, topic, sizeBudget);
+      return await loadFromVault(vaultPath, topic);
     } catch (err) {
       console.error(`[life-context-loader] Error loading vault context for ${agentName}:`, err);
       return null;
     }
   }
 
-  // Fallback: Drive via broker
-  return loadFromDrive(agentName, topic, sizeBudget);
+  return loadFromDrive(agentName, topic);
 }
 
 // ---- Drive fallback (legacy path) ----
@@ -282,11 +253,7 @@ async function resolveTopicFolderId(client: BrokerClient, topic: string): Promis
   return topicFolderIds[topic] ?? null;
 }
 
-async function loadFromDrive(
-  agentName: string,
-  topic: Topic,
-  sizeBudget: number,
-): Promise<string | null> {
+async function loadFromDrive(agentName: string, topic: Topic): Promise<string | null> {
   const client = getOrCreateClient();
   if (!client) return null;
 
@@ -298,41 +265,30 @@ async function loadFromDrive(
     }
 
     const listing = await client.driveList(folderId);
-
     const mdFiles = listing.files
       .filter((f) => f.name.endsWith('.md'))
-      .sort((a, b) => (b.modified_at ?? '').localeCompare(a.modified_at ?? ''));
+      .sort((a, b) => a.name.localeCompare(b.name));
 
     if (mdFiles.length === 0) {
       console.warn(`[life-context-loader] No .md files in ${topic} folder`);
       return null;
     }
 
-    const sections: string[] = [];
-    let totalSize = 0;
-    let filesIncluded = 0;
-
-    for (const file of mdFiles) {
-      const result = await client.driveRead(file.file_id);
-      const section = `## ${file.name}\n${result.content}`;
-      const sectionSize = new TextEncoder().encode(section).length;
-
-      if (totalSize + sectionSize > sizeBudget && sections.length > 0) {
-        const omitted = mdFiles.length - filesIncluded;
-        if (omitted > 0) {
-          sections.push(`[truncated: ${omitted} file${omitted > 1 ? 's' : ''} omitted due to size budget]`);
-        }
-        break;
-      }
-
-      sections.push(section);
-      totalSize += sectionSize;
-      filesIncluded++;
+    // Inline summary.md body; the rest are listed by name/size only.
+    const summaryFile = mdFiles.find((f) => f.name === 'summary.md');
+    let summary: string | null = null;
+    if (summaryFile) {
+      const result = await client.driveRead(summaryFile.file_id);
+      summary = stripFrontmatter(result.content);
     }
 
-    if (sections.length === 0) return null;
+    const files: VaultIndexFile[] = mdFiles.map((f) => ({
+      name: f.name,
+      sizeBytes: f.size_bytes ?? 0,
+      description: null,
+    }));
 
-    return `--- LIFE CONTEXT DATA ---\n\n${sections.join('\n\n')}\n\n--- END LIFE CONTEXT DATA ---`;
+    return formatIndexBlock({ summary, files }, null);
   } catch (err) {
     console.error(`[life-context-loader] Error loading context for ${agentName}:`, err);
     return null;
