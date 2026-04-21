@@ -58,6 +58,68 @@ function topicVaultPath(vaultPath: string, topic: Topic): string {
   return join(vaultPath, 'topics', topic);
 }
 
+export interface VaultIndexFile {
+  name: string;
+  sizeBytes: number;
+  description: string | null;
+}
+
+export interface VaultIndex {
+  summary: string | null;
+  files: VaultIndexFile[];
+}
+
+function parseFrontmatterDescription(content: string): string | null {
+  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!match) return null;
+  const descLine = match[1].split('\n').find((l) => /^description:\s*/.test(l));
+  if (!descLine) return null;
+  const value = descLine.replace(/^description:\s*/, '').trim().replace(/^["']|["']$/g, '');
+  return value || null;
+}
+
+function stripFrontmatter(content: string): string {
+  return content.replace(/^---[\s\S]*?---\n*/, '');
+}
+
+/**
+ * Build a lightweight index of a topic's vault directory: summary.md body
+ * (if present) plus per-file name/size/description for all .md files.
+ * Returns null if the directory does not exist or has no .md files.
+ */
+export async function buildVaultIndex(vaultPath: string, topic: Topic): Promise<VaultIndex | null> {
+  const dir = topicVaultPath(vaultPath, topic);
+  let names: string[];
+  try {
+    const entries = await readdir(dir);
+    names = entries.filter((f) => f.endsWith('.md')).sort();
+  } catch {
+    return null;
+  }
+  if (names.length === 0) return null;
+
+  const files: VaultIndexFile[] = [];
+  let summary: string | null = null;
+
+  for (const name of names) {
+    try {
+      const content = await readFile(join(dir, name), 'utf-8');
+      files.push({
+        name,
+        sizeBytes: Buffer.byteLength(content, 'utf-8'),
+        description: parseFrontmatterDescription(content),
+      });
+      if (name === 'summary.md') {
+        summary = stripFrontmatter(content);
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return { summary, files };
+}
+
 /**
  * Load life-context from the local vault filesystem.
  * Reads all .md files from the topic directory (sorted alphabetically).

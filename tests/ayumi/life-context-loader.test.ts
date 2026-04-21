@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { loadLifeContext, _resetForTest, DEFAULT_TOPIC_SIZE_BUDGET } from '../../src/ayumi/life-context-loader.js';
+import { loadLifeContext, _resetForTest, buildVaultIndex, getLifeContextToolArgs } from '../../src/ayumi/life-context-loader.js';
 import type { BrokerClient, DriveFile, DriveListResult, DriveReadResult, DriveSearchResult } from '../../src/broker-client.js';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -459,5 +459,42 @@ describe('loadLifeContext — Drive fallback', () => {
 
     const result = await loadLifeContext('life-travel');
     expect(result).toContain('Trip plans.');
+  });
+});
+
+// ---- buildVaultIndex tests ----
+
+describe('buildVaultIndex — local filesystem', () => {
+  it('lists .md files in a topic directory with size and description', async () => {
+    await setupVaultTopic('hobbies', {
+      'summary.md': '---\ndescription: hobbies overview\n---\n# Hobbies\n\nOverview.',
+      'mountains.md': '---\ndescription: mountaineering log 2004-2019\n---\n# Mountains\n\nBody.',
+      'cycling.md': '# Cycling\n\nNo frontmatter.',
+    });
+
+    const index = await buildVaultIndex(tempDir, 'hobbies');
+
+    expect(index).not.toBeNull();
+    expect(index!.summary).toContain('# Hobbies');
+    expect(index!.files.map((f) => f.name).sort()).toEqual(['cycling.md', 'mountains.md', 'summary.md']);
+
+    const mountains = index!.files.find((f) => f.name === 'mountains.md')!;
+    expect(mountains.description).toBe('mountaineering log 2004-2019');
+    expect(mountains.sizeBytes).toBeGreaterThan(0);
+
+    const cycling = index!.files.find((f) => f.name === 'cycling.md')!;
+    expect(cycling.description).toBeNull();
+  });
+
+  it('returns null when the topic directory does not exist', async () => {
+    const index = await buildVaultIndex(tempDir, 'hobbies');
+    expect(index).toBeNull();
+  });
+
+  it('resolves sensitive topics to topics/_sensitive/', async () => {
+    await setupVaultTopic('finance', { 'summary.md': '# Finance\n\nAbstract.' }, true);
+    const index = await buildVaultIndex(tempDir, 'finance');
+    expect(index).not.toBeNull();
+    expect(index!.files.map((f) => f.name)).toContain('summary.md');
   });
 });
