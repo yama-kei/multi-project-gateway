@@ -35,6 +35,14 @@ export const DEFAULT_ALLOWED_TOOLS: string[] = [
   'Glob',
   'Grep',
   'Bash(git:*)',
+  'Bash(gh:*)',
+  'Bash(npm:*)',
+  'Bash(npx:*)',
+  'Bash(node:*)',
+  'Bash(pnpm:*)',
+  'Bash(yarn:*)',
+  'Bash(bun:*)',
+  'Bash(make:*)',
   'TodoWrite',
 ];
 
