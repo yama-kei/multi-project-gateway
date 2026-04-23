@@ -3,14 +3,16 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { ClaudeUsage } from './claude-cli.js';
 
+export type RoutingMethod = 'explicit_command' | 'mention' | 'last_active' | 'handoff' | 'default';
+
 export interface PulseEmitter {
   sessionStart(sessionId: string, projectKey: string, projectDir: string, opts?: { agentName?: string; triggerSource?: string }): void;
   sessionEnd(sessionId: string, projectKey: string, projectDir: string, durationMs: number, messageCount: number): void;
   sessionIdle(sessionId: string, projectKey: string, projectDir: string, durationMs: number, messageCount: number): void;
   sessionResume(sessionId: string, projectKey: string, projectDir: string, idleDurationMs: number): void;
-  messageRouted(sessionId: string, projectKey: string, projectDir: string, opts?: { agentTarget?: string; queueDepth?: number }): void;
-  messageCompleted(sessionId: string, projectKey: string, projectDir: string, usage: ClaudeUsage, opts?: { agentTarget?: string }): void;
-  agentHandoff(sessionId: string, projectKey: string, projectDir: string, opts: { fromAgent?: string; toAgent: string; threadId: string }): void;
+  messageRouted(sessionId: string, projectKey: string, projectDir: string, opts?: { agentTarget?: string; queueDepth?: number; routingMethod?: RoutingMethod }): void;
+  messageCompleted(sessionId: string, projectKey: string, projectDir: string, usage: ClaudeUsage, opts?: { agentTarget?: string; isError?: boolean; errorType?: string }): void;
+  agentHandoff(sessionId: string, projectKey: string, projectDir: string, opts: { fromAgent?: string; toAgent: string; threadId: string; handoffDepth?: number }): void;
 }
 
 const DEFAULT_PATH = join(homedir(), '.pulse', 'events', 'mpg-sessions.jsonl');
@@ -79,6 +81,7 @@ export function createPulseEmitter(filePath?: string): PulseEmitter {
         ...baseEvent('message_routed', sessionId, projectKey, projectDir),
         agent_target: opts?.agentTarget,
         queue_depth: opts?.queueDepth ?? 0,
+        routing_method: opts?.routingMethod ?? 'default',
       });
     },
 
@@ -86,6 +89,8 @@ export function createPulseEmitter(filePath?: string): PulseEmitter {
       emit({
         ...baseEvent('message_completed', sessionId, projectKey, projectDir),
         agent_target: opts?.agentTarget,
+        is_error: opts?.isError ?? false,
+        error_type: opts?.errorType,
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
         cache_creation_input_tokens: usage.cache_creation_input_tokens,
@@ -104,6 +109,7 @@ export function createPulseEmitter(filePath?: string): PulseEmitter {
         from_agent: opts.fromAgent,
         to_agent: opts.toAgent,
         thread_id: opts.threadId,
+        handoff_depth: opts.handoffDepth,
       });
     },
   };
