@@ -11,10 +11,10 @@ import { hasAllowedRole } from './role-check.js';
 import { createRateLimiter } from './rate-limiter.js';
 import { downloadAttachments, buildAttachmentPrompt, type AttachmentConfig, DEFAULT_ATTACHMENT_CONFIG } from './attachments.js';
 import type { AgentConfig } from './config.js';
+import { resolveLifeContextRun as resolveLifeContextRunImpl, type GetLifeContextRunArgs } from './life-context-spawn.js';
 // Ayumi life-context module — optional, gracefully absent
 let getAgentContext: (agentName: string) => Promise<string | null> = async () => null;
-interface LifeContextRunArgs { cwd: string; extraArgs: string[] }
-let getLifeContextRunArgs: (agentName: string) => LifeContextRunArgs | null = () => null;
+let getLifeContextRunArgs: GetLifeContextRunArgs = () => null;
 try {
   const ayumi = await import('./ayumi/index.js');
   getAgentContext = ayumi.getAgentContext;
@@ -23,25 +23,12 @@ try {
   // Ayumi module not available — no life context injection
 }
 
-/**
- * Resolve the CLI spawn parameters (cwd + extraArgs) for a send. For a
- * life-context topic agent, the CWD is switched to the topic directory
- * and --add-dir is added so the agent can still read _identity/. For all
- * other agents, the project cwd and gateway-default tool args are used.
- */
 function resolveLifeContextRun(
   agentName: string | undefined,
   defaultCwd: string,
   defaultExtraArgs: string[],
 ): { cwd: string; extraArgs: string[] | undefined } {
-  if (agentName) {
-    const run = getLifeContextRunArgs(agentName);
-    if (run) return { cwd: run.cwd, extraArgs: run.extraArgs };
-  }
-  return {
-    cwd: defaultCwd,
-    extraArgs: defaultExtraArgs.length > 0 ? defaultExtraArgs : undefined,
-  };
+  return resolveLifeContextRunImpl(getLifeContextRunArgs, agentName, defaultCwd, defaultExtraArgs);
 }
 
 // Ayumi curator commands — optional, gracefully absent
