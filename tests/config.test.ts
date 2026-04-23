@@ -332,6 +332,17 @@ describe('loadConfig', () => {
     expect(config.defaults.allowedTools).toEqual([...DEFAULT_ALLOWED_TOOLS, 'WebFetch']);
   });
 
+  it('extends explicit defaults.allowedTools when defaults.extraAllowedTools is also set', () => {
+    const config = loadConfig({
+      defaults: {
+        allowedTools: ['Read', 'Bash'],
+        extraAllowedTools: ['WebFetch'],
+      },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.defaults.allowedTools).toEqual(['Read', 'Bash', 'WebFetch']);
+  });
+
   // --- logLevel ---
 
   it('defaults logLevel to info', () => {
