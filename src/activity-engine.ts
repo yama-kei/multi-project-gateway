@@ -126,7 +126,7 @@ export interface ActivityEngine {
     segments: Array<{
       start: string;
       end: string;
-      state: 'processing' | 'idle';
+      state: 'processing' | 'idle' | 'pending';
       token_count?: number;
       token_rate?: number;
     }>;
