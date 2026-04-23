@@ -18,8 +18,15 @@ export interface SessionInfo {
   guildId?: string;
 }
 
-/** Callback invoked when an orphaned tmux session produces a result on startup recovery. */
-export type OrphanResultCallback = (projectKey: string, result: ClaudeResult) => void;
+/** Callbacks for orphan session recovery lifecycle. */
+export interface OrphanRecoveryCallbacks {
+  /** Fired before reattach() — use for typing indicators and interim messages. */
+  onStart: (projectKey: string) => void;
+  /** Fired after reattach() succeeds — use for delivering the result. */
+  onResult: (projectKey: string, result: ClaudeResult) => void;
+  /** Fired when reattach() throws — use to tear down onStart side-effects (e.g. typing intervals). */
+  onError?: (projectKey: string, error: Error) => void;
+}
 
 export interface SessionManager {
   send(projectKey: string, cwd: string, prompt: string, opts?: { worktree?: boolean; systemPrompt?: string; timeoutMs?: number; extraArgs?: string[]; guildId?: string }): Promise<ClaudeResult>;
@@ -29,7 +36,7 @@ export interface SessionManager {
   restartSession(projectKey: string): boolean;
   shutdown(): void;
   /** Discover orphaned tmux sessions and reattach to them. Call after Discord bot is ready. */
-  recoverOrphanedSessions(onResult: OrphanResultCallback): Promise<void>;
+  recoverOrphanedSessions(callbacks: OrphanRecoveryCallbacks): Promise<void>;
   /** Emit an agent_handoff pulse event. No-op if pulse is disabled. */
   emitHandoff(projectKey: string, cwd: string, opts: { fromAgent?: string; toAgent: string; threadId: string }): void;
 }
@@ -438,7 +445,7 @@ export function createSessionManager(defaults: {
       return true;
     },
 
-    async recoverOrphanedSessions(onResult: OrphanResultCallback): Promise<void> {
+    async recoverOrphanedSessions(callbacks: OrphanRecoveryCallbacks): Promise<void> {
       if (!runtime.canResume) {
         console.log('[recovery] Skipping: runtime.canResume is false');
         return;
@@ -480,6 +487,25 @@ export function createSessionManager(defaults: {
           continue;
         }
 
+        // Register as an in-memory session so it appears in listSessions()/dashboard
+        const session: InternalSession = {
+          sessionId: entry.sessionId,
+          projectKey: entry.projectKey,
+          cwd: entry.cwd,
+          projectDir: entry.projectDir,
+          worktreePath: entry.worktreePath,
+          guildId: undefined,
+          lastActivity: entry.lastActivity,
+          createdAt: entry.lastActivity,
+          messageCount: 0,
+          restored: true,
+          resumeEmitted: true,
+          processing: true,
+          queue: [],
+          idleTimer: null,
+        };
+        sessions.set(entry.projectKey, session);
+
         // Matched — reattach and deliver result
         reattachPromises.push(
           (async () => {
@@ -492,11 +518,23 @@ export function createSessionManager(defaults: {
                   Date.now() - entry.lastActivity,
                 );
               }
+              callbacks.onStart(entry.projectKey);
               const result = await runtime.reattach(key);
               console.log(`Reattached orphan ${key}: ${result.text.length} chars`);
-              onResult(entry.projectKey, result);
+
+              // Restore session state so follow-up messages continue the conversation
+              session.sessionId = result.sessionId || session.sessionId;
+              session.lastActivity = Date.now();
+              session.processing = false;
+              resetIdleTimer(session);
+              persistSessions();
+
+              callbacks.onResult(entry.projectKey, result);
             } catch (err) {
               console.error(`Failed to reattach orphan ${key}:`, err);
+              session.processing = false;
+              resetIdleTimer(session);
+              callbacks.onError?.(entry.projectKey, err instanceof Error ? err : new Error(String(err)));
             } finally {
               if (runtime.cleanup) runtime.cleanup(key);
             }
