@@ -103,7 +103,7 @@ The gateway restricts which tools Claude can use via `--allowed-tools` and `--di
 }
 ```
 
-`extraAllowedTools` is the recommended way to opt in to higher-risk tools like `WebFetch` because it keeps your config inheriting upstream additions to `DEFAULT_ALLOWED_TOOLS`. Setting `extraAllowedTools` alongside `disallowedTools` (without an explicit `allowedTools`) forces the config into allow-list mode and drops `disallowedTools` with a warning, matching the existing `allowedTools` precedence rule.
+`extraAllowedTools` is the recommended way to opt in to higher-risk tools like `WebFetch` because it keeps your config inheriting upstream additions to `DEFAULT_ALLOWED_TOOLS`. Setting `extraAllowedTools` alongside `disallowedTools` (without an explicit `allowedTools`) forces the config into allow-list mode and drops `disallowedTools` with a warning, matching the existing `allowedTools` precedence rule. If you combine `extraAllowedTools` with the `"allowedTools": []` disallow-only-mode pattern above, the effective allowlist becomes just your `extraAllowedTools` entries — `allowedTools: []` still clears the inherited default list.
 
 ## Prerequisites
 
