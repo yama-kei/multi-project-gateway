@@ -97,9 +97,12 @@ describe('TmuxRuntime', () => {
       expect(result.text).toBe('Hello from tmux');
       expect(result.sessionId).toBe('tmux-session-123');
 
-      // Verify script contains timeout wrapper: timeoutMs=5000 + 5min buffer = 305s
+      // Verify script contains timeout wrapper: timeoutMs=5000 + 5min buffer = 305s.
+      // Shebang and `timeout` line are asserted separately so the test is robust
+      // to optional env-export preamble (see tmux-runtime.ts: BROKER_* forwarding).
       const scriptContent = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(scriptContent).toMatch(/^#!\/bin\/sh\ntimeout 305 claude /);
+      expect(scriptContent).toMatch(/^#!\/bin\/sh\n/);
+      expect(scriptContent).toMatch(/\ntimeout 305 claude /);
     });
 
     it('uses default timeout (20min + 5min buffer = 1500s) when timeoutMs is omitted', async () => {
@@ -110,7 +113,8 @@ describe('TmuxRuntime', () => {
       await runtime.spawn({ ...spawnOpts, timeoutMs: undefined });
 
       const scriptContent = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-      expect(scriptContent).toMatch(/^#!\/bin\/sh\ntimeout 1500 claude /);
+      expect(scriptContent).toMatch(/^#!\/bin\/sh\n/);
+      expect(scriptContent).toMatch(/\ntimeout 1500 claude /);
     });
 
     it('kills stale tmux session before launching new one', async () => {
