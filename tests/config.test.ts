@@ -373,6 +373,18 @@ describe('loadConfig', () => {
     expect(config.projects['ch-1'].allowedTools).toEqual(['Read', 'Glob', 'WebFetch']);
   });
 
+  it('deduplicates overlapping entries and preserves first-occurrence order', () => {
+    const config = loadConfig({
+      defaults: {
+        allowedTools: ['Read', 'Edit', 'Glob'],
+        // "Read" overlaps with base, and "WebFetch" appears twice in extra
+        extraAllowedTools: ['Read', 'WebFetch', 'WebFetch'],
+      },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.defaults.allowedTools).toEqual(['Read', 'Edit', 'Glob', 'WebFetch']);
+  });
+
   // --- logLevel ---
 
   it('defaults logLevel to info', () => {
