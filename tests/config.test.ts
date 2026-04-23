@@ -322,6 +322,16 @@ describe('loadConfig', () => {
     warnSpy.mockRestore();
   });
 
+  // --- extraAllowedTools ---
+
+  it('extends DEFAULT_ALLOWED_TOOLS when only defaults.extraAllowedTools is set', () => {
+    const config = loadConfig({
+      defaults: { extraAllowedTools: ['WebFetch'] },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.defaults.allowedTools).toEqual([...DEFAULT_ALLOWED_TOOLS, 'WebFetch']);
+  });
+
   // --- logLevel ---
 
   it('defaults logLevel to info', () => {

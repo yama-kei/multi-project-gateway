@@ -20,6 +20,7 @@ export interface ProjectConfig {
   claudeArgs?: string[];
   allowedTools?: string[];
   disallowedTools?: string[];
+  extraAllowedTools?: string[];
   agents?: Record<string, AgentConfig>;
   allowedRoles?: string[];
   rateLimitPerUser?: number;
@@ -56,6 +57,7 @@ export interface GatewayDefaults {
   claudeArgs: string[];
   allowedTools: string[];
   disallowedTools: string[];
+  extraAllowedTools?: string[];
   maxTurnsPerAgent: number;
   agentTimeoutMs: number;
   stuckNotifyMs: number;
@@ -72,6 +74,28 @@ export interface GatewayConfig {
   projects: Record<string, ProjectConfig>;
 }
 
+function parseExtraAllowedTools(raw: unknown, label: string): string[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) {
+    console.warn(`Warning: ${label}.extraAllowedTools must be an array of strings — ignoring.`);
+    return undefined;
+  }
+  const strings = (raw as unknown[]).filter((e): e is string => typeof e === 'string');
+  return strings.length > 0 ? strings : undefined;
+}
+
+function mergeToolLists(base: string[], extra: string[] | undefined): string[] {
+  if (!extra || extra.length === 0) return base;
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const tool of [...base, ...extra]) {
+    if (seen.has(tool)) continue;
+    seen.add(tool);
+    result.push(tool);
+  }
+  return result;
+}
+
 export function loadConfig(raw: unknown): GatewayConfig {
   if (!raw || typeof raw !== 'object') {
     throw new Error('Config must be an object');
@@ -84,6 +108,24 @@ export function loadConfig(raw: unknown): GatewayConfig {
   }
 
   const projects = obj.projects as Record<string, unknown>;
+
+  const defaults = (obj.defaults ?? {}) as Record<string, unknown>;
+
+  const defaultExtra = parseExtraAllowedTools(defaults.extraAllowedTools, 'defaults');
+  const baseDefaultAllowed = Array.isArray(defaults.allowedTools)
+    ? (defaults.allowedTools as string[])
+    : DEFAULT_ALLOWED_TOOLS;
+  const effectiveDefaultAllowed = mergeToolLists(baseDefaultAllowed, defaultExtra);
+
+  let defaultDisallowed = Array.isArray(defaults.disallowedTools) ? (defaults.disallowedTools as string[]) : [];
+  if (Array.isArray(defaults.allowedTools) && Array.isArray(defaults.disallowedTools)) {
+    console.warn('Warning: gateway defaults set both allowedTools and disallowedTools — they conflict. allowedTools takes precedence.');
+  }
+  if (defaultExtra && defaultDisallowed.length > 0 && !Array.isArray(defaults.allowedTools)) {
+    console.warn('Warning: gateway defaults set both extraAllowedTools and disallowedTools — extraAllowedTools forces allow-list mode; disallowedTools will be ignored.');
+    defaultDisallowed = [];
+  }
+
   const validated: Record<string, ProjectConfig> = {};
 
   for (const [channelId, project] of Object.entries(projects)) {
@@ -134,22 +176,43 @@ export function loadConfig(raw: unknown): GatewayConfig {
       if (Object.keys(agents).length === 0) agents = undefined;
     }
 
-    const projectAllowed = Array.isArray(p.allowedTools) ? (p.allowedTools as string[]) : undefined;
-    const projectDisallowed = Array.isArray(p.disallowedTools) ? (p.disallowedTools as string[]) : undefined;
-    if (projectAllowed && projectDisallowed) {
-      console.warn(`Warning: project "${typeof p.name === 'string' ? p.name : channelId}" sets both allowedTools and disallowedTools — they conflict. allowedTools takes precedence.`);
+    const projectAllowedRaw = Array.isArray(p.allowedTools) ? (p.allowedTools as string[]) : undefined;
+    let projectDisallowed = Array.isArray(p.disallowedTools) ? (p.disallowedTools as string[]) : undefined;
+    const projectName = typeof p.name === 'string' ? p.name : channelId;
+    const projectExtra = parseExtraAllowedTools(p.extraAllowedTools, `project "${projectName}"`);
+
+    if (projectAllowedRaw && projectDisallowed) {
+      console.warn(`Warning: project "${projectName}" sets both allowedTools and disallowedTools — they conflict. allowedTools takes precedence.`);
+    }
+
+    // Resolve effective project allowlist:
+    //  - if project.allowedTools is set → layer projectExtra on top of it
+    //  - else if project.extraAllowedTools is set → layer on top of effective defaults
+    //  - else → no project allowedTools (falls through to defaults at runtime)
+    let projectAllowedEffective: string[] | undefined;
+    if (projectAllowedRaw) {
+      projectAllowedEffective = mergeToolLists(projectAllowedRaw, projectExtra);
+    } else if (projectExtra) {
+      projectAllowedEffective = mergeToolLists(effectiveDefaultAllowed, projectExtra);
+    }
+
+    // Project-level extraAllowedTools + disallowedTools → force allow-list mode
+    if (projectExtra && projectDisallowed && !projectAllowedRaw) {
+      console.warn(`Warning: project "${projectName}" sets both extraAllowedTools and disallowedTools — extraAllowedTools forces allow-list mode; disallowedTools will be ignored.`);
+      projectDisallowed = undefined;
     }
 
     const allowedRoles = Array.isArray(p.allowedRoles) ? (p.allowedRoles as string[]).filter(r => typeof r === 'string') : undefined;
     const rateLimitPerUser = typeof p.rateLimitPerUser === 'number' && p.rateLimitPerUser > 0 ? p.rateLimitPerUser : undefined;
 
     validated[channelId] = {
-      name: typeof p.name === 'string' ? p.name : channelId,
+      name: projectName,
       directory: p.directory,
       ...(p.idleTimeoutMs !== undefined && { idleTimeoutMs: Number(p.idleTimeoutMs) }),
       ...(Array.isArray(p.claudeArgs) && { claudeArgs: p.claudeArgs as string[] }),
-      ...(projectAllowed && { allowedTools: projectAllowed }),
+      ...(projectAllowedEffective && { allowedTools: projectAllowedEffective }),
       ...(projectDisallowed && { disallowedTools: projectDisallowed }),
+      ...(projectExtra && { extraAllowedTools: projectExtra }),
       ...(agents && { agents }),
       ...(allowedRoles && allowedRoles.length > 0 && { allowedRoles }),
       ...(rateLimitPerUser !== undefined && { rateLimitPerUser }),
@@ -159,14 +222,6 @@ export function loadConfig(raw: unknown): GatewayConfig {
     };
   }
 
-  const defaults = (obj.defaults ?? {}) as Record<string, unknown>;
-
-  const defaultAllowed = Array.isArray(defaults.allowedTools) ? (defaults.allowedTools as string[]) : DEFAULT_ALLOWED_TOOLS;
-  const defaultDisallowed = Array.isArray(defaults.disallowedTools) ? (defaults.disallowedTools as string[]) : [];
-  if (Array.isArray(defaults.allowedTools) && Array.isArray(defaults.disallowedTools)) {
-    console.warn('Warning: gateway defaults set both allowedTools and disallowedTools — they conflict. allowedTools takes precedence.');
-  }
-
   return {
     defaults: {
       idleTimeoutMs: typeof defaults.idleTimeoutMs === 'number' ? defaults.idleTimeoutMs : 1800000,
@@ -174,8 +229,9 @@ export function loadConfig(raw: unknown): GatewayConfig {
       sessionTtlMs: typeof defaults.sessionTtlMs === 'number' ? defaults.sessionTtlMs : 7 * 24 * 60 * 60 * 1000,
       maxPersistedSessions: typeof defaults.maxPersistedSessions === 'number' ? defaults.maxPersistedSessions : 50,
       claudeArgs: Array.isArray(defaults.claudeArgs) ? (defaults.claudeArgs as string[]) : ['--permission-mode', 'acceptEdits', '--output-format', 'json'],
-      allowedTools: defaultAllowed,
+      allowedTools: effectiveDefaultAllowed,
       disallowedTools: defaultDisallowed,
+      ...(defaultExtra && { extraAllowedTools: defaultExtra }),
       maxTurnsPerAgent: typeof defaults.maxTurnsPerAgent === 'number' ? defaults.maxTurnsPerAgent : 5,
       agentTimeoutMs: typeof defaults.agentTimeoutMs === 'number' ? defaults.agentTimeoutMs : 3 * 60 * 1000,
       stuckNotifyMs: typeof defaults.stuckNotifyMs === 'number' ? defaults.stuckNotifyMs : 300_000,
