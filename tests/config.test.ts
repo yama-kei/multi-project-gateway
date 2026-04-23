@@ -481,6 +481,49 @@ describe('loadConfig', () => {
     expect(config.projects['ch-1'].allowedTools).toEqual(['Read']);
   });
 
+  it('ignores non-array project.extraAllowedTools and emits a warning', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          name: 'Alpha',
+          directory: '/tmp/a',
+          extraAllowedTools: 'WebFetch' as any,
+        },
+      },
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('project "Alpha".extraAllowedTools must be an array of strings')
+    );
+    expect(config.projects['ch-1'].allowedTools).toBeUndefined();
+    warnSpy.mockRestore();
+  });
+
+  it('merges all three of project.allowedTools, extraAllowedTools, and disallowedTools without the extra+disallowed warning', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          name: 'Alpha',
+          directory: '/tmp/a',
+          allowedTools: ['Read'],
+          extraAllowedTools: ['WebFetch'],
+          disallowedTools: ['Bash'],
+        },
+      },
+    });
+    const calls = warnSpy.mock.calls.map(c => String(c[0]));
+    // The existing allowedTools+disallowedTools warning fires:
+    expect(calls.some(m => m.includes('project "Alpha" sets both allowedTools and disallowedTools'))).toBe(true);
+    // The extraAllowedTools+disallowedTools warning does NOT fire:
+    expect(calls.some(m => m.includes('extraAllowedTools and disallowedTools'))).toBe(false);
+    // Merged allowedTools is allowedTools ∪ extraAllowedTools:
+    expect(config.projects['ch-1'].allowedTools).toEqual(['Read', 'WebFetch']);
+    // disallowedTools is preserved (runtime still prefers allowedTools):
+    expect(config.projects['ch-1'].disallowedTools).toEqual(['Bash']);
+    warnSpy.mockRestore();
+  });
+
   // --- logLevel ---
 
   it('defaults logLevel to info', () => {

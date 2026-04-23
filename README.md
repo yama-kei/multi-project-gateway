@@ -302,7 +302,7 @@ If `~/.mpg/` does not exist and CWD files do, everything works exactly as before
 | `defaults.idleTimeoutMs` | number | `1800000` (30 min) | Session idle timeout before cleanup |
 | `defaults.maxConcurrentSessions` | number | `4` | Max concurrent Claude processes |
 | `defaults.claudeArgs` | string[] | `["--permission-mode", "acceptEdits", "--output-format", "json"]` | Args passed to every `claude` invocation |
-| `defaults.allowedTools` | string[] | `["Read", "Edit", "Write", "Glob", "Grep", "Bash(git:*)", "TodoWrite"]` | Tools Claude is allowed to use (see [Tool security](#tool-security)) |
+| `defaults.allowedTools` | string[] | see `DEFAULT_ALLOWED_TOOLS` in `src/config.ts` (currently 15 entries: `Read`, `Edit`, `Write`, `Glob`, `Grep`, `Bash(git:*)`, `Bash(gh:*)`, `Bash(npm:*)`, `Bash(npx:*)`, `Bash(node:*)`, `Bash(pnpm:*)`, `Bash(yarn:*)`, `Bash(bun:*)`, `Bash(make:*)`, `TodoWrite`) | Tools Claude is allowed to use (see [Tool security](#tool-security)). Prefer `extraAllowedTools` for additive opt-ins. |
 | `defaults.disallowedTools` | string[] | `[]` | Tools Claude is forbidden from using (conflicts with `allowedTools`) |
 | `defaults.extraAllowedTools` | string[] | (unset) | Additive allowlist extension — merged onto `allowedTools` (or `DEFAULT_ALLOWED_TOOLS`) with dedup (see [Tool security](#tool-security)) |
 | `defaults.maxTurnsPerAgent` | number | `5` | Max automatic handoffs in a single agent chain |
