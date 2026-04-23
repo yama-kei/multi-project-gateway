@@ -292,10 +292,17 @@ export function createSlackBot(
     if (turnCounter) turnCounter.reset(replyThreadTs);
 
     // Check for agent dispatch
-    const mention = agents
-      ? (parseAgentCommand(msg.text, agents) ?? parseAgentMention(msg.text, agents))
-      : null;
-    const activeAgent = mention ?? (isThread ? lastActiveAgent.get(replyThreadTs) ?? null : null);
+    const explicitCommand = agents ? parseAgentCommand(msg.text, agents) : null;
+    const mentionMatch = !explicitCommand && agents ? parseAgentMention(msg.text, agents) : null;
+    const mention = explicitCommand ?? mentionMatch;
+    const lastActive = !mention && isThread ? lastActiveAgent.get(replyThreadTs) ?? null : null;
+    const activeAgent = mention ?? lastActive;
+
+    // Determine routing method for Pulse observability (#132)
+    const routingMethod = explicitCommand ? 'explicit_command' as const
+      : mentionMatch ? 'mention' as const
+      : lastActive ? 'last_active' as const
+      : 'default' as const;
 
     // Session key: use thread_ts (or message ts for new threads) + optional agent name
     const sessionKey = activeAgent
@@ -329,6 +336,7 @@ export function createSlackBot(
           systemPrompt,
           timeoutMs: activeAgent ? resolveAgentTimeout(activeAgent.agent, config.defaults) : config.defaults.agentTimeoutMs,
           extraArgs: primarySpawn.extraArgs,
+          routingMethod,
         },
       );
 
@@ -377,6 +385,7 @@ export function createSlackBot(
                 fromAgent: currentAgentName,
                 toAgent: h.agentName,
                 threadId: replyThreadTs,
+                handoffDepth: turn,
               });
             }
 
@@ -409,7 +418,7 @@ export function createSlackBot(
                 agentName: handoff.agentName,
                 result: await sessionManager.send(
                   key, spawn.cwd, responseText,
-                  { worktree: true, systemPrompt: sysPrompt, timeoutMs: fanOutTimeout, extraArgs: spawn.extraArgs },
+                  { worktree: true, systemPrompt: sysPrompt, timeoutMs: fanOutTimeout, extraArgs: spawn.extraArgs, routingMethod: 'handoff' },
                 ),
               };
             });
@@ -442,7 +451,7 @@ export function createSlackBot(
               const synthSpawn = resolveLifeContextRun(currentAgentName ?? undefined, resolved.directory, toolArgs);
               synthesisResult = await sessionManager.send(
                 originKey, synthSpawn.cwd, synthesisPrompt,
-                { worktree: true, systemPrompt: originSysPrompt, timeoutMs: originAgent ? resolveAgentTimeout(originAgent, config.defaults) : config.defaults.agentTimeoutMs, extraArgs: synthSpawn.extraArgs },
+                { worktree: true, systemPrompt: originSysPrompt, timeoutMs: originAgent ? resolveAgentTimeout(originAgent, config.defaults) : config.defaults.agentTimeoutMs, extraArgs: synthSpawn.extraArgs, routingMethod: 'handoff' },
               );
             } catch (synthErr) {
               const errMsg = synthErr instanceof Error ? synthErr.message : String(synthErr);
@@ -476,6 +485,7 @@ export function createSlackBot(
             fromAgent: currentAgentName,
             toAgent: handoff.agentName,
             threadId: replyThreadTs,
+            handoffDepth: turn,
           });
 
           if (turnCounter.isOverLimit(replyThreadTs, maxTurns)) {
@@ -508,7 +518,7 @@ export function createSlackBot(
               handoffKey,
               handoffSpawn.cwd,
               responseText,
-              { worktree: true, systemPrompt: handoffPrompt, timeoutMs: resolveAgentTimeout(handoff.agent, config.defaults), extraArgs: handoffSpawn.extraArgs },
+              { worktree: true, systemPrompt: handoffPrompt, timeoutMs: resolveAgentTimeout(handoff.agent, config.defaults), extraArgs: handoffSpawn.extraArgs, routingMethod: 'handoff' },
             );
           } catch (handoffErr) {
             const errMsg = handoffErr instanceof Error ? handoffErr.message : String(handoffErr);

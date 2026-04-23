@@ -433,10 +433,17 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
     if (turnCounter) turnCounter.reset(replyChannel.id);
 
     // Check for !ask <agent> command, @agent mention, or fall back to last active agent (#48, #60)
-    const mention = agents
-      ? (parseAgentCommand(message.content, agents) ?? parseAgentMention(message.content, agents))
-      : null;
-    const activeAgent = mention ?? (message.channel.isThread() ? lastActiveAgent.get(replyChannel.id) ?? null : null);
+    const explicitCommand = agents ? parseAgentCommand(message.content, agents) : null;
+    const mentionMatch = !explicitCommand && agents ? parseAgentMention(message.content, agents) : null;
+    const mention = explicitCommand ?? mentionMatch;
+    const lastActive = !mention && message.channel.isThread() ? lastActiveAgent.get(replyChannel.id) ?? null : null;
+    const activeAgent = mention ?? lastActive;
+
+    // Determine routing method for Pulse observability (#132)
+    const routingMethod = explicitCommand ? 'explicit_command' as const
+      : mentionMatch ? 'mention' as const
+      : lastActive ? 'last_active' as const
+      : 'default' as const;
 
     // Use thread ID for session keys so each thread gets its own agent sessions.
     // For main-channel messages, replyChannel is the newly created thread.
@@ -505,6 +512,7 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
           timeoutMs: activeAgent ? resolveAgentTimeout(activeAgent.agent, config.defaults) : config.defaults.agentTimeoutMs,
           extraArgs: primarySpawn.extraArgs,
           guildId: message.guildId ?? undefined,
+          routingMethod,
         },
       );
 
@@ -552,6 +560,7 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
                 fromAgent: currentAgentName,
                 toAgent: h.agentName,
                 threadId,
+                handoffDepth: turn,
               });
             }
 
@@ -576,7 +585,7 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
                 agentName: handoff.agentName,
                 result: await sessionManager.send(
                   key, spawn.cwd, responseText,
-                  { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: sysPrompt, timeoutMs: fanOutTimeout, extraArgs: spawn.extraArgs },
+                  { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: sysPrompt, timeoutMs: fanOutTimeout, extraArgs: spawn.extraArgs, routingMethod: 'handoff' },
                 ),
               };
             });
@@ -612,7 +621,7 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
               const synthSpawn = resolveLifeContextRun(currentAgentName ?? undefined, resolved.directory, toolArgs);
               synthesisResult = await sessionManager.send(
                 originKey, synthSpawn.cwd, synthesisPrompt,
-                { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: originSysPrompt, timeoutMs: originAgent ? resolveAgentTimeout(originAgent, config.defaults) : config.defaults.agentTimeoutMs, extraArgs: synthSpawn.extraArgs },
+                { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: originSysPrompt, timeoutMs: originAgent ? resolveAgentTimeout(originAgent, config.defaults) : config.defaults.agentTimeoutMs, extraArgs: synthSpawn.extraArgs, routingMethod: 'handoff' },
               );
             } catch (synthErr) {
               const msg = synthErr instanceof Error ? synthErr.message : String(synthErr);
@@ -648,6 +657,7 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
             fromAgent: currentAgentName,
             toAgent: handoff.agentName,
             threadId,
+            handoffDepth: turn,
           });
 
           if (turnCounter.isOverLimit(replyChannel.id, maxTurns)) {
@@ -679,7 +689,7 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
               handoffKey,
               handoffSpawn.cwd,
               responseText,
-              { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: handoffPrompt, timeoutMs: resolveAgentTimeout(handoff.agent, config.defaults), extraArgs: handoffSpawn.extraArgs },
+              { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: handoffPrompt, timeoutMs: resolveAgentTimeout(handoff.agent, config.defaults), extraArgs: handoffSpawn.extraArgs, routingMethod: 'handoff' },
             );
           } catch (handoffErr) {
             const msg = handoffErr instanceof Error ? handoffErr.message : String(handoffErr);
