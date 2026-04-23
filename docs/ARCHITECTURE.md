@@ -263,9 +263,10 @@ Per-project settings override gateway defaults:
 | `claudeArgs` | From `defaults` | Appended: `[...defaults, ...project]` |
 | `allowedTools` | From `defaults` | Replaced entirely by `project.allowedTools` |
 | `disallowedTools` | From `defaults` | Replaced entirely by `project.disallowedTools` |
+| `extraAllowedTools` | Additive; extends `DEFAULT_ALLOWED_TOOLS` or `defaults.allowedTools` | Additive at project level — extends whichever allowlist applies |
 | `agents` | None | Defined per-project only |
 
-If `claudeArgs` already contains `--allowed-tools` or `--disallowed-tools`, the automatic tool args are skipped (manual override takes precedence). If both `allowedTools` and `disallowedTools` are set, `allowedTools` wins and a warning is logged.
+If `claudeArgs` already contains `--allowed-tools` or `--disallowed-tools`, the automatic tool args are skipped (manual override takes precedence). If both `allowedTools` and `disallowedTools` are set, `allowedTools` wins and a warning is logged. If `extraAllowedTools` is set alongside `disallowedTools` without an explicit `allowedTools`, the config is forced into allow-list mode and `disallowedTools` is dropped with a warning.
 
 ## Security boundaries
 
