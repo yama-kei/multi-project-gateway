@@ -85,6 +85,26 @@ The gateway restricts which tools Claude can use via `--allowed-tools` and `--di
 
 > **Disallow-only mode:** When a project sets only `disallowedTools` without setting `allowedTools`, the gateway-level `allowedTools` default still applies (via fallback). This means the project inherits the default allowlist _and_ adds its disallow rules on top — but since `allowedTools` takes precedence over `disallowedTools`, the disallow list is effectively ignored. To use disallow-only mode (block specific tools while allowing everything else), explicitly set `"allowedTools": []` at the project level to clear the inherited allowlist.
 
+**Additive opt-in (`extraAllowedTools`):** If you just want to add one or two tools on top of the defaults (for example, allowing `WebFetch` for an agent that reads articles), use `extraAllowedTools` instead of copying the full default list into `allowedTools`:
+
+```jsonc
+{
+  "defaults": {
+    // DEFAULT_ALLOWED_TOOLS ∪ WebFetch, deduped and order-stable
+    "extraAllowedTools": ["WebFetch"]
+  },
+  "projects": {
+    "RESEARCH_CHANNEL": {
+      "directory": "/path/to/research",
+      // Layers on top of effective defaults (or on top of project.allowedTools if set)
+      "extraAllowedTools": ["WebSearch"]
+    }
+  }
+}
+```
+
+`extraAllowedTools` is the recommended way to opt in to higher-risk tools like `WebFetch` because it keeps your config inheriting upstream additions to `DEFAULT_ALLOWED_TOOLS`. Setting `extraAllowedTools` alongside `disallowedTools` (without an explicit `allowedTools`) forces the config into allow-list mode and drops `disallowedTools` with a warning, matching the existing `allowedTools` precedence rule. If you combine `extraAllowedTools` with the `"allowedTools": []` disallow-only-mode pattern above, the effective allowlist becomes just your `extraAllowedTools` entries — `allowedTools: []` still clears the inherited default list.
+
 ## Prerequisites
 
 - **Node.js** 20+
@@ -282,8 +302,9 @@ If `~/.mpg/` does not exist and CWD files do, everything works exactly as before
 | `defaults.idleTimeoutMs` | number | `1800000` (30 min) | Session idle timeout before cleanup |
 | `defaults.maxConcurrentSessions` | number | `4` | Max concurrent Claude processes |
 | `defaults.claudeArgs` | string[] | `["--permission-mode", "acceptEdits", "--output-format", "json"]` | Args passed to every `claude` invocation |
-| `defaults.allowedTools` | string[] | `["Read", "Edit", "Write", "Glob", "Grep", "Bash(git:*)", "TodoWrite"]` | Tools Claude is allowed to use (see [Tool security](#tool-security)) |
+| `defaults.allowedTools` | string[] | see `DEFAULT_ALLOWED_TOOLS` in `src/config.ts` (currently 15 entries: `Read`, `Edit`, `Write`, `Glob`, `Grep`, `Bash(git:*)`, `Bash(gh:*)`, `Bash(npm:*)`, `Bash(npx:*)`, `Bash(node:*)`, `Bash(pnpm:*)`, `Bash(yarn:*)`, `Bash(bun:*)`, `Bash(make:*)`, `TodoWrite`) | Tools Claude is allowed to use (see [Tool security](#tool-security)). Prefer `extraAllowedTools` for additive opt-ins. |
 | `defaults.disallowedTools` | string[] | `[]` | Tools Claude is forbidden from using (conflicts with `allowedTools`) |
+| `defaults.extraAllowedTools` | string[] | (unset) | Additive allowlist extension — merged onto `allowedTools` (or `DEFAULT_ALLOWED_TOOLS`) with dedup (see [Tool security](#tool-security)) |
 | `defaults.maxTurnsPerAgent` | number | `5` | Max automatic handoffs in a single agent chain |
 | `defaults.agentTimeoutMs` | number | `180000` (3 min) | Timeout per agent turn during auto-handoff |
 | `defaults.sessionTtlMs` | number | `604800000` (7 days) | Max age for persisted sessions before pruning |
@@ -297,6 +318,7 @@ If `~/.mpg/` does not exist and CWD files do, everything works exactly as before
 | `projects.<channelId>.claudeArgs` | string[] | inherits default | Per-project Claude args override |
 | `projects.<channelId>.allowedTools` | string[] | inherits default | Per-project allowed tools override |
 | `projects.<channelId>.disallowedTools` | string[] | inherits default | Per-project disallowed tools override |
+| `projects.<channelId>.extraAllowedTools` | string[] | (unset) | Per-project additive allowlist extension — merged on top of whichever allowlist applies |
 | `projects.<channelId>.agents` | object | — | Named agents for this project (see [Multi-agent setup](#multi-agent-setup)) |
 | `projects.<channelId>.allowedRoles` | string[] | — | Discord role names required to use this project (empty = no restriction) |
 | `projects.<channelId>.rateLimitPerUser` | number | — | Max messages per user per minute for this project |

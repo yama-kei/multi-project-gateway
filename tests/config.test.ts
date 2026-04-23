@@ -322,6 +322,208 @@ describe('loadConfig', () => {
     warnSpy.mockRestore();
   });
 
+  // --- extraAllowedTools ---
+
+  it('extends DEFAULT_ALLOWED_TOOLS when only defaults.extraAllowedTools is set', () => {
+    const config = loadConfig({
+      defaults: { extraAllowedTools: ['WebFetch'] },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.defaults.allowedTools).toEqual([...DEFAULT_ALLOWED_TOOLS, 'WebFetch']);
+  });
+
+  it('extends explicit defaults.allowedTools when defaults.extraAllowedTools is also set', () => {
+    const config = loadConfig({
+      defaults: {
+        allowedTools: ['Read', 'Bash'],
+        extraAllowedTools: ['WebFetch'],
+      },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.defaults.allowedTools).toEqual(['Read', 'Bash', 'WebFetch']);
+  });
+
+  it('layers project.extraAllowedTools on top of effective defaults when project.allowedTools is absent', () => {
+    const config = loadConfig({
+      defaults: { extraAllowedTools: ['WebFetch'] },
+      projects: {
+        'ch-1': {
+          directory: '/tmp/a',
+          extraAllowedTools: ['WebSearch'],
+        },
+      },
+    });
+    expect(config.projects['ch-1'].allowedTools).toEqual([
+      ...DEFAULT_ALLOWED_TOOLS,
+      'WebFetch',
+      'WebSearch',
+    ]);
+  });
+
+  it('extends project.allowedTools with project.extraAllowedTools', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          directory: '/tmp/a',
+          allowedTools: ['Read', 'Glob'],
+          extraAllowedTools: ['WebFetch'],
+        },
+      },
+    });
+    expect(config.projects['ch-1'].allowedTools).toEqual(['Read', 'Glob', 'WebFetch']);
+  });
+
+  it('deduplicates overlapping entries and preserves first-occurrence order', () => {
+    const config = loadConfig({
+      defaults: {
+        allowedTools: ['Read', 'Edit', 'Glob'],
+        // "Read" overlaps with base, and "WebFetch" appears twice in extra
+        extraAllowedTools: ['Read', 'WebFetch', 'WebFetch'],
+      },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.defaults.allowedTools).toEqual(['Read', 'Edit', 'Glob', 'WebFetch']);
+  });
+
+  it('warns and drops disallowedTools when defaults set extraAllowedTools + disallowedTools', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const config = loadConfig({
+      defaults: {
+        extraAllowedTools: ['WebFetch'],
+        disallowedTools: ['Bash'],
+      },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('gateway defaults set both extraAllowedTools and disallowedTools')
+    );
+    expect(config.defaults.disallowedTools).toEqual([]);
+    expect(config.defaults.allowedTools).toEqual([...DEFAULT_ALLOWED_TOOLS, 'WebFetch']);
+    warnSpy.mockRestore();
+  });
+
+  it('does not warn about extraAllowedTools + disallowedTools when allowedTools is also set (existing warning covers it)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    loadConfig({
+      defaults: {
+        allowedTools: ['Read'],
+        extraAllowedTools: ['WebFetch'],
+        disallowedTools: ['Bash'],
+      },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    const calls = warnSpy.mock.calls.map(c => String(c[0]));
+    expect(calls.some(m => m.includes('allowedTools and disallowedTools'))).toBe(true);
+    expect(calls.some(m => m.includes('extraAllowedTools and disallowedTools'))).toBe(false);
+    warnSpy.mockRestore();
+  });
+
+  it('warns and drops disallowedTools when project sets extraAllowedTools + disallowedTools', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          name: 'Alpha',
+          directory: '/tmp/a',
+          extraAllowedTools: ['WebFetch'],
+          disallowedTools: ['Bash'],
+        },
+      },
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('project "Alpha" sets both extraAllowedTools and disallowedTools')
+    );
+    expect(config.projects['ch-1'].disallowedTools).toBeUndefined();
+    expect(config.projects['ch-1'].allowedTools).toEqual([...DEFAULT_ALLOWED_TOOLS, 'WebFetch']);
+    warnSpy.mockRestore();
+  });
+
+  it('ignores non-array extraAllowedTools and emits a warning', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const config = loadConfig({
+      defaults: { extraAllowedTools: 'WebFetch' as any },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('defaults.extraAllowedTools must be an array of strings')
+    );
+    expect(config.defaults.allowedTools).toEqual(DEFAULT_ALLOWED_TOOLS);
+    warnSpy.mockRestore();
+  });
+
+  it('filters non-string entries from extraAllowedTools', () => {
+    const config = loadConfig({
+      defaults: { extraAllowedTools: ['WebFetch', 123, null, 'WebSearch'] as any },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.defaults.allowedTools).toEqual([
+      ...DEFAULT_ALLOWED_TOOLS,
+      'WebFetch',
+      'WebSearch',
+    ]);
+  });
+
+  it('treats an empty extraAllowedTools array as absent', () => {
+    const config = loadConfig({
+      defaults: { extraAllowedTools: [] },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.defaults.allowedTools).toEqual(DEFAULT_ALLOWED_TOOLS);
+    expect(config.defaults.extraAllowedTools).toBeUndefined();
+  });
+
+  it('leaves behavior unchanged when extraAllowedTools is absent', () => {
+    const config = loadConfig({
+      defaults: { allowedTools: ['Read', 'Bash'] },
+      projects: { 'ch-1': { directory: '/tmp/a', allowedTools: ['Read'] } },
+    });
+    expect(config.defaults.allowedTools).toEqual(['Read', 'Bash']);
+    expect(config.projects['ch-1'].allowedTools).toEqual(['Read']);
+  });
+
+  it('ignores non-array project.extraAllowedTools and emits a warning', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          name: 'Alpha',
+          directory: '/tmp/a',
+          extraAllowedTools: 'WebFetch' as any,
+        },
+      },
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('project "Alpha".extraAllowedTools must be an array of strings')
+    );
+    expect(config.projects['ch-1'].allowedTools).toBeUndefined();
+    warnSpy.mockRestore();
+  });
+
+  it('merges all three of project.allowedTools, extraAllowedTools, and disallowedTools without the extra+disallowed warning', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          name: 'Alpha',
+          directory: '/tmp/a',
+          allowedTools: ['Read'],
+          extraAllowedTools: ['WebFetch'],
+          disallowedTools: ['Bash'],
+        },
+      },
+    });
+    const calls = warnSpy.mock.calls.map(c => String(c[0]));
+    // The existing allowedTools+disallowedTools warning fires:
+    expect(calls.some(m => m.includes('project "Alpha" sets both allowedTools and disallowedTools'))).toBe(true);
+    // The extraAllowedTools+disallowedTools warning does NOT fire:
+    expect(calls.some(m => m.includes('extraAllowedTools and disallowedTools'))).toBe(false);
+    // Merged allowedTools is allowedTools ∪ extraAllowedTools:
+    expect(config.projects['ch-1'].allowedTools).toEqual(['Read', 'WebFetch']);
+    // disallowedTools is preserved (runtime still prefers allowedTools):
+    expect(config.projects['ch-1'].disallowedTools).toEqual(['Bash']);
+    warnSpy.mockRestore();
+  });
+
   // --- logLevel ---
 
   it('defaults logLevel to info', () => {
