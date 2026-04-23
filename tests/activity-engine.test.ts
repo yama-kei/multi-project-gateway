@@ -262,6 +262,162 @@ describe('ActivityEngine', () => {
     });
   });
 
+  describe('turnComplexity', () => {
+    it('buckets message_completed events into low/medium/high', () => {
+      writeEvents(filePath, [
+        // low: num_turns <= 3 AND duration_ms < 30000
+        makeEvent({ event_type: 'message_completed', num_turns: 2, duration_ms: 5000 }),
+        makeEvent({ event_type: 'message_completed', num_turns: 3, duration_ms: 29000 }),
+        // medium: in-between
+        makeEvent({ event_type: 'message_completed', num_turns: 5, duration_ms: 60000 }),
+        // high: num_turns >= 10 OR duration_ms >= 120000
+        makeEvent({ event_type: 'message_completed', num_turns: 12, duration_ms: 50000 }),
+        makeEvent({ event_type: 'message_completed', num_turns: 4, duration_ms: 150000 }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const c = engine.turnComplexity('7d');
+      expect(c.low).toBe(2);
+      expect(c.medium).toBe(1);
+      expect(c.high).toBe(2);
+    });
+
+    it('treats missing num_turns/duration_ms as zero (bucketed low)', () => {
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'message_completed' }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const c = engine.turnComplexity('7d');
+      expect(c).toEqual({ low: 1, medium: 0, high: 0 });
+    });
+
+    it('returns zero counts for missing file', () => {
+      const engine = createActivityEngine(join(dir, 'nonexistent.jsonl'));
+      expect(engine.turnComplexity('7d')).toEqual({ low: 0, medium: 0, high: 0 });
+    });
+
+    it('ignores non-message_completed events', () => {
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start' }),
+        makeEvent({ event_type: 'message_routed' }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      expect(engine.turnComplexity('7d')).toEqual({ low: 0, medium: 0, high: 0 });
+    });
+  });
+
+  describe('sessionRetries', () => {
+    it('counts zero retries when each routed has a successful completion', () => {
+      const base = new Date();
+      const t = (offset: number) => new Date(base.getTime() + offset).toISOString();
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-ok', timestamp: t(0), agent_name: 'engineer' }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-ok', timestamp: t(1000), agent_target: 'engineer' }),
+        makeEvent({ event_type: 'message_completed', session_id: 'sess-ok', timestamp: t(2000), output_tokens: 100 }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-ok', timestamp: t(3000), agent_target: 'engineer' }),
+        makeEvent({ event_type: 'message_completed', session_id: 'sess-ok', timestamp: t(4000), output_tokens: 50 }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const rows = engine.sessionRetries('7d');
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        session_id: 'sess-ok',
+        agent: 'engineer',
+        user_turns: 2,
+        retries: 0,
+      });
+    });
+
+    it('counts consecutive user turns without an intervening success as retries', () => {
+      const base = new Date();
+      const t = (offset: number) => new Date(base.getTime() + offset).toISOString();
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-retry', timestamp: t(0), agent_name: 'pm' }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-retry', timestamp: t(1000) }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-retry', timestamp: t(2000) }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-retry', timestamp: t(3000) }),
+        makeEvent({ event_type: 'message_completed', session_id: 'sess-retry', timestamp: t(4000), output_tokens: 100 }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const rows = engine.sessionRetries('7d');
+      expect(rows[0]).toMatchObject({ user_turns: 3, retries: 2 });
+    });
+
+    it('treats message_completed with zero output_tokens as unsuccessful', () => {
+      const base = new Date();
+      const t = (offset: number) => new Date(base.getTime() + offset).toISOString();
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-empty', timestamp: t(0), agent_name: 'engineer' }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-empty', timestamp: t(1000) }),
+        makeEvent({ event_type: 'message_completed', session_id: 'sess-empty', timestamp: t(2000), output_tokens: 0 }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-empty', timestamp: t(3000) }),
+        makeEvent({ event_type: 'message_completed', session_id: 'sess-empty', timestamp: t(4000), output_tokens: 50 }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const rows = engine.sessionRetries('7d');
+      expect(rows[0]).toMatchObject({ user_turns: 2, retries: 1 });
+    });
+
+    it('falls back to agent_target from message_routed when session_start has no agent_name', () => {
+      const base = new Date();
+      const t = (offset: number) => new Date(base.getTime() + offset).toISOString();
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-noname', timestamp: t(0) }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-noname', timestamp: t(1000), agent_target: 'designer' }),
+        makeEvent({ event_type: 'message_completed', session_id: 'sess-noname', timestamp: t(2000), output_tokens: 10 }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const rows = engine.sessionRetries('7d');
+      expect(rows[0].agent).toBe('designer');
+    });
+
+    it('falls back to "default" when no agent info is available', () => {
+      const base = new Date();
+      const t = (offset: number) => new Date(base.getTime() + offset).toISOString();
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-bare', timestamp: t(0) }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-bare', timestamp: t(1000) }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const rows = engine.sessionRetries('7d');
+      expect(rows[0].agent).toBe('default');
+    });
+
+    it('returns empty array for missing file', () => {
+      const engine = createActivityEngine(join(dir, 'nonexistent.jsonl'));
+      expect(engine.sessionRetries('7d')).toEqual([]);
+    });
+
+    it('groups by session_id across multiple sessions', () => {
+      const base = new Date();
+      const t = (offset: number) => new Date(base.getTime() + offset).toISOString();
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-a', timestamp: t(0), agent_name: 'pm' }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-a', timestamp: t(1000) }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-a', timestamp: t(2000) }),
+        makeEvent({ event_type: 'session_start', session_id: 'sess-b', timestamp: t(0), agent_name: 'engineer' }),
+        makeEvent({ event_type: 'message_routed', session_id: 'sess-b', timestamp: t(3000) }),
+        makeEvent({ event_type: 'message_completed', session_id: 'sess-b', timestamp: t(4000), output_tokens: 100 }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      const rows = engine.sessionRetries('7d');
+      expect(rows).toHaveLength(2);
+      const a = rows.find(r => r.session_id === 'sess-a')!;
+      const b = rows.find(r => r.session_id === 'sess-b')!;
+      expect(a).toMatchObject({ agent: 'pm', user_turns: 2, retries: 1 });
+      expect(b).toMatchObject({ agent: 'engineer', user_turns: 1, retries: 0 });
+    });
+
+    it('skips sessions with no user turns', () => {
+      const base = new Date();
+      const t = (offset: number) => new Date(base.getTime() + offset).toISOString();
+      writeEvents(filePath, [
+        makeEvent({ event_type: 'session_start', session_id: 'sess-silent', timestamp: t(0), agent_name: 'pm' }),
+      ]);
+      const engine = createActivityEngine(filePath);
+      expect(engine.sessionRetries('7d')).toEqual([]);
+    });
+  });
+
   describe('sessionDurations', () => {
     it('returns durations from session_end and session_idle events', () => {
       writeEvents(filePath, [

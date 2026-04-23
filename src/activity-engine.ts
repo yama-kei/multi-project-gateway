@@ -61,6 +61,15 @@ function bucketKey(timestamp: string, bucket: Bucket): string {
   return d.toISOString();
 }
 
+/** Phase 1 heuristic: classify a message_completed event as low/medium/high turn_complexity.
+ *  num_turns = Claude's internal conversational turns (tool-use roundtrips); duration_ms is wall-clock.
+ *  Thresholds separate quick single-turn replies from deeper multi-tool work. Revisit with Phase 2 LLM labels. */
+function classifyComplexity(numTurns: number, durationMs: number): 'low' | 'medium' | 'high' {
+  if (numTurns >= 10 || durationMs >= 120_000) return 'high';
+  if (numTurns <= 3 && durationMs < 30_000) return 'low';
+  return 'medium';
+}
+
 /** Resolve a project name from its directory path using a directory→name map.
  *  Handles both exact matches and worktree subdirectory matches. */
 function resolveNameFromDir(projectDir: string, dirToNameMap?: Record<string, string>): string | undefined {
@@ -119,6 +128,23 @@ export interface ActivityEngine {
     cache_read_tokens: number;
     cache_hit_ratio: number;
   };
+  /** Phase 1 heuristic: bucketed count of message_completed events by turn_complexity.
+   *  Swap for Phase 2 LLM-derived complexity labels when available. */
+  turnComplexity(range: TimeRange): {
+    low: number;
+    medium: number;
+    high: number;
+  };
+  /** Phase 1 heuristic: per-session retry counts. A "retry" is a message_routed event
+   *  that was not preceded by a successful message_completed (output_tokens > 0)
+   *  since the previous message_routed in the same session. */
+  sessionRetries(range: TimeRange): Array<{
+    session_id: string;
+    project_key: string;
+    agent: string;
+    user_turns: number;
+    retries: number;
+  }>;
   sessionTimeline(range: TimeRange, projectNameMap?: Record<string, string>, dirToNameMap?: Record<string, string>): Array<{
     session_id: string;
     thread_id: string;
@@ -262,6 +288,66 @@ export function createActivityEngine(filePath?: string): ActivityEngine {
         cache_read_tokens: cacheRead,
         cache_hit_ratio: denominator > 0 ? cacheRead / denominator : 0,
       };
+    },
+
+    turnComplexity(range) {
+      const messages = getEvents(range, 'message_completed');
+      const counts = { low: 0, medium: 0, high: 0 };
+      for (const e of messages) {
+        const bucket = classifyComplexity(Number(e.num_turns) || 0, Number(e.duration_ms) || 0);
+        counts[bucket]++;
+      }
+      return counts;
+    },
+
+    sessionRetries(range) {
+      const events = readEvents(target, range);
+      const bySession = new Map<string, PulseEvent[]>();
+      for (const e of events) {
+        if (e.event_type !== 'session_start' && e.event_type !== 'message_routed' && e.event_type !== 'message_completed') continue;
+        const list = bySession.get(e.session_id);
+        if (list) list.push(e);
+        else bySession.set(e.session_id, [e]);
+      }
+
+      const rows: Array<{ session_id: string; project_key: string; agent: string; user_turns: number; retries: number }> = [];
+      for (const [sessionId, sessEvents] of bySession) {
+        sessEvents.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+
+        let agent = 'default';
+        const startEvent = sessEvents.find(e => e.event_type === 'session_start');
+        if (startEvent && startEvent.agent_name) {
+          agent = String(startEvent.agent_name);
+        } else {
+          const routedWithTarget = sessEvents.find(e => e.event_type === 'message_routed' && e.agent_target);
+          if (routedWithTarget) agent = String(routedWithTarget.agent_target);
+        }
+
+        let userTurns = 0;
+        let retries = 0;
+        // First routed in a session is never a retry; start with the "success" flag set so it doesn't count.
+        let sawSuccessSinceLastRouted = true;
+        for (const e of sessEvents) {
+          if (e.event_type === 'message_routed') {
+            userTurns++;
+            if (!sawSuccessSinceLastRouted) retries++;
+            sawSuccessSinceLastRouted = false;
+          } else if (e.event_type === 'message_completed' && (Number(e.output_tokens) || 0) > 0) {
+            sawSuccessSinceLastRouted = true;
+          }
+        }
+
+        if (userTurns === 0) continue;
+
+        rows.push({
+          session_id: sessionId,
+          project_key: sessEvents[0].project_key,
+          agent,
+          user_turns: userTurns,
+          retries,
+        });
+      }
+      return rows;
     },
 
     sessionTimeline(range, projectNameMap, dirToNameMap) {

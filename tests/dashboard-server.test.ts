@@ -335,6 +335,8 @@ describe('createDashboardServer', () => {
         modelBreakdown: vi.fn().mockReturnValue([{ model: 'claude-sonnet-4-20250514', input_tokens: 500000, output_tokens: 50000, cost_usd: 1.23 }]),
         personaBreakdown: vi.fn().mockReturnValue([{ agent: 'engineer', count: 25 }]),
         cacheEfficiency: vi.fn().mockReturnValue({ total_input_tokens: 500000, cache_read_tokens: 200000, cache_hit_ratio: 0.4 }),
+        turnComplexity: vi.fn().mockReturnValue({ low: 5, medium: 3, high: 2 }),
+        sessionRetries: vi.fn().mockReturnValue([{ session_id: 'sess-1', project_key: 'proj-a', agent: 'engineer', user_turns: 4, retries: 1 }]),
         sessionTimeline: vi.fn().mockReturnValue([]),
       };
     }
@@ -384,6 +386,29 @@ describe('createDashboardServer', () => {
       expect(body.project_name_map).toEqual({});
     });
 
+    it('GET /api/activity/summary includes turn_complexity and session_retries enrichment', async () => {
+      const port = getPort();
+      const engine = makeMockEngine();
+      server = await createDashboardServer(port, makeSessionManager(), makeBot(), makeConfig(), {
+        activityEngine: engine,
+      });
+      const res = await httpGet(port, '/api/activity/summary?range=7d');
+      const body = JSON.parse(res.body);
+      expect(body.turn_complexity).toEqual({ low: 5, medium: 3, high: 2 });
+      expect(body.session_retries).toEqual([{ session_id: 'sess-1', project_key: 'proj-a', agent: 'engineer', user_turns: 4, retries: 1 }]);
+      expect(engine.turnComplexity).toHaveBeenCalledWith('7d');
+      expect(engine.sessionRetries).toHaveBeenCalledWith('7d');
+    });
+
+    it('GET /api/activity/summary returns empty enrichment when no engine provided', async () => {
+      const port = getPort();
+      server = await createDashboardServer(port, makeSessionManager(), makeBot(), makeConfig());
+      const res = await httpGet(port, '/api/activity/summary');
+      const body = JSON.parse(res.body);
+      expect(body.turn_complexity).toEqual({ low: 0, medium: 0, high: 0 });
+      expect(body.session_retries).toEqual([]);
+    });
+
     it('GET /api/activity/summary includes project_name_map and dir_to_name_map from config', async () => {
       const port = getPort();
       const engine = makeMockEngine();
@@ -411,6 +436,8 @@ describe('createDashboardServer', () => {
         modelBreakdown: vi.fn().mockReturnValue([]),
         personaBreakdown: vi.fn().mockReturnValue([]),
         cacheEfficiency: vi.fn().mockReturnValue({ total_input_tokens: 0, cache_read_tokens: 0, cache_hit_ratio: 0 }),
+        turnComplexity: vi.fn().mockReturnValue({ low: 0, medium: 0, high: 0 }),
+        sessionRetries: vi.fn().mockReturnValue([]),
         sessionTimeline: vi.fn().mockReturnValue([
           {
             session_id: 'sess-12345678',

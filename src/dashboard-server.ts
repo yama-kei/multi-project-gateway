@@ -135,6 +135,10 @@ function buildDashboardHtml(): string {
   <div id="session-table"></div>
   <h3 style="margin:16px 0 8px">Cache Efficiency</h3>
   <div id="cache-table"></div>
+  <h3 style="margin:16px 0 8px">Turn Complexity <span style="color:#8b949e;font-weight:400">(Phase 1 heuristic)</span></h3>
+  <div id="complexity-table"></div>
+  <h3 style="margin:16px 0 8px">Retry Rate by Agent <span style="color:#8b949e;font-weight:400">(Phase 1 heuristic)</span></h3>
+  <div id="retry-table"></div>
 </div>
 
 <div id="tab-timeline" style="display:none">
@@ -803,6 +807,45 @@ function refreshActivity() {
       var ct = document.getElementById('cache-table');
       var ce = d.cache_efficiency;
       ct.innerHTML = '<table><tr><th>Total Input</th><th>Cache Read</th><th>Hit Ratio</th></tr><tr><td>' + compactTokens(ce.total_input_tokens) + '</td><td>' + compactTokens(ce.cache_read_tokens) + '</td><td>' + (ce.cache_hit_ratio * 100).toFixed(1) + '%</td></tr></table>';
+
+      // Turn Complexity breakdown (Phase 1 heuristic)
+      var tc = d.turn_complexity || { low: 0, medium: 0, high: 0 };
+      var tcTotal = tc.low + tc.medium + tc.high;
+      var ctab = document.getElementById('complexity-table');
+      if (tcTotal === 0) {
+        ctab.innerHTML = '<div class="empty">No data</div>';
+      } else {
+        var pct = function(n) { return (n / tcTotal * 100).toFixed(1) + '%'; };
+        ctab.innerHTML = '<table>' +
+          '<tr><th>Bucket</th><th>Count</th><th>Share</th></tr>' +
+          '<tr><td>Low (&le;3 turns, &lt;30s)</td><td>' + tc.low + '</td><td>' + pct(tc.low) + '</td></tr>' +
+          '<tr><td>Medium</td><td>' + tc.medium + '</td><td>' + pct(tc.medium) + '</td></tr>' +
+          '<tr><td>High (&ge;10 turns or &ge;120s)</td><td>' + tc.high + '</td><td>' + pct(tc.high) + '</td></tr>' +
+          '</table>';
+      }
+
+      // Retry rate by agent (Phase 1 heuristic) — aggregate per-session rows into per-agent totals
+      var byAgent = {};
+      (d.session_retries || []).forEach(function(r) {
+        var a = r.agent || 'default';
+        if (!byAgent[a]) byAgent[a] = { user_turns: 0, retries: 0, sessions: 0 };
+        byAgent[a].user_turns += r.user_turns;
+        byAgent[a].retries += r.retries;
+        byAgent[a].sessions++;
+      });
+      var rtab = document.getElementById('retry-table');
+      var agents = Object.keys(byAgent);
+      if (agents.length === 0) {
+        rtab.innerHTML = '<div class="empty">No data</div>';
+      } else {
+        var rh = '<table><tr><th>Agent</th><th>Sessions</th><th>User Turns</th><th>Retries</th><th>Retry Rate</th></tr>';
+        agents.sort().forEach(function(a) {
+          var row = byAgent[a];
+          var rate = row.user_turns > 0 ? (row.retries / row.user_turns * 100).toFixed(1) + '%' : '—';
+          rh += '<tr><td>' + escapeHtml(a) + '</td><td>' + row.sessions + '</td><td>' + row.user_turns + '</td><td>' + row.retries + '</td><td>' + rate + '</td></tr>';
+        });
+        rtab.innerHTML = rh + '</table>';
+      }
     })
     .catch(function(err) { console.error('Activity fetch error:', err); });
 }
@@ -957,6 +1000,8 @@ export function createDashboardServer(
           input_tokens_over_time: [], output_tokens_over_time: [], cache_read_over_time: [],
           session_durations: [], model_breakdown: [], persona_breakdown: [],
           cache_efficiency: { total_input_tokens: 0, cache_read_tokens: 0, cache_hit_ratio: 0 },
+          turn_complexity: { low: 0, medium: 0, high: 0 },
+          session_retries: [],
           project_name_map: {},
           dir_to_name_map: {},
         }));
@@ -988,6 +1033,8 @@ export function createDashboardServer(
           model_breakdown: engine.modelBreakdown(range),
           persona_breakdown: engine.personaBreakdown(range),
           cache_efficiency: engine.cacheEfficiency(range),
+          turn_complexity: engine.turnComplexity(range),
+          session_retries: engine.sessionRetries(range),
           project_name_map: projectNameMap,
           dir_to_name_map: dirToNameMap,
         };
