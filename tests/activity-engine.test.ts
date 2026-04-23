@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -277,6 +277,16 @@ describe('ActivityEngine', () => {
   });
 
   describe('sessionTimeline', () => {
+    // Tests use hardcoded 2026-03-29 timestamps; freeze system time so readEvents'
+    // range filter (Date.now() - rangeMs) doesn't drop them as time passes.
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-03-29T16:00:00Z'));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     it('returns empty array for missing file', () => {
       const engine = createActivityEngine(join(dir, 'nonexistent.jsonl'));
       const timeline = engine.sessionTimeline('7d');
