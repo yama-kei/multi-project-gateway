@@ -360,6 +360,19 @@ describe('loadConfig', () => {
     ]);
   });
 
+  it('extends project.allowedTools with project.extraAllowedTools', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          directory: '/tmp/a',
+          allowedTools: ['Read', 'Glob'],
+          extraAllowedTools: ['WebFetch'],
+        },
+      },
+    });
+    expect(config.projects['ch-1'].allowedTools).toEqual(['Read', 'Glob', 'WebFetch']);
+  });
+
   // --- logLevel ---
 
   it('defaults logLevel to info', () => {
