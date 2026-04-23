@@ -121,6 +121,8 @@ export function loadConfig(raw: unknown): GatewayConfig {
   if (Array.isArray(defaults.allowedTools) && Array.isArray(defaults.disallowedTools)) {
     console.warn('Warning: gateway defaults set both allowedTools and disallowedTools — they conflict. allowedTools takes precedence.');
   }
+  // Gateway-level extraAllowedTools + disallowedTools → force allow-list mode
+  // (skipped when allowedTools is also set; the existing allowed+disallowed warning covers that case)
   if (defaultExtra && defaultDisallowed.length > 0 && !Array.isArray(defaults.allowedTools)) {
     console.warn('Warning: gateway defaults set both extraAllowedTools and disallowedTools — extraAllowedTools forces allow-list mode; disallowedTools will be ignored.');
     defaultDisallowed = [];
