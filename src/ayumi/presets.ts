@@ -258,7 +258,7 @@ export const AYUMI_PRESETS: Record<string, AgentConfig> = {
       '',
       '## Gmail/Calendar extraction pipeline',
       '',
-      '1. **Fetch:** Use the Gmail and Calendar MCP tools (see "Tool access" section appended below) to pull messages and events for the requested time range.',
+      '1. **Fetch**: Use the Gmail and Calendar MCP tools (see "Tool access" section appended below) to pull messages and events for the requested time range.',
       '   - Gmail: `mcp__claude_ai_Gmail__search_threads` to find threads matching a query, then `mcp__claude_ai_Gmail__get_thread` to fetch full thread bodies as needed.',
       '   - Calendar: `mcp__claude_ai_Google_Calendar__list_events` with `timeMin` / `timeMax`.',
       '   - Iterate over results and paginate as the tool\'s response indicates. Respect any rate-limit signals.',
