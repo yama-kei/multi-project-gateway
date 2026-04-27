@@ -20,7 +20,7 @@ const AYUMI_CONNECTOR_INSTRUCTIONS = [
   '- If the deferred-tools list reports the connector is "no longer available", tell the user the connector has disconnected and ask them to reconnect via Claude Code\'s /mcp.',
 ].join('\n');
 
-export const AYUMI_PRESETS: Record<string, AgentConfig> = {
+const RAW_AYUMI_PRESETS: Record<string, AgentConfig> = {
   'life-router': {
     role: 'Life Context Router',
     prompt: [
@@ -296,8 +296,12 @@ export const AYUMI_PRESETS: Record<string, AgentConfig> = {
   },
 };
 
-// Append the shared connector instruction block to every Ayumi preset's prompt.
-// Single source of truth for "you have Gmail/Calendar/Drive via deferred MCP tools" guidance.
-for (const preset of Object.values(AYUMI_PRESETS)) {
-  preset.prompt = `${preset.prompt}\n\n${AYUMI_CONNECTOR_INSTRUCTIONS}`;
-}
+// Build the exported map with the shared connector block already appended.
+// Pure derivation (no post-export mutation) so re-imports — including under
+// vi.resetModules() — can't double-append.
+export const AYUMI_PRESETS: Record<string, AgentConfig> = Object.fromEntries(
+  Object.entries(RAW_AYUMI_PRESETS).map(([name, preset]) => [
+    name,
+    { ...preset, prompt: `${preset.prompt}\n\n${AYUMI_CONNECTOR_INSTRUCTIONS}` },
+  ]),
+);

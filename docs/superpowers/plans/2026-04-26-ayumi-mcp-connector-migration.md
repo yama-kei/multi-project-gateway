@@ -410,7 +410,7 @@ This issue tracks the prompt-level migration in mpg.
 
 - Design: `docs/superpowers/specs/2026-04-26-ayumi-mcp-connector-migration-design.md`
 - Plan: `docs/superpowers/plans/2026-04-26-ayumi-mcp-connector-migration.md`
-- PR: <FILL_IN_PR_URL_FROM_TASK_3>
+- PR: https://github.com/yama-kei/multi-project-gateway/pull/231
 
 ## Related
 
@@ -435,17 +435,17 @@ gh api repos/yama-kei/multi-project-gateway/issues \
 If the body needs to be updated to insert the actual PR URL after step 3.3 finished, use:
 
 ```bash
-gh api -X PATCH repos/yama-kei/multi-project-gateway/issues/<ISSUE_NUMBER> \
+gh api -X PATCH repos/yama-kei/multi-project-gateway/issues/230 \
   -f body='<updated body with real PR URL>'
 ```
 
 - [ ] **Step 4.3: Link the PR back to the parent issue**
 
-In the PR description (created in Step 3.3), append a "Closes #<ISSUE_NUMBER>" line by editing the PR body:
+In the PR description (created in Step 3.3), append a "Closes #230" line by editing the PR body:
 
 ```bash
-gh api -X PATCH repos/yama-kei/multi-project-gateway/pulls/<PR_NUMBER> \
-  -f body='<original body + "\n\nCloses #<ISSUE_NUMBER>">'
+gh api -X PATCH repos/yama-kei/multi-project-gateway/pulls/231 \
+  -f body='<original body + "\n\nCloses #230">'
 ```
 
 Expected: PR shows the linked issue in the GitHub UI.
@@ -462,7 +462,7 @@ Expected: PR shows the linked issue in the GitHub UI.
 gh issue comment 160 \
   --repo yama-kei/HouseholdOS \
   --body "$(cat <<'EOF'
-mpg-side implementation tracked in https://github.com/yama-kei/multi-project-gateway/issues/<MPG_ISSUE_NUMBER> (PR https://github.com/yama-kei/multi-project-gateway/pull/<PR_NUMBER>).
+mpg-side implementation tracked in https://github.com/yama-kei/multi-project-gateway/issues/230 (PR https://github.com/yama-kei/multi-project-gateway/pull/231).
 
 That work covers the second concrete-action checkbox on this issue ("Update Ayumi spec to use Claude Code's Gmail/Calendar/Drive MCP directly") at the **prompt level** — the `life-curator` preset and shared connector instructions across all Ayumi-family agents.
 
@@ -502,6 +502,6 @@ This is intentionally not auto-executed by this plan — it requires a separate 
 - "Preserve mpg runtime broker fallback (broker-client.ts, life-context-loader.ts)" — Out-of-scope note in plan + no tasks touch those files ✓
 - "Tracking: parent issue in mpg, no new HouseholdOS issue, comment on #160" — Task 4 + Task 5 ✓
 
-**Placeholder scan:** No `TBD`, no `TODO`, no "implement later", no "similar to Task N". All code blocks contain literal content. The two placeholders that remain — `<FILL_IN_PR_URL_FROM_TASK_3>`, `<ISSUE_NUMBER>`, `<PR_NUMBER>`, `<MPG_ISSUE_NUMBER>` — are runtime values produced by earlier steps; the plan is explicit about which step produces each.
+**Placeholder scan:** No `TBD`, no `TODO`, no "implement later", no "similar to Task N". All code blocks contain literal content. (The runtime placeholders that appeared during execution — PR URL, issue number — were resolved to mpg#230 / mpg#231 once those artifacts existed.)
 
 **Type consistency:** `AYUMI_CONNECTOR_INSTRUCTIONS` is referenced consistently across Step 1.3 (definition) and Step 1.4 (use). The post-processing loop mutates `preset.prompt` of type `string`, matching `AgentConfig.prompt`. No type drift.

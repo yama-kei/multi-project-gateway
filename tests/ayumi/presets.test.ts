@@ -64,7 +64,7 @@ describe('life-curator broker → MCP migration', () => {
   });
 
   it('generalizes the no-Drive-writes rule to cover both broker and MCP Drive APIs', () => {
-    expect(curator).toContain('vault-writer module handles ALL file writes');
+    expect(curator).toMatch(/vault-writer module handles\s+all\s+file writes/i);
     expect(curator).toMatch(
       /Do NOT use any external Drive API \(broker or mcp__claude_ai_Google_Drive__\*\)/,
     );
@@ -77,5 +77,15 @@ describe('life-curator broker → MCP migration', () => {
     expect(curator).toContain('**Summarize**');
     expect(curator).toContain('**Write**');
     expect(curator).toContain('vault-writer');
+  });
+
+  it('places the curator-specific pipeline before the appended Tool access block', () => {
+    // Step 1 of the pipeline references the Tool access section "appended below";
+    // lock the ordering so a future refactor can't silently invalidate that hint.
+    const pipelineIdx = curator.indexOf('## Gmail/Calendar extraction pipeline');
+    const toolAccessIdx = curator.indexOf('## Tool access: Gmail');
+    expect(pipelineIdx).toBeGreaterThanOrEqual(0);
+    expect(toolAccessIdx).toBeGreaterThanOrEqual(0);
+    expect(pipelineIdx).toBeLessThan(toolAccessIdx);
   });
 });
