@@ -50,6 +50,8 @@ describe('life-curator broker → MCP migration', () => {
   it('removes all broker-API references from the prompt', () => {
     expect(curator).not.toContain('BROKER_URL');
     expect(curator).not.toContain('BROKER_API_SECRET');
+    expect(curator).not.toContain('BROKER_TENANT_ID');
+    expect(curator).not.toContain('BROKER_ACTOR_ID');
     expect(curator).not.toContain('Broker API reference');
     expect(curator).not.toMatch(/POST \/broker\//);
     expect(curator).not.toContain('Do NOT use /mcp');
@@ -68,8 +70,9 @@ describe('life-curator broker → MCP migration', () => {
     );
   });
 
-  it('preserves the surrounding pipeline shape (Classify, Summarize, Write steps)', () => {
+  it('preserves the surrounding pipeline shape (Fetch, Classify, Summarize, Write steps)', () => {
     expect(curator).toContain('## Gmail/Calendar extraction pipeline');
+    expect(curator).toContain('**Fetch**');
     expect(curator).toContain('**Classify**');
     expect(curator).toContain('**Summarize**');
     expect(curator).toContain('**Write**');

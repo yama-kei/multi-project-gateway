@@ -1,7 +1,7 @@
 # Ayumi MCP Connector Migration — Design
 
 **Date:** 2026-04-26
-**Status:** Draft (awaiting user review)
+**Status:** Implemented (mpg#231, closes mpg#230)
 **Decision context:** [HouseholdOS#160](https://github.com/yama-kei/HouseholdOS/issues/160), [mpg#228](https://github.com/yama-kei/multi-project-gateway/issues/228)
 
 ## Problem
@@ -78,7 +78,7 @@ Surgical replacement of two contiguous sections in `src/ayumi/presets.ts`.
 ```
 ## Gmail/Calendar extraction pipeline
 
-1. **Fetch:** Use the Gmail and Calendar MCP tools (see "Tool access" section appended
+1. **Fetch**: Use the Gmail and Calendar MCP tools (see "Tool access" section appended
    below) to pull messages and events for the requested time range.
    - Gmail: `mcp__claude_ai_Gmail__search_threads` to find threads matching a query, then
      `mcp__claude_ai_Gmail__get_thread` to fetch full thread bodies as needed.
