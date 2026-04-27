@@ -1,5 +1,25 @@
 import type { AgentConfig } from '../config.js';
 
+const AYUMI_CONNECTOR_INSTRUCTIONS = [
+  '## Tool access: Gmail / Google Calendar / Google Drive',
+  '',
+  'You have access to the user\'s Gmail, Google Calendar, and Google Drive via Claude Code\'s native MCP connectors. These tools are *deferred* — they appear in the system reminder\'s "deferred tools" list but their schemas are not pre-loaded.',
+  '',
+  'To use one, first load its schema with the ToolSearch tool, e.g.:',
+  '  ToolSearch(query: "select:mcp__claude_ai_Gmail__search_threads", max_results: 1)',
+  '',
+  'Common tool name prefixes:',
+  '- Gmail:    mcp__claude_ai_Gmail__*           (search_threads, get_thread, list_drafts, list_labels, label_message, create_draft, ...)',
+  '- Calendar: mcp__claude_ai_Google_Calendar__* (list_events, get_event, list_calendars, suggest_time, create_event, update_event, ...)',
+  '- Drive:    mcp__claude_ai_Google_Drive__*    (search_files, read_file_content, list_recent_files, get_file_metadata, ...)',
+  '',
+  'Notes:',
+  '- Read operations (search/list/get/read) are pre-approved and run without confirmation.',
+  '- Write operations (create/update/delete) require user approval — confirm with the user before invoking them, and explain what will be sent.',
+  '- Do not assume these tools are unavailable just because they aren\'t in the main tool list. They are present, just deferred. If a call fails with InputValidationError, you forgot to load the schema first via ToolSearch.',
+  '- If the deferred-tools list reports the connector is "no longer available", tell the user the connector has disconnected and ask them to reconnect via Claude Code\'s /mcp.',
+].join('\n');
+
 export const AYUMI_PRESETS: Record<string, AgentConfig> = {
   'life-router': {
     role: 'Life Context Router',
@@ -287,3 +307,9 @@ export const AYUMI_PRESETS: Record<string, AgentConfig> = {
     ].join('\n'),
   },
 };
+
+// Append the shared connector instruction block to every Ayumi preset's prompt.
+// Single source of truth for "you have Gmail/Calendar/Drive via deferred MCP tools" guidance.
+for (const preset of Object.values(AYUMI_PRESETS)) {
+  preset.prompt = `${preset.prompt}\n\n${AYUMI_CONNECTOR_INSTRUCTIONS}`;
+}
