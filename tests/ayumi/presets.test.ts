@@ -43,3 +43,36 @@ describe('AYUMI_PRESETS connector instruction propagation', () => {
     expect(prompt).toMatch(/require user approval|confirm with the user/i);
   });
 });
+
+describe('life-curator broker → MCP migration', () => {
+  const curator = AYUMI_PRESETS['life-curator'].prompt;
+
+  it('removes all broker-API references from the prompt', () => {
+    expect(curator).not.toContain('BROKER_URL');
+    expect(curator).not.toContain('BROKER_API_SECRET');
+    expect(curator).not.toContain('Broker API reference');
+    expect(curator).not.toMatch(/POST \/broker\//);
+    expect(curator).not.toContain('Do NOT use /mcp');
+  });
+
+  it('uses MCP tool references in the extraction pipeline', () => {
+    expect(curator).toContain('mcp__claude_ai_Gmail__search_threads');
+    expect(curator).toContain('mcp__claude_ai_Gmail__get_thread');
+    expect(curator).toContain('mcp__claude_ai_Google_Calendar__list_events');
+  });
+
+  it('generalizes the no-Drive-writes rule to cover both broker and MCP Drive APIs', () => {
+    expect(curator).toContain('vault-writer module handles ALL file writes');
+    expect(curator).toMatch(
+      /Do NOT use any external Drive API \(broker or mcp__claude_ai_Google_Drive__\*\)/,
+    );
+  });
+
+  it('preserves the surrounding pipeline shape (Classify, Summarize, Write steps)', () => {
+    expect(curator).toContain('## Gmail/Calendar extraction pipeline');
+    expect(curator).toContain('**Classify**');
+    expect(curator).toContain('**Summarize**');
+    expect(curator).toContain('**Write**');
+    expect(curator).toContain('vault-writer');
+  });
+});
