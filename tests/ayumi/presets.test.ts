@@ -14,7 +14,7 @@ const AYUMI_AGENT_NAMES = [
 
 describe('AYUMI_PRESETS connector instruction propagation', () => {
   it.each(AYUMI_AGENT_NAMES)(
-    'preset %s ends with the shared connector instruction block',
+    'preset %s contains the shared connector instruction block',
     (name) => {
       const preset = AYUMI_PRESETS[name];
       expect(preset, `preset ${name} should exist`).toBeDefined();
@@ -35,6 +35,8 @@ describe('AYUMI_PRESETS connector instruction propagation', () => {
     },
   );
 
+  // The shared connector block is identical for all presets, so sampling one is sufficient
+  // to assert its content (the per-preset propagation is already covered by the it.each tests above).
   it('preset prompts mention that read ops are pre-approved and writes need confirmation', () => {
     const prompt = AYUMI_PRESETS['life-router'].prompt;
     expect(prompt).toMatch(/pre-approved/i);
