@@ -16,7 +16,9 @@ Two coupled root causes:
 
 ## Goal
 
-Make all eight Ayumi-family personas auto-aware that they have access to Gmail / Calendar / Drive via Claude Code's native MCP connectors, and migrate `life-curator`'s extraction pipeline from the broker API to those native MCP tools — without disturbing mpg's runtime broker fallback for Drive vault reading (which `HouseholdOS#160` explicitly preserves).
+Make all eight Ayumi-family personas auto-aware that they have access to Gmail / Calendar / Drive via Claude Code's native MCP connectors, migrate `life-curator`'s extraction pipeline from the broker API to those native MCP tools, and ensure connector calls authorized at `claude.ai/customize/connectors` are not redundantly blocked by mpg's local `--allowed-tools` gate — without disturbing mpg's runtime broker fallback for Drive vault reading (which `HouseholdOS#160` explicitly preserves).
+
+The connector access-control answer to HouseholdOS#160 open question 1 is empirically **two gates** (claude.ai connector gate + mpg local `--allowed-tools` gate). This design opens both.
 
 ## Non-goals
 
@@ -28,9 +30,13 @@ Make all eight Ayumi-family personas auto-aware that they have access to Gmail /
 
 ## Architecture
 
-A single shared `AYUMI_CONNECTOR_INSTRUCTIONS` string constant lives at the top of `src/ayumi/presets.ts`. After the `AYUMI_PRESETS` object literal is declared, a small post-processing loop at module-load time iterates over the map and appends `\n\n${AYUMI_CONNECTOR_INSTRUCTIONS}` to each preset's `prompt` field. The export remains `AYUMI_PRESETS`.
+Two coordinated changes:
 
-No other source file changes. `discord.ts:252-257`'s `buildSystemPrompt` already concatenates `agent.prompt` verbatim into the spawned agent's system prompt, so the new block flows through without further wiring.
+1. **Prompt layer.** A single shared `AYUMI_CONNECTOR_INSTRUCTIONS` string constant lives at the top of `src/ayumi/presets.ts`. The exported `AYUMI_PRESETS` is derived from a private `RAW_AYUMI_PRESETS` literal via `Object.fromEntries(Object.entries(...).map(...))`, with the connector instruction block appended to each preset's `prompt`. The export is built once at module load with no post-export mutation.
+
+2. **Runtime allow-list layer.** `DEFAULT_ALLOWED_TOOLS` in `src/config.ts` is extended to whitelist the three connector prefixes (`mcp__claude_ai_Gmail__*`, `mcp__claude_ai_Google_Calendar__*`, `mcp__claude_ai_Google_Drive__*`). Without this, mpg's local `--allowed-tools` gate would redundantly block calls a user has already authorized at `claude.ai/customize/connectors`. Per HouseholdOS#160, Anthropic's connector UI is the trust layer for these tools; mpg defers to that gate rather than running its own.
+
+No other source file changes. `discord.ts:252-257`'s `buildSystemPrompt` already concatenates `agent.prompt` verbatim into the spawned agent's system prompt, so the new prompt block flows through without further wiring. The runtime allow-list extension flows through the existing `--allowed-tools` mechanism in `src/claude-cli.ts:73-79`.
 
 ## The shared instruction block
 
@@ -116,11 +122,15 @@ The shared connector block from the previous section is then appended (covers To
 
 ## Tests
 
-Add a small unit test file (`tests/ayumi/presets.test.ts` if absent, otherwise extend an existing one) asserting:
+Add a unit test file (`tests/ayumi/presets.test.ts` if absent, otherwise extend an existing one) asserting:
 
 1. Every preset in `AYUMI_PRESETS` has `prompt` ending with the shared connector block (check for a stable substring like `"## Tool access: Gmail / Google Calendar / Google Drive"`).
 2. `AYUMI_PRESETS['life-curator'].prompt` no longer contains the substrings `BROKER_URL`, `Do NOT use /mcp`, `Broker API reference`, or any `POST /broker/` reference.
 3. `AYUMI_PRESETS['life-curator'].prompt` contains the new MCP tool references (`mcp__claude_ai_Gmail__search_threads`, `mcp__claude_ai_Google_Calendar__list_events`).
+
+Extend `tests/config.test.ts` asserting:
+
+4. `DEFAULT_ALLOWED_TOOLS` contains the three connector wildcards (`mcp__claude_ai_Gmail__*`, `mcp__claude_ai_Google_Calendar__*`, `mcp__claude_ai_Google_Drive__*`).
 
 Existing `tests/ayumi/life-context-loader.test.ts` continues to test the broker Drive-fallback path — unchanged.
 
