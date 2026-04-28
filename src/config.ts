@@ -45,6 +45,14 @@ export const DEFAULT_ALLOWED_TOOLS: string[] = [
   'Bash(bun:*)',
   'Bash(make:*)',
   'TodoWrite',
+  // Claude.ai cloud connectors. Per HouseholdOS#160, Anthropic's
+  // claude.ai/customize/connectors UI is the trust layer for these tools
+  // (per-tool / per-scope approval). mpg defers to that gate; the prefixes
+  // are whitelisted here so the local --allowed-tools layer doesn't
+  // redundantly block calls a user has already authorized at claude.ai.
+  'mcp__claude_ai_Gmail__*',
+  'mcp__claude_ai_Google_Calendar__*',
+  'mcp__claude_ai_Google_Drive__*',
 ];
 
 export type RuntimePersistence = 'direct' | 'tmux';

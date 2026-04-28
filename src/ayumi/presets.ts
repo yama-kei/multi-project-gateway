@@ -1,6 +1,26 @@
 import type { AgentConfig } from '../config.js';
 
-export const AYUMI_PRESETS: Record<string, AgentConfig> = {
+const AYUMI_CONNECTOR_INSTRUCTIONS = [
+  '## Tool access: Gmail / Google Calendar / Google Drive',
+  '',
+  'You have access to the user\'s Gmail, Google Calendar, and Google Drive via Claude Code\'s native MCP connectors. These tools are *deferred* — they appear in the system reminder\'s "deferred tools" list but their schemas are not pre-loaded.',
+  '',
+  'To use one, first load its schema with the ToolSearch tool, e.g.:',
+  '  ToolSearch(query: "select:mcp__claude_ai_Gmail__search_threads", max_results: 1)',
+  '',
+  'Common tool name prefixes:',
+  '- Gmail:    mcp__claude_ai_Gmail__*           (search_threads, get_thread, list_drafts, list_labels, label_message, create_draft, ...)',
+  '- Calendar: mcp__claude_ai_Google_Calendar__* (list_events, get_event, list_calendars, suggest_time, create_event, update_event, ...)',
+  '- Drive:    mcp__claude_ai_Google_Drive__*    (search_files, read_file_content, list_recent_files, get_file_metadata, ...)',
+  '',
+  'Notes:',
+  '- Read operations (search/list/get/read) are pre-approved and run without confirmation.',
+  '- Write operations (create/update/delete) require user approval — confirm with the user before invoking them, and explain what will be sent.',
+  '- Do not assume these tools are unavailable just because they aren\'t in the main tool list. They are present, just deferred. If a call fails with InputValidationError, you forgot to load the schema first via ToolSearch.',
+  '- If the deferred-tools list reports the connector is "no longer available", tell the user the connector has disconnected and ask them to reconnect via Claude Code\'s /mcp.',
+].join('\n');
+
+const RAW_AYUMI_PRESETS: Record<string, AgentConfig> = {
   'life-router': {
     role: 'Life Context Router',
     prompt: [
@@ -233,27 +253,15 @@ export const AYUMI_PRESETS: Record<string, AgentConfig> = {
       'Use [[wikilinks]] for entity references: [[Person Name]], [[Project Name]].',
       'Use shortest-path names (not full paths). Only link named entities, not dates or generic terms.',
       '',
-      'CRITICAL: The vault-writer module handles file writes programmatically. Do NOT use broker Drive API for writes.',
+      'CRITICAL: The vault-writer module handles ALL file writes programmatically. Do NOT use any external Drive API (broker or mcp__claude_ai_Google_Drive__*) for vault writes. Reads from Drive are fine for ingesting user-authored content; writes always go through vault-writer.',
       'Drive backup is optional and controlled by the DRIVE_BACKUP_ENABLED config flag.',
-      '',
-      '## Broker API reference (for Gmail/Calendar fetch only)',
-      '',
-      'Use the HouseholdOS broker HTTP API via curl for fetching Gmail and Calendar data. All endpoints require:',
-      '- Header: `X-Broker-Secret: $BROKER_API_SECRET`',
-      '- Body: JSON with `tenantId` ($BROKER_TENANT_ID) and `actorId` ($BROKER_ACTOR_ID)',
-      '- Base URL: `$BROKER_URL/broker`',
-      '',
-      'Read these from environment variables. Available endpoints:',
-      '- `POST /broker/gmail/search` — body: `{ tenantId, actorId, q, maxResults, pageToken }` → `{ messages, nextPageToken }`',
-      '- `POST /broker/gmail/messages` — body: `{ tenantId, actorId, messageIds: [...] }` → `{ messages }`',
-      '- `POST /broker/calendar/events` — body: `{ tenantId, actorId, timeMin, timeMax, limit }` → `{ events }`',
-      '',
-      'Do NOT use broker Drive endpoints for writing — all writes go to the local vault.',
-      'Do NOT use /mcp or Claude Code MCP tools for Gmail/Calendar — use the broker API above.',
       '',
       '## Gmail/Calendar extraction pipeline',
       '',
-      '1. **Fetch**: Pull Gmail messages and Calendar events via broker endpoints. Process in batches of 100. Paginate until all data in the requested time range is retrieved.',
+      '1. **Fetch**: Use the Gmail and Calendar MCP tools (see "Tool access" section appended below) to pull messages and events for the requested time range.',
+      '   - Gmail: `mcp__claude_ai_Gmail__search_threads` to find threads matching a query, then `mcp__claude_ai_Gmail__get_thread` to fetch full thread bodies as needed.',
+      '   - Calendar: `mcp__claude_ai_Google_Calendar__list_events` with `timeMin` / `timeMax`.',
+      '   - Iterate over results and paginate as the tool\'s response indicates. Respect any rate-limit signals.',
       '2. **Classify**: For each message/event, assign a topic and sensitivity tier (1=low, 2=medium, 3=high). Skip noreply/marketing/spam senders.',
       '3. **Summarize**: Group classified items by topic. Generate markdown files per topic with YAML frontmatter and [[wikilinks]]:',
       '   - Tier 1-2: summary.md, timeline.md, entities.md (with entity pages auto-created)',
@@ -287,3 +295,13 @@ export const AYUMI_PRESETS: Record<string, AgentConfig> = {
     ].join('\n'),
   },
 };
+
+// Build the exported map with the shared connector block already appended.
+// Pure derivation (no post-export mutation) so re-imports — including under
+// vi.resetModules() — can't double-append.
+export const AYUMI_PRESETS: Record<string, AgentConfig> = Object.fromEntries(
+  Object.entries(RAW_AYUMI_PRESETS).map(([name, preset]) => [
+    name,
+    { ...preset, prompt: `${preset.prompt}\n\n${AYUMI_CONNECTOR_INSTRUCTIONS}` },
+  ]),
+);

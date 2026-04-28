@@ -250,6 +250,16 @@ describe('loadConfig', () => {
     expect(config.defaults.disallowedTools).toEqual([]);
   });
 
+  it('whitelists Claude.ai cloud connector tool prefixes by default', () => {
+    // Per HouseholdOS#160, Anthropic's claude.ai/customize/connectors UI is the
+    // trust layer for these tools. mpg's local --allowed-tools gate must allow
+    // the prefixes so an authorized claude.ai connector call isn't redundantly
+    // blocked at the local layer in headless --print sessions.
+    expect(DEFAULT_ALLOWED_TOOLS).toContain('mcp__claude_ai_Gmail__*');
+    expect(DEFAULT_ALLOWED_TOOLS).toContain('mcp__claude_ai_Google_Calendar__*');
+    expect(DEFAULT_ALLOWED_TOOLS).toContain('mcp__claude_ai_Google_Drive__*');
+  });
+
   it('overrides default allowedTools from config', () => {
     const config = loadConfig({
       defaults: { allowedTools: ['Read', 'Bash'] },
