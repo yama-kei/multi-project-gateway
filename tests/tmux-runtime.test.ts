@@ -157,6 +157,32 @@ describe('TmuxRuntime', () => {
 
       await expect(runtime.spawn(spawnOpts)).rejects.toThrow(/no output/i);
     });
+
+    it('wraps unparseable output in a "Failed to parse" error rather than re-throwing the raw SyntaxError', async () => {
+      // Output that is not valid JSON in any form (single or NDJSON).
+      mockSessionExists.mockReturnValue(false);
+      mockExistsSync.mockReturnValue(true);
+      mockReadFileSync.mockReturnValue('not json at all');
+
+      await expect(runtime.spawn(spawnOpts)).rejects.toThrow(/Failed to parse claude output:/);
+    });
+
+    it('recovers result from NDJSON output (status frame + result frame)', async () => {
+      const status = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'init' });
+      const result = JSON.stringify({
+        type: 'result',
+        is_error: false,
+        result: 'recovered from ndjson',
+        session_id: 'final',
+      });
+      mockSessionExists.mockReturnValue(false);
+      mockExistsSync.mockReturnValue(true);
+      mockReadFileSync.mockReturnValue(`${status}\n${result}\n`);
+
+      const r = await runtime.spawn(spawnOpts);
+      expect(r.text).toBe('recovered from ndjson');
+      expect(r.sessionId).toBe('final');
+    });
   });
 
   describe('listOrphanedSessions', () => {

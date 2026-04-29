@@ -210,7 +210,13 @@ export class TmuxRuntime implements AgentRuntime {
             return;
           }
 
-          const result = parseClaudeJsonOutput(stdout);
+          let result: ClaudeResult;
+          try {
+            result = parseClaudeJsonOutput(stdout);
+          } catch {
+            reject(new Error(`Failed to parse claude output: ${stdout.slice(0, 200)}`));
+            return;
+          }
           resolve(result);
         } catch (err) {
           reject(err instanceof Error ? err : new Error(String(err)));
