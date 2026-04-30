@@ -22,7 +22,31 @@ export interface ClaudeResult {
 }
 
 export function parseClaudeJsonOutput(raw: string): ClaudeResult {
-  const data = JSON.parse(raw);
+  // Claude CLI normally emits a single JSON object in --output-format=json
+  // mode, but in some long-running scenarios stdout can contain multiple JSON
+  // objects separated by newlines (a status/init frame plus the final result,
+  // two concatenated runs, etc.). Try a single-document parse first; on
+  // failure, fall back to NDJSON parsing and pick the last frame that looks
+  // like a final result.
+  let data: any;
+  try {
+    data = JSON.parse(raw);
+  } catch (err) {
+    const lines = raw.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+    let lastResult: any;
+    for (const line of lines) {
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed && typeof parsed === 'object' && 'result' in parsed) {
+          lastResult = parsed;
+        }
+      } catch {
+        // skip malformed lines
+      }
+    }
+    if (!lastResult) throw err;
+    data = lastResult;
+  }
   let usage: ClaudeUsage | undefined;
   if (data.total_cost_usd != null || data.usage) {
     const model = data.model

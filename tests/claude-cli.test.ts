@@ -32,6 +32,50 @@ describe('parseClaudeJsonOutput', () => {
   it('throws on invalid JSON', () => {
     expect(() => parseClaudeJsonOutput('not json')).toThrow();
   });
+
+  it('tolerates NDJSON with status frame followed by result frame', () => {
+    const status = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'abc' });
+    const result = JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: 'final answer',
+      session_id: 'abc-123',
+    });
+    const parsed = parseClaudeJsonOutput(`${status}\n${result}\n`);
+    expect(parsed.text).toBe('final answer');
+    expect(parsed.sessionId).toBe('abc-123');
+  });
+
+  it('picks the last result frame when multiple result objects are concatenated', () => {
+    const first = JSON.stringify({
+      type: 'result',
+      is_error: false,
+      result: 'old answer',
+      session_id: 'old',
+    });
+    const second = JSON.stringify({
+      type: 'result',
+      is_error: false,
+      result: 'new answer',
+      session_id: 'new',
+    });
+    const parsed = parseClaudeJsonOutput(`${first}\n${second}`);
+    expect(parsed.text).toBe('new answer');
+    expect(parsed.sessionId).toBe('new');
+  });
+
+  it('skips malformed lines but recovers the result frame', () => {
+    const result = JSON.stringify({
+      type: 'result',
+      is_error: false,
+      result: 'recovered',
+      session_id: 'sess',
+    });
+    const parsed = parseClaudeJsonOutput(`garbage line\n${result}\n  \n`);
+    expect(parsed.text).toBe('recovered');
+    expect(parsed.sessionId).toBe('sess');
+  });
 });
 
 describe('parseClaudeJsonOutput — usage extraction', () => {
