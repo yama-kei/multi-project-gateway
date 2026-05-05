@@ -42,6 +42,21 @@ try {
   // Ayumi module not available — curator commands disabled
 }
 
+/**
+ * Classify a Discord message body in terms of `!unsafe` intent. Used by the
+ * `MessageCreate` handler's pre-clear logic so the "any message except an
+ * arm/confirm clears the pending arm" semantic stays in sync with how
+ * `handleCommand` parses commands (whitespace-tolerant tokenization).
+ */
+export type UnsafeIntent = 'arm' | 'confirm' | 'other';
+export function classifyUnsafeIntent(content: string): UnsafeIntent {
+  const tokens = content.trim().toLowerCase().split(/\s+/);
+  if (tokens[0] !== '!unsafe') return 'other';
+  if (tokens.length === 1) return 'arm';
+  if (tokens[1] === 'confirm') return 'confirm';
+  return 'other';
+}
+
 export function chunkMessage(text: string, limit: number): string[] {
   if (text.length <= limit) return [text];
 
@@ -380,15 +395,12 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
     // Pending `!unsafe` arm is cleared by any message that isn't `!unsafe`
     // (re-arm, refreshes the window inside handleCommand) or `!unsafe confirm`
     // (consumed inside handleCommand). This is what gives the confirmation
-    // its "any other message cancels" semantic (#239).
-    const trimmedContent = message.content.trim();
-    const isUnsafeArm = trimmedContent.toLowerCase() === '!unsafe';
-    const isUnsafeConfirm = trimmedContent.toLowerCase() === '!unsafe confirm';
-    if (
-      unsafeRegistry.hasPendingArm(resolved.channelId) &&
-      !isUnsafeArm &&
-      !isUnsafeConfirm
-    ) {
+    // its "any other message cancels" semantic (#239). `classifyUnsafeIntent`
+    // is whitespace-tolerant to match `handleCommand`'s parser — otherwise
+    // `!unsafe  confirm` (double space, tab, etc.) would silently drop the
+    // arm before the parser saw the confirm intent.
+    const intent = classifyUnsafeIntent(message.content);
+    if (intent === 'other' && unsafeRegistry.hasPendingArm(resolved.channelId)) {
       unsafeRegistry.clearPending(resolved.channelId);
     }
 

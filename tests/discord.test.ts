@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { chunkMessage, handleCommand } from '../src/discord.js';
+import { chunkMessage, handleCommand, classifyUnsafeIntent } from '../src/discord.js';
 import type { GatewayConfig, AgentConfig } from '../src/config.js';
 import type { SessionManager } from '../src/session-manager.js';
 import { parseAgentMention, parseHandoffCommand } from '../src/agent-dispatch.js';
@@ -31,6 +31,49 @@ function mockSessionManager(sessions: ReturnType<SessionManager['listSessions']>
     shutdown: () => {},
   };
 }
+
+describe('classifyUnsafeIntent', () => {
+  it('classifies bare `!unsafe` as arm', () => {
+    expect(classifyUnsafeIntent('!unsafe')).toBe('arm');
+  });
+
+  it('classifies `!unsafe confirm` as confirm', () => {
+    expect(classifyUnsafeIntent('!unsafe confirm')).toBe('confirm');
+  });
+
+  it('is case-insensitive', () => {
+    expect(classifyUnsafeIntent('!UNSAFE')).toBe('arm');
+    expect(classifyUnsafeIntent('!Unsafe Confirm')).toBe('confirm');
+  });
+
+  it('is whitespace-tolerant — double space between !unsafe and confirm still parses as confirm', () => {
+    expect(classifyUnsafeIntent('!unsafe  confirm')).toBe('confirm');
+  });
+
+  it('is whitespace-tolerant — tab separator still parses as confirm', () => {
+    expect(classifyUnsafeIntent('!unsafe\tconfirm')).toBe('confirm');
+  });
+
+  it('trims leading/trailing whitespace', () => {
+    expect(classifyUnsafeIntent('   !unsafe   ')).toBe('arm');
+    expect(classifyUnsafeIntent('  !unsafe confirm  ')).toBe('confirm');
+  });
+
+  it('classifies unrelated commands as other', () => {
+    expect(classifyUnsafeIntent('!safe')).toBe('other');
+    expect(classifyUnsafeIntent('!sessions')).toBe('other');
+    expect(classifyUnsafeIntent('hello world')).toBe('other');
+    expect(classifyUnsafeIntent('')).toBe('other');
+  });
+
+  it('classifies `!unsafe <other>` (non-confirm subcommand) as other — pre-clear treats it like a regular message', () => {
+    expect(classifyUnsafeIntent('!unsafe foo')).toBe('other');
+  });
+
+  it('classifies `!unsafe foo confirm` as other — confirm must be the second token', () => {
+    expect(classifyUnsafeIntent('!unsafe foo confirm')).toBe('other');
+  });
+});
 
 describe('chunkMessage', () => {
   it('returns a single chunk for short messages', () => {

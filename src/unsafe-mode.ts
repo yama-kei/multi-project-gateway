@@ -42,9 +42,11 @@ export interface UnsafeRegistry {
   armPending(channelId: string): void;
   /**
    * Consume a pending arm. Returns `true` only when a non-expired arm
-   * existed; the arm is removed in either case so a stale entry can't
-   * silently linger. The caller is responsible for calling `enable()` on
-   * a successful confirmation.
+   * existed; the arm is **always removed** by this call (even when expired
+   * or never set), so a stale entry can't silently linger and a follow-up
+   * `confirmPending` in the same channel always starts from a clean slate.
+   * The caller is responsible for calling `enable()` on a successful
+   * confirmation.
    */
   confirmPending(channelId: string): boolean;
   /** Drop any pending arm for this channel. No-op if no arm is set. */
