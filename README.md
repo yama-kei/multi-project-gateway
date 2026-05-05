@@ -36,7 +36,8 @@ By default, each Claude session is restricted to its project directory using `--
 - Anyone who can post in a mapped Discord channel can instruct Claude to read and modify files in that project's directory
 - Only map channels that trusted users have access to
 - Tool restrictions are enforced via `--allowed-tools` / `--disallowed-tools` (see [Tool security](#tool-security))
-- When you genuinely need full access for a single session, post `!unsafe` in the Discord channel/thread instead of editing `claudeArgs`. That escalates only that session to `--permission-mode bypassPermissions`, leaves an audit trail in chat, and is reverted with `!safe` (or by restarting the gateway). `--dangerously-skip-permissions` is no longer the recommended default — if it appears in `claudeArgs`, the gateway will warn at startup.
+- When you genuinely need full access for a single session, post `!unsafe` in the Discord channel/thread instead of editing `claudeArgs`. The gateway arms a pending escalation; you must reply `!unsafe confirm` within 60 seconds for it to take effect (any other message — including a non-confirmation `!safe`, a routed prompt, or another command — cancels the pending arm). Once confirmed, that session runs under `--permission-mode bypassPermissions` for the rest of its lifetime; revert with `!safe`. `--dangerously-skip-permissions` is no longer the recommended default — if it appears in `claudeArgs`, the gateway will warn at startup.
+- If `allowedRoles` is set on a project, the role check now gates **all** gateway commands (`!unsafe`, `!safe`, `!kill`, `!restart`, etc.) — not just routed prompts. Users without an allowed role can no longer escalate via `!unsafe`.
 
 ### Tool security
 
@@ -489,8 +490,9 @@ The gateway responds to commands in any mapped Discord channel:
 | `!kill <name>` | Force-close a project's session |
 | `!ask <agent> <message>` | Dispatch a message to a specific agent (shorthand: `!<agent> <message>`) |
 | `!agents` | List available agents for the current project |
-| `!unsafe` | Escalate the current channel/thread to `--permission-mode bypassPermissions` for the rest of the session (full access — leaves an audit trail in chat) |
-| `!safe` | Revert to the curated allowlist for the current channel/thread |
+| `!unsafe` | Arm a bypass-permissions escalation for the current channel/thread. Does **not** change state by itself — must be followed by `!unsafe confirm` within 60s. |
+| `!unsafe confirm` | Confirm a pending `!unsafe` arm. Flips the channel/thread to `--permission-mode bypassPermissions` for the rest of the session. |
+| `!safe` | Revert to the curated allowlist for the current channel/thread; also clears any pending `!unsafe` arm. |
 | `!help` | Show available commands |
 
 ## Web dashboard
