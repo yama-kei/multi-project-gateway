@@ -203,15 +203,14 @@ describe('buildToolArgs', () => {
     expect(args).toEqual(['--disallowed-tools', 'Bash', 'WebSearch']);
   });
 
-  it('allowed takes precedence over disallowed (they conflict)', () => {
+  it('emits both --disallowed-tools and --allowed-tools when both are non-empty (disallowed first)', () => {
     const args = buildToolArgs(
       { allowedTools: ['Read'], disallowedTools: ['Bash'] },
     );
-    expect(args).toEqual(['--allowed-tools', 'Read']);
-    expect(args).not.toContain('--disallowed-tools');
+    expect(args).toEqual(['--disallowed-tools', 'Bash', '--allowed-tools', 'Read']);
   });
 
-  it('project overrides take precedence over defaults', () => {
+  it('project overrides take precedence over defaults for allowedTools', () => {
     const args = buildToolArgs(
       { allowedTools: ['Read', 'Edit'] },
       { allowedTools: ['Read', 'Edit', 'Bash'] },
@@ -219,15 +218,12 @@ describe('buildToolArgs', () => {
     expect(args).toEqual(['--allowed-tools', 'Read', 'Edit', 'Bash']);
   });
 
-  it('project disallowedTools overrides default allowedTools', () => {
+  it('combines project.disallowedTools with defaults.allowedTools (no longer mutually exclusive)', () => {
     const args = buildToolArgs(
       { allowedTools: ['Read', 'Edit'] },
       { disallowedTools: ['Bash'] },
     );
-    // Project override has no allowedTools, falls back to defaults.allowedTools
-    // But project sets disallowedTools — since project overrides are checked first
-    // and allowedTools is undefined for project, we fall back to defaults.allowedTools
-    expect(args).toEqual(['--allowed-tools', 'Read', 'Edit']);
+    expect(args).toEqual(['--disallowed-tools', 'Bash', '--allowed-tools', 'Read', 'Edit']);
   });
 
   it('returns empty array when no tools configured', () => {
@@ -279,13 +275,13 @@ describe('buildToolArgs', () => {
     expect(args).toEqual(['--allowed-tools', 'Read', 'Glob']);
   });
 
-  it('project with empty allowedTools falls through to disallowed', () => {
+  it('project with empty allowedTools falls through to defaults.disallowedTools only', () => {
     const args = buildToolArgs(
       { disallowedTools: ['Bash'] },
       { allowedTools: [] },
     );
     // Project overrides allowedTools with empty array, so allowed is []
-    // Falls to disallowed from defaults
+    // Disallowed still emitted from defaults
     expect(args).toEqual(['--disallowed-tools', 'Bash']);
   });
 });
@@ -380,6 +376,33 @@ describe('composeClaudeArgs', () => {
     const defaults = ['--dangerously-skip-permissions', '--output-format', 'json'];
     composeClaudeArgs(defaults, ['--allowed-tools', 'Read(/x/**)']);
     expect(defaults).toEqual(['--dangerously-skip-permissions', '--output-format', 'json']);
+  });
+
+  it('strips a prior --permission-mode <val> from defaults when extras supply --permission-mode', () => {
+    const defaults = ['--permission-mode', 'acceptEdits', '--output-format', 'json'];
+    const extras = ['--permission-mode', 'bypassPermissions'];
+    expect(composeClaudeArgs(defaults, extras)).toEqual([
+      '--output-format', 'json',
+      '--permission-mode', 'bypassPermissions',
+    ]);
+  });
+
+  it('strips --permission-mode and --dangerously-skip-permissions together when extras escalate', () => {
+    const defaults = ['--dangerously-skip-permissions', '--permission-mode', 'acceptEdits', '--output-format', 'json'];
+    const extras = ['--permission-mode', 'bypassPermissions'];
+    expect(composeClaudeArgs(defaults, extras)).toEqual([
+      '--output-format', 'json',
+      '--permission-mode', 'bypassPermissions',
+    ]);
+  });
+
+  it('keeps defaults --permission-mode when extras has no --permission-mode flag', () => {
+    const defaults = ['--permission-mode', 'acceptEdits', '--output-format', 'json'];
+    const extras = ['--allowed-tools', 'Read'];
+    expect(composeClaudeArgs(defaults, extras)).toEqual([
+      '--permission-mode', 'acceptEdits', '--output-format', 'json',
+      '--allowed-tools', 'Read',
+    ]);
   });
 });
 

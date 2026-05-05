@@ -55,6 +55,16 @@ export const DEFAULT_ALLOWED_TOOLS: string[] = [
   'mcp__claude_ai_Google_Drive__*',
 ];
 
+// Tools that produce interactive menu prompts in Claude Code. These have no
+// usable response surface in non-interactive chat transports (Discord, Slack)
+// because the operator can't pick from a Claude-rendered menu — so they
+// silently dead-end. Always denied at the gateway floor; user-configured
+// disallowedTools are merged on top.
+export const DEFAULT_DISALLOWED_TOOLS: string[] = [
+  'AskUserQuestion',
+  'EnterPlanMode',
+];
+
 export type RuntimePersistence = 'direct' | 'tmux';
 
 export interface GatewayDefaults {
@@ -125,16 +135,14 @@ export function loadConfig(raw: unknown): GatewayConfig {
     : DEFAULT_ALLOWED_TOOLS;
   const effectiveDefaultAllowed = mergeToolLists(baseDefaultAllowed, defaultExtra);
 
-  let defaultDisallowed = Array.isArray(defaults.disallowedTools) ? (defaults.disallowedTools as string[]) : [];
-  if (Array.isArray(defaults.allowedTools) && Array.isArray(defaults.disallowedTools)) {
-    console.warn('Warning: gateway defaults set both allowedTools and disallowedTools — they conflict. allowedTools takes precedence.');
-  }
-  // Gateway-level extraAllowedTools + disallowedTools → force allow-list mode
-  // (skipped when allowedTools is also set; the existing allowed+disallowed warning covers that case)
-  if (defaultExtra && defaultDisallowed.length > 0 && !Array.isArray(defaults.allowedTools)) {
-    console.warn('Warning: gateway defaults set both extraAllowedTools and disallowedTools — extraAllowedTools forces allow-list mode; disallowedTools will be ignored.');
-    defaultDisallowed = [];
-  }
+  // disallowedTools: floor (DEFAULT_DISALLOWED_TOOLS) is always present;
+  // user-supplied entries are merged on top (deduped, floor first). allowed
+  // and disallowed are no longer mutually exclusive — Claude CLI accepts
+  // both simultaneously, with disallowed winning for overlap.
+  const userDisallowed = Array.isArray(defaults.disallowedTools)
+    ? (defaults.disallowedTools as string[])
+    : [];
+  const defaultDisallowed = mergeToolLists(DEFAULT_DISALLOWED_TOOLS, userDisallowed);
 
   const validated: Record<string, ProjectConfig> = {};
 
@@ -187,13 +195,9 @@ export function loadConfig(raw: unknown): GatewayConfig {
     }
 
     const projectAllowedRaw = Array.isArray(p.allowedTools) ? (p.allowedTools as string[]) : undefined;
-    let projectDisallowed = Array.isArray(p.disallowedTools) ? (p.disallowedTools as string[]) : undefined;
+    const projectDisallowedRaw = Array.isArray(p.disallowedTools) ? (p.disallowedTools as string[]) : undefined;
     const projectName = typeof p.name === 'string' ? p.name : channelId;
     const projectExtra = parseExtraAllowedTools(p.extraAllowedTools, `project "${projectName}"`);
-
-    if (projectAllowedRaw && projectDisallowed) {
-      console.warn(`Warning: project "${projectName}" sets both allowedTools and disallowedTools — they conflict. allowedTools takes precedence.`);
-    }
 
     // Resolve effective project allowlist:
     //  - if project.allowedTools is set → layer projectExtra on top of it
@@ -206,11 +210,13 @@ export function loadConfig(raw: unknown): GatewayConfig {
       projectAllowedEffective = mergeToolLists(effectiveDefaultAllowed, projectExtra);
     }
 
-    // Project-level extraAllowedTools + disallowedTools → force allow-list mode
-    if (projectExtra && projectDisallowed && !projectAllowedRaw) {
-      console.warn(`Warning: project "${projectName}" sets both extraAllowedTools and disallowedTools — extraAllowedTools forces allow-list mode; disallowedTools will be ignored.`);
-      projectDisallowed = undefined;
-    }
+    // Per-project disallowedTools, when set, are merged with the menu-tool
+    // floor so operators can't accidentally lose menu-prompt protection by
+    // overriding at the project level. Unset = fall through to gateway
+    // defaults at runtime.
+    const projectDisallowed = projectDisallowedRaw
+      ? mergeToolLists(DEFAULT_DISALLOWED_TOOLS, projectDisallowedRaw)
+      : undefined;
 
     const allowedRoles = Array.isArray(p.allowedRoles) ? (p.allowedRoles as string[]).filter(r => typeof r === 'string') : undefined;
     const rateLimitPerUser = typeof p.rateLimitPerUser === 'number' && p.rateLimitPerUser > 0 ? p.rateLimitPerUser : undefined;
@@ -261,4 +267,32 @@ export function loadConfig(raw: unknown): GatewayConfig {
  */
 export function resolveAgentTimeout(agent: AgentConfig, defaults: GatewayDefaults): number {
   return agent.timeoutMs ?? defaults.agentTimeoutMs;
+}
+
+/**
+ * Print a startup warning when the loaded config still relies on
+ * `--dangerously-skip-permissions` — either at the gateway-defaults level or
+ * in any per-project `claudeArgs` override. Existing configs continue to
+ * work, but we point operators at #235 (curated allowlist + `!unsafe`
+ * escalation) as the safer migration path.
+ */
+export function warnIfLegacyDangerousSkip(config: GatewayConfig): void {
+  if (config.defaults.claudeArgs.includes('--dangerously-skip-permissions')) {
+    console.warn(
+      'Warning: defaults.claudeArgs contains --dangerously-skip-permissions. This bypasses ' +
+        'the curated allowlist and escalates every session to full OS access. The safer default ' +
+        'is `--permission-mode acceptEdits` plus the curated allowlist (see #235); use `!unsafe` ' +
+        'in Discord to escalate per-session when you need it.',
+    );
+  }
+  for (const [channelId, project] of Object.entries(config.projects)) {
+    if (project.claudeArgs?.includes('--dangerously-skip-permissions')) {
+      const label = project.name ?? channelId;
+      console.warn(
+        `Warning: project "${label}" claudeArgs contains --dangerously-skip-permissions. ` +
+          'This overrides the curated allowlist for that project. The safer pattern is ' +
+          'per-session `!unsafe` escalation (see #235).',
+      );
+    }
+  }
 }
