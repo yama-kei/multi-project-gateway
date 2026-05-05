@@ -14,6 +14,13 @@
  * registry. Any other message — including a re-typed `!unsafe`, which
  * refreshes the window — clears or replaces the pending arm. This prevents a
  * single typo from granting bypass-permissions for the rest of the session.
+ *
+ * Force-safe (#238): a thread inherits its parent channel's unsafe state by
+ * default — useful when an operator wants `!unsafe` to apply to the whole
+ * project. The force-safe flag is the explicit opt-out: when set on a
+ * channel, that channel is treated as safe even if its parent is unsafe.
+ * `!safe` in a thread that's only inheriting from an unsafe parent sets
+ * this flag (rather than being a silent no-op as it was before #238).
  */
 
 /** Default confirmation window for `!unsafe` → `!unsafe confirm` (60 seconds). */
@@ -24,7 +31,11 @@ interface PendingArm {
 }
 
 export interface UnsafeRegistry {
-  /** Mark a channel/thread as unsafe-mode for the rest of the session. */
+  /**
+   * Mark a channel/thread as unsafe-mode for the rest of the session.
+   * Clears any force-safe override on the same channel as a side effect —
+   * the two flags are contradictory.
+   */
   enable(channelId: string): void;
   /** Revert a channel/thread to safe mode. No-op if not enabled. */
   disable(channelId: string): void;
@@ -56,6 +67,18 @@ export interface UnsafeRegistry {
    * entries are evicted as a side effect.
    */
   hasPendingArm(channelId: string): boolean;
+
+  /**
+   * Mark a channel as explicitly safe so it does NOT inherit unsafe mode
+   * from its parent. Only meaningful for threads (parent channels have no
+   * inheritance to override), but the flag is per-channel and could in
+   * principle be set on any id without harm.
+   */
+  setForceSafe(channelId: string): void;
+  /** Drop the force-safe override on a channel. No-op if not set. */
+  clearForceSafe(channelId: string): void;
+  /** Whether this channel has been explicitly opted out of inherited unsafe. */
+  isForceSafe(channelId: string): boolean;
 }
 
 export interface UnsafeRegistryOptions {
@@ -79,6 +102,7 @@ export function createUnsafeRegistry(opts?: UnsafeRegistryOptions): UnsafeRegist
   const now = opts?.now ?? (() => Date.now());
   const enabled = new Set<string>();
   const pending = new Map<string, PendingArm>();
+  const forceSafe = new Set<string>();
 
   function isFresh(armedAt: number): boolean {
     return now() - armedAt < windowMs;
@@ -87,6 +111,9 @@ export function createUnsafeRegistry(opts?: UnsafeRegistryOptions): UnsafeRegist
   return {
     enable(channelId) {
       enabled.add(channelId);
+      // Enabling a channel and force-safing it are contradictory; the
+      // explicit enable wins.
+      forceSafe.delete(channelId);
     },
     disable(channelId) {
       enabled.delete(channelId);
@@ -118,6 +145,16 @@ export function createUnsafeRegistry(opts?: UnsafeRegistryOptions): UnsafeRegist
         return false;
       }
       return true;
+    },
+
+    setForceSafe(channelId) {
+      forceSafe.add(channelId);
+    },
+    clearForceSafe(channelId) {
+      forceSafe.delete(channelId);
+    },
+    isForceSafe(channelId) {
+      return forceSafe.has(channelId);
     },
   };
 }

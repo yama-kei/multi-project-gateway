@@ -38,6 +38,7 @@ By default, each Claude session is restricted to its project directory using `--
 - Tool restrictions are enforced via `--allowed-tools` / `--disallowed-tools` (see [Tool security](#tool-security))
 - When you genuinely need full access for a single session, post `!unsafe` in the Discord channel/thread instead of editing `claudeArgs`. The gateway arms a pending escalation; you must reply `!unsafe confirm` within 60 seconds for it to take effect (any other message — including a non-confirmation `!safe`, a routed prompt, or another command — cancels the pending arm). Once confirmed, that session runs under `--permission-mode bypassPermissions` for the rest of its lifetime; revert with `!safe`. `--dangerously-skip-permissions` is no longer the recommended default — if it appears in `claudeArgs`, the gateway will warn at startup.
 - If `allowedRoles` is set on a project, the role check now gates **all** gateway commands (`!unsafe`, `!safe`, `!kill`, `!restart`, etc.) — not just routed prompts. Users without an allowed role can no longer escalate via `!unsafe`.
+- `!unsafe` confirmed in a parent channel propagates to threads created in it. To opt a single thread *out* of inherited unsafe without disabling the parent, post `!safe` inside that thread — the thread is then force-safed for the rest of the session unless `!unsafe` is run inside that thread itself, while siblings continue to inherit the parent's escalation (#238).
 
 ### Tool security
 
@@ -492,7 +493,7 @@ The gateway responds to commands in any mapped Discord channel:
 | `!agents` | List available agents for the current project |
 | `!unsafe` | Arm a bypass-permissions escalation for the current channel/thread. Does **not** change state by itself — must be followed by `!unsafe confirm` within 60s. |
 | `!unsafe confirm` | Confirm a pending `!unsafe` arm. Flips the channel/thread to `--permission-mode bypassPermissions` for the rest of the session. |
-| `!safe` | Revert to the curated allowlist for the current channel/thread; also clears any pending `!unsafe` arm. |
+| `!safe` | Revert to the curated allowlist for the current channel/thread; also clears any pending `!unsafe` arm. Inside a thread whose parent channel is in unsafe mode, this force-safes the thread without affecting the parent (#238). |
 | `!help` | Show available commands |
 
 ## Web dashboard

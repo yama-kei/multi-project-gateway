@@ -445,6 +445,116 @@ describe('handleCommand', () => {
     expect(result).toContain('!safe');
   });
 
+  // --- !safe with parent-thread inheritance (#238) ---
+
+  it('!safe in a thread whose parent is unsafe sets force-safe (overrides inheritance) and acks parent state', () => {
+    const sm = mockSessionManager();
+    const unsafe = createUnsafeRegistry();
+    unsafe.enable('ch-1'); // parent project channel
+    const result = handleCommand('!safe', testConfig, sm, {
+      channelId: 'thread-99',
+      projectName: 'Alpha',
+      isThread: true,
+      parentChannelId: 'ch-1',
+    }, unsafe);
+    expect(result).toMatch(/thread overridden to safe/i);
+    expect(result).toMatch(/parent channel is still in unsafe/i);
+    expect(unsafe.isForceSafe('thread-99')).toBe(true);
+    // Parent itself remains unsafe — this thread did NOT disable the parent.
+    expect(unsafe.isEnabled('ch-1')).toBe(true);
+    // Thread itself was never enabled, so disable() was not called there either.
+    expect(unsafe.isEnabled('thread-99')).toBe(false);
+  });
+
+  it('!safe in a thread when neither thread nor parent is unsafe still reports already-safe', () => {
+    const sm = mockSessionManager();
+    const unsafe = createUnsafeRegistry();
+    const result = handleCommand('!safe', testConfig, sm, {
+      channelId: 'thread-99',
+      projectName: 'Alpha',
+      isThread: true,
+      parentChannelId: 'ch-1',
+    }, unsafe);
+    expect(result).toMatch(/already in safe mode/i);
+    expect(unsafe.isForceSafe('thread-99')).toBe(false);
+  });
+
+  it('!safe in a thread that is itself unsafe (parent NOT enabled) disables the thread without touching force-safe', () => {
+    const sm = mockSessionManager();
+    const unsafe = createUnsafeRegistry();
+    unsafe.enable('thread-99');
+    const result = handleCommand('!safe', testConfig, sm, {
+      channelId: 'thread-99',
+      projectName: 'Alpha',
+      isThread: true,
+      parentChannelId: 'ch-1',
+    }, unsafe);
+    expect(result).toMatch(/safe mode restored/i);
+    expect(unsafe.isEnabled('thread-99')).toBe(false);
+    expect(unsafe.isForceSafe('thread-99')).toBe(false);
+  });
+
+  it('!safe in a thread that is itself unsafe AND has an unsafe parent also force-safes (covers PR #241 review edge case)', () => {
+    const sm = mockSessionManager();
+    const unsafe = createUnsafeRegistry();
+    unsafe.enable('ch-1');       // parent enabled
+    unsafe.enable('thread-99');  // thread also enabled (force-safe was cleared by enable())
+    const result = handleCommand('!safe', testConfig, sm, {
+      channelId: 'thread-99',
+      projectName: 'Alpha',
+      isThread: true,
+      parentChannelId: 'ch-1',
+    }, unsafe);
+    // Without the edge-case branch, plain disable() would leave the thread
+    // inheriting unsafe from the still-enabled parent — exactly the bug
+    // class this PR was meant to close.
+    expect(result).toMatch(/thread disabled and overridden to safe/i);
+    expect(result).toMatch(/parent channel is still in unsafe/i);
+    expect(unsafe.isEnabled('thread-99')).toBe(false);
+    expect(unsafe.isForceSafe('thread-99')).toBe(true);
+    expect(unsafe.isEnabled('ch-1')).toBe(true);
+  });
+
+  it('!safe twice in a thread under unsafe parent does not re-arm force-safe', () => {
+    const sm = mockSessionManager();
+    const unsafe = createUnsafeRegistry();
+    unsafe.enable('ch-1');
+    handleCommand('!safe', testConfig, sm, {
+      channelId: 'thread-99', projectName: 'Alpha', isThread: true, parentChannelId: 'ch-1',
+    }, unsafe);
+    const second = handleCommand('!safe', testConfig, sm, {
+      channelId: 'thread-99', projectName: 'Alpha', isThread: true, parentChannelId: 'ch-1',
+    }, unsafe);
+    // Second call should treat the thread as already-safe (force-safe is set), not "override again".
+    expect(second).toMatch(/already in safe mode/i);
+    expect(unsafe.isForceSafe('thread-99')).toBe(true);
+  });
+
+  it('!unsafe + !unsafe confirm in a thread that was force-safe re-enables the thread and clears force-safe', () => {
+    const sm = mockSessionManager();
+    const unsafe = createUnsafeRegistry();
+    unsafe.enable('ch-1');
+    unsafe.setForceSafe('thread-99');
+    // Arm via !unsafe — does not enable on its own (#239).
+    handleCommand('!unsafe', testConfig, sm, {
+      channelId: 'thread-99',
+      projectName: 'Alpha',
+      isThread: true,
+      parentChannelId: 'ch-1',
+    }, unsafe);
+    expect(unsafe.isEnabled('thread-99')).toBe(false);
+    expect(unsafe.isForceSafe('thread-99')).toBe(true); // arm alone doesn't clear force-safe
+    // Confirm: enable() now fires, which clears force-safe as a side effect.
+    handleCommand('!unsafe confirm', testConfig, sm, {
+      channelId: 'thread-99',
+      projectName: 'Alpha',
+      isThread: true,
+      parentChannelId: 'ch-1',
+    }, unsafe);
+    expect(unsafe.isEnabled('thread-99')).toBe(true);
+    expect(unsafe.isForceSafe('thread-99')).toBe(false);
+  });
+
 });
 
 describe('agent handoff flow', () => {

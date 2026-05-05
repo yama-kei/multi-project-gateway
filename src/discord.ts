@@ -120,11 +120,23 @@ function formatTimeSince(timestamp: number): string {
   return `${hours}h ${minutes % 60}m ago`;
 }
 
+export interface CommandContext {
+  channelId: string;
+  projectName: string;
+  isThread: boolean;
+  /**
+   * The parent project channel ID when the command is run from a thread.
+   * Required for thread-aware commands like `!safe` to query the parent's
+   * unsafe state and override inherited escalation (#238).
+   */
+  parentChannelId?: string;
+}
+
 export function handleCommand(
   command: string,
   config: GatewayConfig,
   sessionManager: SessionManager,
-  context?: { channelId: string; projectName: string; isThread: boolean },
+  context?: CommandContext,
   unsafe?: UnsafeRegistry,
 ): string | null {
   const parts = command.trim().split(/\s+/);
@@ -238,14 +250,40 @@ export function handleCommand(
   if (cmd === '!safe') {
     if (!unsafe) return null;
     if (!context) return 'Run `!safe` in a project channel or thread.';
-    // De-escalation also drops any pending arm so a leftover prompt doesn't
-    // become confirmable later.
+
+    // De-escalation also drops any pending !unsafe arm so a leftover prompt
+    // doesn't become confirmable later (#239).
     unsafe.clearPending(context.channelId);
-    if (!unsafe.isEnabled(context.channelId)) {
-      return `**${context.projectName}** — already in safe mode.`;
+
+    const parentStillUnsafe =
+      context.isThread &&
+      context.parentChannelId !== undefined &&
+      unsafe.isEnabled(context.parentChannelId);
+
+    // Channel/thread itself is enabled — disable. If the parent is also
+    // enabled (so the next prompt would still inherit unsafe), additionally
+    // set the force-safe override and surface that to the operator (#238 +
+    // both-enabled edge case from PR #241 review).
+    if (unsafe.isEnabled(context.channelId)) {
+      unsafe.disable(context.channelId);
+      if (parentStillUnsafe) {
+        unsafe.setForceSafe(context.channelId);
+        return `✅ Thread disabled and overridden to safe mode for **${context.projectName}**. Parent channel is still in unsafe mode — run \`!safe\` there to revert it for the whole project.`;
+      }
+      return `✅ Safe mode restored for **${context.projectName}**.`;
     }
-    unsafe.disable(context.channelId);
-    return `✅ Safe mode restored for **${context.projectName}**.`;
+
+    // Thread inheriting unsafe from its parent: the operator wants this
+    // thread safe but the parent's escalation should stay in effect for
+    // siblings. Set a per-thread force-safe override (#238). Without this
+    // branch, `!safe` here was a silent no-op since `disable()` couldn't
+    // affect the parent.
+    if (parentStillUnsafe && !unsafe.isForceSafe(context.channelId)) {
+      unsafe.setForceSafe(context.channelId);
+      return `✅ Thread overridden to safe mode for **${context.projectName}**. Parent channel is still in unsafe mode — run \`!safe\` there to revert it for the whole project.`;
+    }
+
+    return `**${context.projectName}** — already in safe mode.`;
   }
 
   if (cmd === '!help') {
@@ -304,15 +342,23 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
   const unsafeRegistry = createUnsafeRegistry();
 
   /**
-   * True when this reply target should be sent in unsafe (bypass) mode —
-   * either the channel/thread itself is enabled, or its parent project
-   * channel is enabled (so `!unsafe` in a project channel propagates to
-   * threads created inside it).
+   * True when this reply target should be sent in unsafe (bypass) mode.
+   *
+   * Resolution order (#238):
+   *  1. The channel/thread itself enabled? → unsafe.
+   *  2. The channel/thread explicitly force-safe? → safe (override beats inheritance).
+   *  3. Parent channel enabled (for threads)? → unsafe (inherited).
+   *  4. Otherwise → safe.
+   *
+   * The force-safe check sits between (1) and (3) so a thread operator can
+   * say "this thread should NOT inherit my parent's `!unsafe`" without
+   * having to disable the parent.
    */
   function isUnsafeReplyTarget(replyChannel: TextChannel | ThreadChannel): boolean {
     if (unsafeRegistry.isEnabled(replyChannel.id)) return true;
-    if (replyChannel.isThread() && replyChannel.parentId && unsafeRegistry.isEnabled(replyChannel.parentId)) {
-      return true;
+    if (replyChannel.isThread() && replyChannel.parentId) {
+      if (unsafeRegistry.isForceSafe(replyChannel.id)) return false;
+      if (unsafeRegistry.isEnabled(replyChannel.parentId)) return true;
     }
     return false;
   }
@@ -424,6 +470,7 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
         channelId: resolved.channelId,
         projectName: resolved.name,
         isThread: resolved.isThread,
+        parentChannelId: parentId,
       }, unsafeRegistry);
       if (response) {
         await message.channel.send(response);

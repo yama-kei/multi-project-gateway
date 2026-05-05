@@ -154,3 +154,70 @@ describe('createUnsafeRegistry — pending arm / confirmation flow (#239)', () =
     expect(reg.hasPendingArm('chan-1')).toBe(true); // unaffected
   });
 });
+
+describe('createUnsafeRegistry — force-safe override (#238)', () => {
+  it('starts with no force-safe channels', () => {
+    const reg = createUnsafeRegistry();
+    expect(reg.isForceSafe('thread-1')).toBe(false);
+  });
+
+  it('setForceSafe marks a channel as explicitly safe', () => {
+    const reg = createUnsafeRegistry();
+    reg.setForceSafe('thread-1');
+    expect(reg.isForceSafe('thread-1')).toBe(true);
+  });
+
+  it('clearForceSafe drops the override', () => {
+    const reg = createUnsafeRegistry();
+    reg.setForceSafe('thread-1');
+    reg.clearForceSafe('thread-1');
+    expect(reg.isForceSafe('thread-1')).toBe(false);
+  });
+
+  it('clearForceSafe is a no-op when not set', () => {
+    const reg = createUnsafeRegistry();
+    expect(() => reg.clearForceSafe('thread-1')).not.toThrow();
+    expect(reg.isForceSafe('thread-1')).toBe(false);
+  });
+
+  it('force-safe is independent of enabled — both can coexist on different channels', () => {
+    const reg = createUnsafeRegistry();
+    reg.enable('parent-1');
+    reg.setForceSafe('thread-1');
+    expect(reg.isEnabled('parent-1')).toBe(true);
+    expect(reg.isForceSafe('thread-1')).toBe(true);
+    // No cross-contamination
+    expect(reg.isEnabled('thread-1')).toBe(false);
+    expect(reg.isForceSafe('parent-1')).toBe(false);
+  });
+
+  it('enable() clears any force-safe on the same channel (contradictory states resolve to enabled)', () => {
+    const reg = createUnsafeRegistry();
+    reg.setForceSafe('thread-1');
+    reg.enable('thread-1');
+    expect(reg.isEnabled('thread-1')).toBe(true);
+    expect(reg.isForceSafe('thread-1')).toBe(false);
+  });
+
+  it('disable() does NOT clear force-safe — operator intent persists', () => {
+    const reg = createUnsafeRegistry();
+    reg.enable('thread-1');     // also clears any force-safe
+    reg.setForceSafe('thread-1');
+    reg.disable('thread-1');
+    expect(reg.isEnabled('thread-1')).toBe(false);
+    expect(reg.isForceSafe('thread-1')).toBe(true);
+  });
+
+  it('force-safe channels are not included in list() (which only tracks enabled)', () => {
+    const reg = createUnsafeRegistry();
+    reg.setForceSafe('thread-1');
+    expect(reg.list()).toEqual([]);
+  });
+
+  it('force-safe channels are isolated from each other', () => {
+    const reg = createUnsafeRegistry();
+    reg.setForceSafe('thread-1');
+    expect(reg.isForceSafe('thread-1')).toBe(true);
+    expect(reg.isForceSafe('thread-2')).toBe(false);
+  });
+});
