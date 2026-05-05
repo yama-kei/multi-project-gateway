@@ -5,6 +5,7 @@ import type { SessionManager } from '../src/session-manager.js';
 import { parseAgentMention, parseHandoffCommand } from '../src/agent-dispatch.js';
 import { createTurnCounter } from '../src/turn-counter.js';
 import { buildHandoffEmbed } from '../src/embed-format.js';
+import { createUnsafeRegistry } from '../src/unsafe-mode.js';
 
 const testConfig: GatewayConfig = {
   defaults: { idleTimeoutMs: 1800000, maxConcurrentSessions: 4, claudeArgs: [], sessionTtlMs: 604800000, maxPersistedSessions: 50, maxTurnsPerAgent: 5, agentTimeoutMs: 180000 },
@@ -259,6 +260,83 @@ describe('handleCommand', () => {
     expect(result).toContain('!ask');
     expect(result).toContain('pm');
     expect(result).toContain('engineer');
+  });
+
+  // --- !unsafe / !safe ---
+
+  it('!unsafe enables unsafe mode for the current channel and acks', () => {
+    const sm = mockSessionManager();
+    const unsafe = createUnsafeRegistry();
+    const result = handleCommand('!unsafe', testConfig, sm, {
+      channelId: 'ch-1',
+      projectName: 'Alpha',
+      isThread: false,
+    }, unsafe);
+    expect(result).toMatch(/unsafe mode enabled/i);
+    expect(result).toContain('Alpha');
+    expect(unsafe.isEnabled('ch-1')).toBe(true);
+  });
+
+  it('!unsafe in a thread enables for the thread channel id', () => {
+    const sm = mockSessionManager();
+    const unsafe = createUnsafeRegistry();
+    handleCommand('!unsafe', testConfig, sm, {
+      channelId: 'thread-99',
+      projectName: 'Alpha',
+      isThread: true,
+    }, unsafe);
+    expect(unsafe.isEnabled('thread-99')).toBe(true);
+    expect(unsafe.isEnabled('ch-1')).toBe(false);
+  });
+
+  it('!safe disables unsafe mode and acks', () => {
+    const sm = mockSessionManager();
+    const unsafe = createUnsafeRegistry();
+    unsafe.enable('ch-1');
+    const result = handleCommand('!safe', testConfig, sm, {
+      channelId: 'ch-1',
+      projectName: 'Alpha',
+      isThread: false,
+    }, unsafe);
+    expect(result).toMatch(/safe mode/i);
+    expect(unsafe.isEnabled('ch-1')).toBe(false);
+  });
+
+  it('!safe is a no-op when channel is already in safe mode and reports it', () => {
+    const sm = mockSessionManager();
+    const unsafe = createUnsafeRegistry();
+    const result = handleCommand('!safe', testConfig, sm, {
+      channelId: 'ch-1',
+      projectName: 'Alpha',
+      isThread: false,
+    }, unsafe);
+    expect(result).toMatch(/already in safe mode/i);
+  });
+
+  it('!unsafe without context returns a usage hint', () => {
+    const sm = mockSessionManager();
+    const unsafe = createUnsafeRegistry();
+    const result = handleCommand('!unsafe', testConfig, sm, undefined, unsafe);
+    expect(result).toMatch(/project channel|thread/i);
+    expect(unsafe.list()).toEqual([]);
+  });
+
+  it('!unsafe without a registry treats command as unrecognized (returns null)', () => {
+    const sm = mockSessionManager();
+    const result = handleCommand('!unsafe', testConfig, sm, {
+      channelId: 'ch-1',
+      projectName: 'Alpha',
+      isThread: false,
+    });
+    expect(result).toBeNull();
+  });
+
+  it('!help mentions !unsafe / !safe when registry support is present', () => {
+    const sm = mockSessionManager();
+    const unsafe = createUnsafeRegistry();
+    const result = handleCommand('!help', testConfig, sm, undefined, unsafe);
+    expect(result).toContain('!unsafe');
+    expect(result).toContain('!safe');
   });
 
 });

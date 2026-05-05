@@ -54,10 +54,14 @@ export interface ToolRestrictions {
 
 /**
  * Build --allowed-tools / --disallowed-tools CLI args from config.
- * Per-project overrides take precedence over gateway defaults.
- * If both allowed and disallowed are set, allowed takes precedence
- * (disallowed is ignored) — config validation already warns about this.
- * Skips tool flags if baseArgs already contain them (manual claudeArgs override).
+ * Per-project overrides take precedence over gateway defaults for each list
+ * independently. When both lists have entries, both flags are emitted with
+ * disallowed first so the variadic --allowed-tools can claim the rest of the
+ * trailing args. Claude CLI accepts both simultaneously, with disallowed
+ * winning for any overlap.
+ *
+ * Skips tool flags entirely if baseArgs already contain them (manual
+ * claudeArgs override).
  */
 export function buildToolArgs(
   defaults: ToolRestrictions,
@@ -69,16 +73,19 @@ export function buildToolArgs(
     return [];
   }
 
-  // Per-project overrides take precedence over gateway defaults
+  // Per-project overrides take precedence over gateway defaults for each list
   const allowed = projectOverrides?.allowedTools ?? defaults.allowedTools;
   const disallowed = projectOverrides?.disallowedTools ?? defaults.disallowedTools;
 
   const args: string[] = [];
 
+  // Disallowed first so --allowed-tools (also variadic) can capture trailing
+  // entries cleanly.
+  if (disallowed && disallowed.length > 0) {
+    args.push('--disallowed-tools', ...disallowed);
+  }
   if (allowed && allowed.length > 0) {
     args.push('--allowed-tools', ...allowed);
-  } else if (disallowed && disallowed.length > 0) {
-    args.push('--disallowed-tools', ...disallowed);
   }
 
   return args;
@@ -89,18 +96,43 @@ const PERMISSION_FLAGS = ['--allowed-tools', '--disallowed-tools', '--add-dir'] 
 /**
  * Compose the final CLI base args: gateway defaults plus per-send extras.
  *
- * When extras contain any permission-aware flag (--allowed-tools,
- * --disallowed-tools, --add-dir), strip --dangerously-skip-permissions from
- * defaults. Those flags imply the caller wants permission enforcement, and
- * --dangerously-skip-permissions would bypass the check entirely.
+ * Two strip rules apply:
+ * - When extras contain any permission-aware flag (--allowed-tools,
+ *   --disallowed-tools, --add-dir), strip --dangerously-skip-permissions
+ *   from defaults. Those flags imply the caller wants permission
+ *   enforcement, and --dangerously-skip-permissions would bypass the
+ *   check entirely.
+ * - When extras contain --permission-mode, strip any prior
+ *   --permission-mode <val> pair from defaults so the caller's mode wins
+ *   cleanly (parallels the dangerous-skip strip — escalation paths like
+ *   `!unsafe` use this to override the curated acceptEdits floor).
  */
 export function composeClaudeArgs(defaults: string[], extras: string[] | undefined): string[] {
   if (!extras || extras.length === 0) return [...defaults];
   const hasPermissionFlag = PERMISSION_FLAGS.some((flag) => extras.includes(flag));
-  const base = hasPermissionFlag
-    ? defaults.filter((a) => a !== '--dangerously-skip-permissions')
-    : defaults;
+  const hasPermissionMode = extras.includes('--permission-mode');
+
+  let base = defaults;
+  if (hasPermissionFlag || hasPermissionMode) {
+    base = base.filter((a) => a !== '--dangerously-skip-permissions');
+  }
+  if (hasPermissionMode) {
+    base = stripPermissionMode(base);
+  }
   return [...base, ...extras];
+}
+
+function stripPermissionMode(args: string[]): string[] {
+  const result: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--permission-mode') {
+      // Skip both the flag and its value (if present)
+      i++;
+      continue;
+    }
+    result.push(args[i]);
+  }
+  return result;
 }
 
 export function buildClaudeArgs(

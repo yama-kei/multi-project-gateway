@@ -3,6 +3,8 @@ import type { Router } from './router.js';
 import type { SessionManager } from './session-manager.js';
 import { type GatewayConfig, resolveAgentTimeout } from './config.js';
 import { buildToolArgs } from './claude-cli.js';
+import { applyChatNudge, NON_INTERACTIVE_CHAT_NUDGE } from './chat-nudge.js';
+import { createUnsafeRegistry, UNSAFE_MODE_EXTRA_ARGS, type UnsafeRegistry } from './unsafe-mode.js';
 import { parseAgentMention, parseAgentCommand, extractAskTarget, parseHandoffCommand, parseAllHandoffs, parseThreadName, stripThreadName } from './agent-dispatch.js';
 import { sendAgentMessage, buildHandoffEmbed, buildFanOutEmbed } from './embed-format.js';
 import type { TurnCounter } from './turn-counter.js';
@@ -108,6 +110,7 @@ export function handleCommand(
   config: GatewayConfig,
   sessionManager: SessionManager,
   context?: { channelId: string; projectName: string; isThread: boolean },
+  unsafe?: UnsafeRegistry,
 ): string | null {
   const parts = command.trim().split(/\s+/);
   const cmd = parts[0]?.toLowerCase();
@@ -193,6 +196,24 @@ export function handleCommand(
     return `**${context.projectName} agents**\n${lines.join('\n')}\n\nDispatch: \`!ask <agent> <message>\` or shorthand \`!<agent> <message>\``;
   }
 
+  if (cmd === '!unsafe') {
+    if (!unsafe) return null;
+    if (!context) return 'Run `!unsafe` in a project channel or thread.';
+    unsafe.enable(context.channelId);
+    const where = context.isThread ? ' (thread)' : '';
+    return `⚠️ Unsafe mode enabled for **${context.projectName}**${where}. Claude has full permission for the rest of this session — use \`!safe\` to revert.`;
+  }
+
+  if (cmd === '!safe') {
+    if (!unsafe) return null;
+    if (!context) return 'Run `!safe` in a project channel or thread.';
+    if (!unsafe.isEnabled(context.channelId)) {
+      return `**${context.projectName}** — already in safe mode.`;
+    }
+    unsafe.disable(context.channelId);
+    return `✅ Safe mode restored for **${context.projectName}**.`;
+  }
+
   if (cmd === '!help') {
     const lines = [
       '**Gateway commands**',
@@ -204,6 +225,12 @@ export function handleCommand(
       '`!kill <name>` — force-close a project session',
       '`!agents` — list available agents for the current project',
     ];
+    if (unsafe) {
+      lines.push(
+        '`!unsafe` — escalate the current session to bypass permissions (full access)',
+        '`!safe` — revert the current session to the curated allowlist',
+      );
+    }
     if (handleCuratorCommand) {
       lines.push(
         '`!curator pending` — list pending tier-3 topics for review',
@@ -237,6 +264,24 @@ async function fetchThreadHistory(channel: TextChannel | ThreadChannel, beforeMe
 
 /** @internal Use {@link createAdapter} instead — this is the Discord-specific implementation. */
 export function createDiscordBot(token: string, router: Router, sessionManager: SessionManager, config: GatewayConfig, turnCounter?: TurnCounter): DiscordBot {
+  // Per-channel/thread registry of operator-escalated unsafe sessions (#235).
+  // Lives for the gateway process lifetime; doesn't persist across restarts.
+  const unsafeRegistry = createUnsafeRegistry();
+
+  /**
+   * True when this reply target should be sent in unsafe (bypass) mode —
+   * either the channel/thread itself is enabled, or its parent project
+   * channel is enabled (so `!unsafe` in a project channel propagates to
+   * threads created inside it).
+   */
+  function isUnsafeReplyTarget(replyChannel: TextChannel | ThreadChannel): boolean {
+    if (unsafeRegistry.isEnabled(replyChannel.id)) return true;
+    if (replyChannel.isThread() && replyChannel.parentId && unsafeRegistry.isEnabled(replyChannel.parentId)) {
+      return true;
+    }
+    return false;
+  }
+
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -248,12 +293,15 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
 
   const rateLimiter = createRateLimiter();
 
-  // Build system prompt with optional Drive context injection (#161)
+  // Build system prompt with optional Drive context injection (#161) and the
+  // non-interactive chat nudge (#235) appended last so it remains close to
+  // the first user prompt in the model's context.
   async function buildSystemPrompt(agentName: string, agent: AgentConfig): Promise<string> {
     const base = `Your role: ${agent.role}\n\n${agent.prompt}`;
     const threadNameInstruction = '\n\nIMPORTANT: On your FIRST response in a thread, start with a line `THREAD_NAME: <short title>` that summarizes the topic (max 100 chars). This names the Discord thread. Do NOT include this line on subsequent responses.';
     const ctx = await getAgentContext(agentName);
-    return ctx ? `${base}${threadNameInstruction}\n\n${ctx}` : `${base}${threadNameInstruction}`;
+    const withCtx = ctx ? `${base}${threadNameInstruction}\n\n${ctx}` : `${base}${threadNameInstruction}`;
+    return applyChatNudge(withCtx);
   }
 
   // Track last active agent per thread for routing plain replies (#48)
@@ -313,7 +361,7 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
           channelId: resolved.channelId,
           projectName: resolved.name,
           isThread: resolved.isThread,
-        });
+        }, unsafeRegistry);
         if (response) {
           await message.channel.send(response);
           return;
@@ -423,11 +471,19 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
     const allClaudeArgs = project?.claudeArgs
       ? [...config.defaults.claudeArgs, ...project.claudeArgs]
       : config.defaults.claudeArgs;
-    const toolArgs = buildToolArgs(
-      config.defaults,
-      project ? { allowedTools: project.allowedTools, disallowedTools: project.disallowedTools } : undefined,
-      allClaudeArgs,
-    );
+    const unsafeMode = isUnsafeReplyTarget(replyChannel);
+    // In unsafe mode, drop the curated allowlist entirely — operator
+    // explicitly opted into bypass mode via `!unsafe`. The escalation flag
+    // is applied below as part of `extraArgs`.
+    const toolArgs = unsafeMode
+      ? []
+      : buildToolArgs(
+          config.defaults,
+          project ? { allowedTools: project.allowedTools, disallowedTools: project.disallowedTools } : undefined,
+          allClaudeArgs,
+        );
+    const escalationArgs = unsafeMode ? UNSAFE_MODE_EXTRA_ARGS : [];
+    const spawnExtras = [...toolArgs, ...escalationArgs];
 
     // Reset turn counter on human messages
     if (turnCounter) turnCounter.reset(replyChannel.id);
@@ -455,7 +511,7 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
       : threadId;
     const systemPrompt = activeAgent
       ? await buildSystemPrompt(activeAgent.agentName, activeAgent.agent)
-      : undefined;
+      : NON_INTERACTIVE_CHAT_NUDGE;
 
     try {
       // Download attachments if present (#110)
@@ -501,7 +557,7 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
         return;
       }
 
-      const primarySpawn = resolveLifeContextRun(activeAgent?.agentName, resolved.directory, toolArgs);
+      const primarySpawn = resolveLifeContextRun(activeAgent?.agentName, resolved.directory, spawnExtras);
       const result = await sessionManager.send(
         sessionKey,
         primarySpawn.cwd,
@@ -580,7 +636,7 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
               const key = `${threadId}:${handoff.agentName}`;
               const sysPrompt = await buildSystemPrompt(handoff.agentName, handoff.agent);
               const fanOutTimeout = Math.min(resolveAgentTimeout(handoff.agent, config.defaults), 5 * 60 * 1000);
-              const spawn = resolveLifeContextRun(handoff.agentName, resolved.directory, toolArgs);
+              const spawn = resolveLifeContextRun(handoff.agentName, resolved.directory, spawnExtras);
               return {
                 agentName: handoff.agentName,
                 result: await sessionManager.send(
@@ -618,7 +674,7 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
 
             let synthesisResult;
             try {
-              const synthSpawn = resolveLifeContextRun(currentAgentName ?? undefined, resolved.directory, toolArgs);
+              const synthSpawn = resolveLifeContextRun(currentAgentName ?? undefined, resolved.directory, spawnExtras);
               synthesisResult = await sessionManager.send(
                 originKey, synthSpawn.cwd, synthesisPrompt,
                 { worktree: replyChannel.isThread() ? true : undefined, systemPrompt: originSysPrompt, timeoutMs: originAgent ? resolveAgentTimeout(originAgent, config.defaults) : config.defaults.agentTimeoutMs, extraArgs: synthSpawn.extraArgs, routingMethod: 'handoff' },
@@ -684,7 +740,7 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
 
           let handoffResult;
           try {
-            const handoffSpawn = resolveLifeContextRun(handoff.agentName, resolved.directory, toolArgs);
+            const handoffSpawn = resolveLifeContextRun(handoff.agentName, resolved.directory, spawnExtras);
             handoffResult = await sessionManager.send(
               handoffKey,
               handoffSpawn.cwd,

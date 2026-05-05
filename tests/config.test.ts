@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { loadConfig, DEFAULT_ALLOWED_TOOLS, resolveAgentTimeout, type GatewayConfig, type GatewayDefaults, type AgentConfig } from '../src/config.js';
+import { loadConfig, DEFAULT_ALLOWED_TOOLS, DEFAULT_DISALLOWED_TOOLS, warnIfLegacyDangerousSkip, resolveAgentTimeout, type GatewayConfig, type GatewayDefaults, type AgentConfig } from '../src/config.js';
 import { PERSONA_PRESETS } from '../src/persona-presets.js';
 
 describe('loadConfig', () => {
@@ -242,12 +242,55 @@ describe('loadConfig', () => {
 
   // --- allowedTools / disallowedTools ---
 
-  it('applies DEFAULT_ALLOWED_TOOLS when no tools config specified', () => {
+  it('applies DEFAULT_ALLOWED_TOOLS and DEFAULT_DISALLOWED_TOOLS when no tools config specified', () => {
     const config = loadConfig({
       projects: { 'ch-1': { directory: '/tmp/a' } },
     });
     expect(config.defaults.allowedTools).toEqual(DEFAULT_ALLOWED_TOOLS);
-    expect(config.defaults.disallowedTools).toEqual([]);
+    expect(config.defaults.disallowedTools).toEqual(DEFAULT_DISALLOWED_TOOLS);
+  });
+
+  it('DEFAULT_DISALLOWED_TOOLS contains the menu-tool floor (AskUserQuestion, EnterPlanMode)', () => {
+    expect(DEFAULT_DISALLOWED_TOOLS).toContain('AskUserQuestion');
+    expect(DEFAULT_DISALLOWED_TOOLS).toContain('EnterPlanMode');
+  });
+
+  it('merges user defaults.disallowedTools with the menu-tool floor (system tools first, deduped)', () => {
+    const config = loadConfig({
+      defaults: { disallowedTools: ['Bash', 'WebSearch'] },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.defaults.disallowedTools).toEqual([
+      ...DEFAULT_DISALLOWED_TOOLS,
+      'Bash',
+      'WebSearch',
+    ]);
+  });
+
+  it('does not duplicate menu-tool entries when user explicitly includes them in disallowedTools', () => {
+    const config = loadConfig({
+      defaults: { disallowedTools: ['AskUserQuestion', 'Bash'] },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    expect(config.defaults.disallowedTools).toEqual([
+      ...DEFAULT_DISALLOWED_TOOLS,
+      'Bash',
+    ]);
+  });
+
+  it('merges per-project disallowedTools with the menu-tool floor', () => {
+    const config = loadConfig({
+      projects: {
+        'ch-1': {
+          directory: '/tmp/a',
+          disallowedTools: ['Bash'],
+        },
+      },
+    });
+    expect(config.projects['ch-1'].disallowedTools).toEqual([
+      ...DEFAULT_DISALLOWED_TOOLS,
+      'Bash',
+    ]);
   });
 
   it('whitelists Claude.ai cloud connector tool prefixes by default', () => {
@@ -268,26 +311,16 @@ describe('loadConfig', () => {
     expect(config.defaults.allowedTools).toEqual(['Read', 'Bash']);
   });
 
-  it('loads disallowedTools from defaults', () => {
+  it('keeps user-set defaults.allowedTools alongside the merged disallowed floor (no longer mutually exclusive)', () => {
     const config = loadConfig({
-      defaults: { disallowedTools: ['Bash', 'WebSearch'] },
-      projects: { 'ch-1': { directory: '/tmp/a' } },
-    });
-    expect(config.defaults.disallowedTools).toEqual(['Bash', 'WebSearch']);
-    // allowedTools still gets defaults since not overridden
-    expect(config.defaults.allowedTools).toEqual(DEFAULT_ALLOWED_TOOLS);
-  });
-
-  it('warns when both allowedTools and disallowedTools are set in defaults', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    loadConfig({
       defaults: { allowedTools: ['Read'], disallowedTools: ['Bash'] },
       projects: { 'ch-1': { directory: '/tmp/a' } },
     });
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('gateway defaults set both allowedTools and disallowedTools')
-    );
-    warnSpy.mockRestore();
+    expect(config.defaults.allowedTools).toEqual(['Read']);
+    expect(config.defaults.disallowedTools).toEqual([
+      ...DEFAULT_DISALLOWED_TOOLS,
+      'Bash',
+    ]);
   });
 
   it('loads per-project allowedTools', () => {
@@ -302,7 +335,7 @@ describe('loadConfig', () => {
     expect(config.projects['ch-1'].allowedTools).toEqual(['Read', 'Edit', 'Bash']);
   });
 
-  it('loads per-project disallowedTools', () => {
+  it('loads per-project disallowedTools and merges them with the menu-tool floor', () => {
     const config = loadConfig({
       projects: {
         'ch-1': {
@@ -311,12 +344,14 @@ describe('loadConfig', () => {
         },
       },
     });
-    expect(config.projects['ch-1'].disallowedTools).toEqual(['WebSearch']);
+    expect(config.projects['ch-1'].disallowedTools).toEqual([
+      ...DEFAULT_DISALLOWED_TOOLS,
+      'WebSearch',
+    ]);
   });
 
-  it('warns when project sets both allowedTools and disallowedTools', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    loadConfig({
+  it('keeps per-project allowedTools alongside the merged disallowed floor', () => {
+    const config = loadConfig({
       projects: {
         'ch-1': {
           name: 'TestProj',
@@ -326,10 +361,11 @@ describe('loadConfig', () => {
         },
       },
     });
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('project "TestProj" sets both allowedTools and disallowedTools')
-    );
-    warnSpy.mockRestore();
+    expect(config.projects['ch-1'].allowedTools).toEqual(['Read']);
+    expect(config.projects['ch-1'].disallowedTools).toEqual([
+      ...DEFAULT_DISALLOWED_TOOLS,
+      'Bash',
+    ]);
   });
 
   // --- extraAllowedTools ---
@@ -395,8 +431,7 @@ describe('loadConfig', () => {
     expect(config.defaults.allowedTools).toEqual(['Read', 'Edit', 'Glob', 'WebFetch']);
   });
 
-  it('warns and drops disallowedTools when defaults set extraAllowedTools + disallowedTools', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('keeps user disallowedTools alongside extraAllowedTools at the gateway level (both compose)', () => {
     const config = loadConfig({
       defaults: {
         extraAllowedTools: ['WebFetch'],
@@ -404,32 +439,14 @@ describe('loadConfig', () => {
       },
       projects: { 'ch-1': { directory: '/tmp/a' } },
     });
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('gateway defaults set both extraAllowedTools and disallowedTools')
-    );
-    expect(config.defaults.disallowedTools).toEqual([]);
+    expect(config.defaults.disallowedTools).toEqual([
+      ...DEFAULT_DISALLOWED_TOOLS,
+      'Bash',
+    ]);
     expect(config.defaults.allowedTools).toEqual([...DEFAULT_ALLOWED_TOOLS, 'WebFetch']);
-    warnSpy.mockRestore();
   });
 
-  it('does not warn about extraAllowedTools + disallowedTools when allowedTools is also set (existing warning covers it)', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    loadConfig({
-      defaults: {
-        allowedTools: ['Read'],
-        extraAllowedTools: ['WebFetch'],
-        disallowedTools: ['Bash'],
-      },
-      projects: { 'ch-1': { directory: '/tmp/a' } },
-    });
-    const calls = warnSpy.mock.calls.map(c => String(c[0]));
-    expect(calls.some(m => m.includes('allowedTools and disallowedTools'))).toBe(true);
-    expect(calls.some(m => m.includes('extraAllowedTools and disallowedTools'))).toBe(false);
-    warnSpy.mockRestore();
-  });
-
-  it('warns and drops disallowedTools when project sets extraAllowedTools + disallowedTools', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('keeps project disallowedTools alongside extraAllowedTools (both compose)', () => {
     const config = loadConfig({
       projects: {
         'ch-1': {
@@ -440,12 +457,11 @@ describe('loadConfig', () => {
         },
       },
     });
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('project "Alpha" sets both extraAllowedTools and disallowedTools')
-    );
-    expect(config.projects['ch-1'].disallowedTools).toBeUndefined();
+    expect(config.projects['ch-1'].disallowedTools).toEqual([
+      ...DEFAULT_DISALLOWED_TOOLS,
+      'Bash',
+    ]);
     expect(config.projects['ch-1'].allowedTools).toEqual([...DEFAULT_ALLOWED_TOOLS, 'WebFetch']);
-    warnSpy.mockRestore();
   });
 
   it('ignores non-array extraAllowedTools and emits a warning', () => {
@@ -509,7 +525,7 @@ describe('loadConfig', () => {
     warnSpy.mockRestore();
   });
 
-  it('merges all three of project.allowedTools, extraAllowedTools, and disallowedTools without the extra+disallowed warning', () => {
+  it('merges all three of project.allowedTools, extraAllowedTools, and disallowedTools cleanly (no conflict)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const config = loadConfig({
       projects: {
@@ -523,14 +539,12 @@ describe('loadConfig', () => {
       },
     });
     const calls = warnSpy.mock.calls.map(c => String(c[0]));
-    // The existing allowedTools+disallowedTools warning fires:
-    expect(calls.some(m => m.includes('project "Alpha" sets both allowedTools and disallowedTools'))).toBe(true);
-    // The extraAllowedTools+disallowedTools warning does NOT fire:
-    expect(calls.some(m => m.includes('extraAllowedTools and disallowedTools'))).toBe(false);
-    // Merged allowedTools is allowedTools ∪ extraAllowedTools:
+    expect(calls.some(m => m.includes('conflict'))).toBe(false);
     expect(config.projects['ch-1'].allowedTools).toEqual(['Read', 'WebFetch']);
-    // disallowedTools is preserved (runtime still prefers allowedTools):
-    expect(config.projects['ch-1'].disallowedTools).toEqual(['Bash']);
+    expect(config.projects['ch-1'].disallowedTools).toEqual([
+      ...DEFAULT_DISALLOWED_TOOLS,
+      'Bash',
+    ]);
     warnSpy.mockRestore();
   });
 
@@ -727,6 +741,64 @@ describe('loadConfig', () => {
       },
     });
     expect(config.projects['ch-1'].agents!.pm.timeoutMs).toBeUndefined();
+  });
+});
+
+describe('warnIfLegacyDangerousSkip', () => {
+  it('warns when defaults.claudeArgs contains --dangerously-skip-permissions', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const config = loadConfig({
+      defaults: { claudeArgs: ['--dangerously-skip-permissions', '--output-format', 'json'] },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    warnIfLegacyDangerousSkip(config);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('--dangerously-skip-permissions')
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('mentions issue #235 to point operators at the migration', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const config = loadConfig({
+      defaults: { claudeArgs: ['--dangerously-skip-permissions'] },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    warnIfLegacyDangerousSkip(config);
+    const messages = warnSpy.mock.calls.map(c => String(c[0])).join('\n');
+    expect(messages).toMatch(/#235|safer default/i);
+    warnSpy.mockRestore();
+  });
+
+  it('does not warn when claudeArgs uses --permission-mode acceptEdits', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const config = loadConfig({
+      defaults: { claudeArgs: ['--permission-mode', 'acceptEdits', '--output-format', 'json'] },
+      projects: { 'ch-1': { directory: '/tmp/a' } },
+    });
+    warnIfLegacyDangerousSkip(config);
+    const messages = warnSpy.mock.calls.map(c => String(c[0])).join('\n');
+    expect(messages).not.toContain('--dangerously-skip-permissions');
+    warnSpy.mockRestore();
+  });
+
+  it('warns when a project overrides claudeArgs with --dangerously-skip-permissions', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const config = loadConfig({
+      defaults: { claudeArgs: ['--permission-mode', 'acceptEdits'] },
+      projects: {
+        'ch-1': {
+          name: 'Risky',
+          directory: '/tmp/a',
+          claudeArgs: ['--dangerously-skip-permissions'],
+        },
+      },
+    });
+    warnIfLegacyDangerousSkip(config);
+    const messages = warnSpy.mock.calls.map(c => String(c[0])).join('\n');
+    expect(messages).toContain('--dangerously-skip-permissions');
+    expect(messages).toContain('Risky');
+    warnSpy.mockRestore();
   });
 });
 

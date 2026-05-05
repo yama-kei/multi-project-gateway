@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { config as loadEnv } from 'dotenv';
-import { loadConfig } from './config.js';
+import { loadConfig, warnIfLegacyDangerousSkip } from './config.js';
 import { createRouter } from './router.js';
 import { createSessionManager } from './session-manager.js';
 import { createFileSessionStore } from './session-store.js';
@@ -30,6 +30,7 @@ if (projectCount === 0) {
   process.exit(1);
 }
 console.log(`Loaded ${projectCount} project(s) from config`);
+warnIfLegacyDangerousSkip(config);
 
 const router = createRouter(config);
 const sessionStore = createFileSessionStore(resolve(process.cwd(), '.sessions.json'));

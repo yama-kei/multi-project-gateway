@@ -242,8 +242,8 @@ interface GatewayConfig {
     sessionTtlMs: number;           // 604,800,000 (7 days)
     maxPersistedSessions: number;   // 50
     claudeArgs: string[];           // ["--permission-mode", "acceptEdits", "--output-format", "json"]
-    allowedTools: string[];         // ["Read", "Edit", "Write", "Glob", "Grep", "Bash(git:*)", "TodoWrite"]
-    disallowedTools: string[];      // []
+    allowedTools: string[];         // DEFAULT_ALLOWED_TOOLS (curated; ~18 entries)
+    disallowedTools: string[];      // DEFAULT_DISALLOWED_TOOLS (menu-tool floor: AskUserQuestion, EnterPlanMode)
     maxTurnsPerAgent: number;       // 5
     agentTimeoutMs: number;         // 180,000 (3 min)
     httpPort: number | false;       // 3100
@@ -261,12 +261,12 @@ Per-project settings override gateway defaults:
 |---------|---------|------------------|
 | `idleTimeoutMs` | From `defaults` | `project.idleTimeoutMs` |
 | `claudeArgs` | From `defaults` | Appended: `[...defaults, ...project]` |
-| `allowedTools` | From `defaults` | Replaced entirely by `project.allowedTools` |
-| `disallowedTools` | From `defaults` | Replaced entirely by `project.disallowedTools` |
+| `allowedTools` | From `defaults` (curated) | Replaced entirely by `project.allowedTools` |
+| `disallowedTools` | From `defaults` (menu-tool floor) | When project sets it, merged with the menu-tool floor — operators cannot accidentally drop the floor by overriding |
 | `extraAllowedTools` | Additive; extends `DEFAULT_ALLOWED_TOOLS` or `defaults.allowedTools` | Additive at project level — extends whichever allowlist applies |
 | `agents` | None | Defined per-project only |
 
-If `claudeArgs` already contains `--allowed-tools` or `--disallowed-tools`, the automatic tool args are skipped (manual override takes precedence). If both `allowedTools` and `disallowedTools` are set, `allowedTools` wins and a warning is logged. If `extraAllowedTools` is set alongside `disallowedTools` without an explicit `allowedTools`, the config is forced into allow-list mode and `disallowedTools` is dropped with a warning.
+`--allowed-tools` and `--disallowed-tools` are emitted together when both lists are non-empty (Claude CLI accepts both; disallowed wins for any overlap). If `claudeArgs` already contains either flag, the automatic tool args are skipped (manual override takes precedence).
 
 ## Security boundaries
 
@@ -274,28 +274,37 @@ If `claudeArgs` already contains `--allowed-tools` or `--disallowed-tools`, the 
 
 Claude sessions are sandboxed via CLI flags:
 
-| Mode | Flag | Capabilities |
-|------|------|-------------|
-| **Default** | `--permission-mode acceptEdits` | Read/edit files in project dir. Shell commands auto-denied in `--print` mode. |
-| **Unrestricted** | `--dangerously-skip-permissions` | Full OS access. Must be explicitly set in `claudeArgs`. |
+| Mode | How it's set | Capabilities |
+|------|--------------|--------------|
+| **Default** | `--permission-mode acceptEdits` (gateway default) | Read/edit files in project dir; tool calls outside the curated allowlist are denied. Shell commands auto-denied in `--print` mode for tools not in the allowlist. |
+| **Per-session escalation** | `!unsafe` in Discord — flips `--permission-mode bypassPermissions` for that channel/thread until `!safe` | Full Claude permission for the rest of the session. Operator-explicit; never the default. |
+| **Legacy unrestricted** | `--dangerously-skip-permissions` in `claudeArgs` | Full OS access. Triggers a startup warning pointing at #235; supported for backward compatibility but discouraged. |
 
 ### Tool restrictions
 
-The gateway builds `--allowed-tools` / `--disallowed-tools` flags from config:
+The gateway emits `--allowed-tools` and `--disallowed-tools` flags from config. As of #235 both flags can coexist — disallowed wins for any overlap. The allowlist is the curated `DEFAULT_ALLOWED_TOOLS` (see `src/config.ts`); the denylist always includes a system floor that protects the chat UX.
 
-**Default allowlist:**
+**Menu-tool denylist (system floor):** `AskUserQuestion`, `EnterPlanMode`. These tools open interactive menu prompts that have no usable surface in chat transports — they silently dead-end. Always denied at the gateway floor; user-configured `disallowedTools` are merged on top. (#229, #235)
+
+**Default allowlist** (truncated; see `DEFAULT_ALLOWED_TOOLS` for the full list):
 
 | Tool | What it does |
 |------|-------------|
 | `Read` | Read file contents |
 | `Edit` | Patch existing files |
 | `Write` | Create or overwrite files |
-| `Glob` | Find files by pattern |
-| `Grep` | Search file contents |
-| `Bash(git:*)` | Git commands only |
+| `Glob` / `Grep` | Find / search files |
+| `Bash(git:*)` / `Bash(gh:*)` / `Bash(npm:*)` / `Bash(npx:*)` / `Bash(node:*)` / `Bash(pnpm:*)` / `Bash(yarn:*)` / `Bash(bun:*)` / `Bash(make:*)` | Common dev tooling — restricted to specific subcommands |
 | `TodoWrite` | Manage task lists |
+| `mcp__claude_ai_*` | Anthropic-managed Claude.ai connectors (Gmail, Calendar, Drive) |
 
 **Excluded by default:** unrestricted `Bash`, `WebSearch`, `WebFetch`, `NotebookEdit`.
+
+**Per-project extension:** `extraAllowedTools` in `config.json` is the canonical place to add project-specific allow rules (e.g. `Bash(./scripts/foo:*)`). Claude Code's `<repo>/.claude/settings.json` `permissions.allow` is also respected — Claude Code reads it natively from the spawn CWD, and it composes as union with mpg's `--allowed-tools`. mpg cannot suppress that discovery, so anything in a project's settings.json extends the allowlist beyond what `config.json` records — keep this in mind when auditing.
+
+### Non-interactive chat nudge
+
+Defense-in-depth alongside the menu denylist: every Discord/Slack-routed session gets a system-prompt suffix (see `src/chat-nudge.ts`) telling Claude to fall back to plain-text numbered lists when it would otherwise open a menu. This catches the rare case where a menu-style tool slipped through the denylist.
 
 ### Discord access control
 
