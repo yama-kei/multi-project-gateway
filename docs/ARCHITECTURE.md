@@ -99,10 +99,10 @@ flowchart TD
 ### Step-by-step
 
 1. **Discord ingestion** — `discord.ts` receives `MessageCreate` event. Bot messages are ignored.
-2. **Command check** — Messages starting with `!` are checked against built-in commands (`!sessions`, `!help`, `!agents`, `!kill`, `!restart`, `!session`). If matched, the reply is sent and processing stops.
-3. **Agent command parse** — `!ask <agent> <message>` and `!<agent> <message>` are parsed via `agent-dispatch.ts`. Unknown agents get an error listing available agents.
-4. **Channel resolution** — `router.ts` maps the channel ID (or parent channel for threads) to a project config. Unmapped channels are silently ignored.
-5. **Access control** — If the project has `allowedRoles`, `role-check.ts` verifies the sender's Discord roles. If the project has `rateLimitPerUser`, `rate-limiter.ts` checks the sliding window.
+2. **Channel resolution** — `router.ts` maps the channel ID (or parent channel for threads) to a project config. Unmapped channels are silently ignored.
+3. **Access control** — If the project has `allowedRoles`, `role-check.ts` verifies the sender's Discord roles **before** any command or prompt is processed (#237). This gates `!unsafe`/`!kill`/`!restart`/etc. as well as routed prompts. If the project has `rateLimitPerUser`, `rate-limiter.ts` checks the sliding window for routed prompts (commands are not rate-limited).
+4. **Command check** — Messages starting with `!` are checked against built-in commands (`!sessions`, `!help`, `!agents`, `!kill`, `!restart`, `!session`, `!unsafe` / `!unsafe confirm` / `!safe`). If matched, the reply is sent and processing stops.
+5. **Agent command parse** — `!ask <agent> <message>` and `!<agent> <message>` are parsed via `agent-dispatch.ts`. Unknown agents get an error listing available agents.
 6. **Thread management** — Main-channel messages spawn a new thread. Thread messages reply in-place.
 7. **Agent resolution** — The target agent is determined by (in priority order): `!ask`/`!<agent>` command, `@agent` mention in text, or last active agent in the thread.
 8. **Session lookup** — `session-manager.ts` looks up or creates a session keyed by `<threadId>` (no agent) or `<threadId>:<agentName>` (agent session). If a persisted session exists on disk, its session ID is restored for context resume.
@@ -277,7 +277,7 @@ Claude sessions are sandboxed via CLI flags:
 | Mode | How it's set | Capabilities |
 |------|--------------|--------------|
 | **Default** | `--permission-mode acceptEdits` (gateway default) | Read/edit files in project dir; tool calls outside the curated allowlist are denied. Shell commands auto-denied in `--print` mode for tools not in the allowlist. |
-| **Per-session escalation** | `!unsafe` in Discord — flips `--permission-mode bypassPermissions` for that channel/thread until `!safe` | Full Claude permission for the rest of the session. Operator-explicit; never the default. |
+| **Per-session escalation** | `!unsafe` arms a pending escalation; the operator must reply `!unsafe confirm` within 60s (any other message cancels). Once confirmed, `--permission-mode bypassPermissions` is applied for that channel/thread until `!safe`. | Full Claude permission for the rest of the session. Operator-explicit, two-step (#239); never the default. Gated by `allowedRoles` when configured (#237). |
 | **Legacy unrestricted** | `--dangerously-skip-permissions` in `claudeArgs` | Full OS access. Triggers a startup warning pointing at #235; supported for backward compatibility but discouraged. |
 
 ### Tool restrictions
@@ -310,7 +310,7 @@ Defense-in-depth alongside the menu denylist: every Discord/Slack-routed session
 
 Two optional per-project mechanisms:
 
-- **Role ACL** (`allowedRoles`) — List of Discord role names or IDs. If set, only members with a matching role can use the bot in that channel. Checked via `role-check.ts`.
+- **Role ACL** (`allowedRoles`) — List of Discord role names or IDs. If set, only members with a matching role can use the bot in that channel — the check applies to **all** gateway commands (`!unsafe`, `!safe`, `!kill`, `!restart`, etc.) and to routed prompts. Checked via `role-check.ts`.
 - **Rate limiting** (`rateLimitPerUser`) — Maximum messages per minute per user. Uses a 1-minute sliding window in `rate-limiter.ts`. Returns retry-after seconds when exceeded.
 
 ### Trust boundary summary

@@ -4,7 +4,7 @@ import type { SessionManager } from './session-manager.js';
 import { type GatewayConfig, resolveAgentTimeout } from './config.js';
 import { buildToolArgs } from './claude-cli.js';
 import { applyChatNudge, NON_INTERACTIVE_CHAT_NUDGE } from './chat-nudge.js';
-import { createUnsafeRegistry, UNSAFE_MODE_EXTRA_ARGS, type UnsafeRegistry } from './unsafe-mode.js';
+import { createUnsafeRegistry, UNSAFE_MODE_EXTRA_ARGS, UNSAFE_CONFIRM_WINDOW_MS, type UnsafeRegistry } from './unsafe-mode.js';
 import { parseAgentMention, parseAgentCommand, extractAskTarget, parseHandoffCommand, parseAllHandoffs, parseThreadName, stripThreadName } from './agent-dispatch.js';
 import { sendAgentMessage, buildHandoffEmbed, buildFanOutEmbed } from './embed-format.js';
 import type { TurnCounter } from './turn-counter.js';
@@ -199,14 +199,33 @@ export function handleCommand(
   if (cmd === '!unsafe') {
     if (!unsafe) return null;
     if (!context) return 'Run `!unsafe` in a project channel or thread.';
-    unsafe.enable(context.channelId);
+
+    const subcommand = parts[1]?.toLowerCase();
     const where = context.isThread ? ' (thread)' : '';
-    return `⚠️ Unsafe mode enabled for **${context.projectName}**${where}. Claude has full permission for the rest of this session — use \`!safe\` to revert.`;
+
+    if (subcommand === 'confirm') {
+      if (!unsafe.confirmPending(context.channelId)) {
+        return `**${context.projectName}** — no pending \`!unsafe\` to confirm (or it expired). Run \`!unsafe\` first.`;
+      }
+      unsafe.enable(context.channelId);
+      return `⚠️ Unsafe mode enabled for **${context.projectName}**${where}. Claude has full permission for the rest of this session — use \`!safe\` to revert.`;
+    }
+
+    if (unsafe.isEnabled(context.channelId)) {
+      return `**${context.projectName}**${where} — already in unsafe mode. Use \`!safe\` to revert.`;
+    }
+
+    unsafe.armPending(context.channelId);
+    const seconds = Math.floor(UNSAFE_CONFIRM_WINDOW_MS / 1000);
+    return `⚠️ About to escalate **${context.projectName}**${where} to bypass mode. Reply \`!unsafe confirm\` within ${seconds}s to enable. Any other message cancels.`;
   }
 
   if (cmd === '!safe') {
     if (!unsafe) return null;
     if (!context) return 'Run `!safe` in a project channel or thread.';
+    // De-escalation also drops any pending arm so a leftover prompt doesn't
+    // become confirmable later.
+    unsafe.clearPending(context.channelId);
     if (!unsafe.isEnabled(context.channelId)) {
       return `**${context.projectName}** — already in safe mode.`;
     }
@@ -227,7 +246,8 @@ export function handleCommand(
     ];
     if (unsafe) {
       lines.push(
-        '`!unsafe` — escalate the current session to bypass permissions (full access)',
+        '`!unsafe` — arm a bypass-permissions escalation (must be confirmed)',
+        '`!unsafe confirm` — confirm the pending escalation within 60s',
         '`!safe` — revert the current session to the curated allowlist',
       );
     }
@@ -338,66 +358,16 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
 
     if (!('send' in message.channel)) return;
 
-    // Handle gateway commands from any mapped channel
-    if (message.content.startsWith('!')) {
-      const parentId = message.channel.isThread() ? message.channel.parentId ?? undefined : undefined;
-      const resolved = router.resolve(message.channelId, parentId);
-      if (resolved) {
-        // Handle async !curator commands before sync handleCommand
-        if (message.content.match(/^!curator\b/i)) {
-          if (handleCuratorCommand) {
-            const curatorResponse = await handleCuratorCommand(message.content);
-            if (curatorResponse) {
-              await message.channel.send(curatorResponse);
-              return;
-            }
-          } else {
-            await message.channel.send('Curator commands are not available (ayumi module not installed).');
-            return;
-          }
-        }
-
-        const response = handleCommand(message.content, config, sessionManager, {
-          channelId: resolved.channelId,
-          projectName: resolved.name,
-          isThread: resolved.isThread,
-        }, unsafeRegistry);
-        if (response) {
-          await message.channel.send(response);
-          return;
-        }
-
-        // Check for !ask <agent> or !<agent> shorthand dispatch
-        const projectChannelId = parentId || resolved.channelId;
-        const project = config.projects[projectChannelId];
-        const agents = project?.agents;
-        if (agents) {
-          const askMention = parseAgentCommand(message.content, agents);
-          if (askMention) {
-            // Fall through to normal message handling — inject the parsed mention
-            // by rewriting message content to @agent form so the existing path picks it up
-          } else {
-            // Check if user tried !ask with an unknown agent name
-            const target = extractAskTarget(message.content);
-            if (target) {
-              const agentList = Object.entries(agents)
-                .map(([name, a]) => `\`${name}\` — ${a.role}`)
-                .join('\n- ');
-              await message.channel.send(
-                `Unknown agent \`${target}\`. Available agents:\n- ${agentList}\n\nUsage: \`!ask <agent> <message>\``,
-              );
-              return;
-            }
-          }
-        }
-      }
-    }
-
     const parentId = message.channel.isThread() ? message.channel.parentId ?? undefined : undefined;
     const resolved = router.resolve(message.channelId, parentId);
     if (!resolved) return;
 
-    // Role-based access control
+    // Role-based access control (#237). Gates BOTH gateway commands
+    // (!unsafe / !kill / !restart / etc.) AND routed prompts. Previously
+    // commands ran above this check, which meant any user who could post in
+    // a mapped channel could escalate via !unsafe regardless of allowedRoles.
+    // When a project does not configure allowedRoles, behavior is unchanged
+    // (the predicate short-circuits to allowed).
     const projectChannelIdForAcl = parentId || resolved.channelId;
     const projectForAcl = config.projects[projectChannelIdForAcl];
     if (projectForAcl?.allowedRoles && projectForAcl.allowedRoles.length > 0) {
@@ -407,7 +377,75 @@ export function createDiscordBot(token: string, router: Router, sessionManager: 
       }
     }
 
-    // Per-user rate limiting
+    // Pending `!unsafe` arm is cleared by any message that isn't `!unsafe`
+    // (re-arm, refreshes the window inside handleCommand) or `!unsafe confirm`
+    // (consumed inside handleCommand). This is what gives the confirmation
+    // its "any other message cancels" semantic (#239).
+    const trimmedContent = message.content.trim();
+    const isUnsafeArm = trimmedContent.toLowerCase() === '!unsafe';
+    const isUnsafeConfirm = trimmedContent.toLowerCase() === '!unsafe confirm';
+    if (
+      unsafeRegistry.hasPendingArm(resolved.channelId) &&
+      !isUnsafeArm &&
+      !isUnsafeConfirm
+    ) {
+      unsafeRegistry.clearPending(resolved.channelId);
+    }
+
+    // Handle gateway commands from any mapped channel
+    if (message.content.startsWith('!')) {
+      // Handle async !curator commands before sync handleCommand
+      if (message.content.match(/^!curator\b/i)) {
+        if (handleCuratorCommand) {
+          const curatorResponse = await handleCuratorCommand(message.content);
+          if (curatorResponse) {
+            await message.channel.send(curatorResponse);
+            return;
+          }
+        } else {
+          await message.channel.send('Curator commands are not available (ayumi module not installed).');
+          return;
+        }
+      }
+
+      const response = handleCommand(message.content, config, sessionManager, {
+        channelId: resolved.channelId,
+        projectName: resolved.name,
+        isThread: resolved.isThread,
+      }, unsafeRegistry);
+      if (response) {
+        await message.channel.send(response);
+        return;
+      }
+
+      // Check for !ask <agent> or !<agent> shorthand dispatch
+      const projectChannelId = parentId || resolved.channelId;
+      const project = config.projects[projectChannelId];
+      const agents = project?.agents;
+      if (agents) {
+        const askMention = parseAgentCommand(message.content, agents);
+        if (askMention) {
+          // Fall through to normal message handling — inject the parsed mention
+          // by rewriting message content to @agent form so the existing path picks it up
+        } else {
+          // Check if user tried !ask with an unknown agent name
+          const target = extractAskTarget(message.content);
+          if (target) {
+            const agentList = Object.entries(agents)
+              .map(([name, a]) => `\`${name}\` — ${a.role}`)
+              .join('\n- ');
+            await message.channel.send(
+              `Unknown agent \`${target}\`. Available agents:\n- ${agentList}\n\nUsage: \`!ask <agent> <message>\``,
+            );
+            return;
+          }
+        }
+      }
+    }
+
+    // Per-user rate limiting (applies to routed prompts; commands are
+    // intentionally not rate-limited since !sessions / !session etc. are
+    // expected to be issued back-to-back).
     if (projectForAcl?.rateLimitPerUser) {
       const result = rateLimiter.check(`${message.author.id}:${projectChannelIdForAcl}`, projectForAcl.rateLimitPerUser);
       if (!result.allowed) {

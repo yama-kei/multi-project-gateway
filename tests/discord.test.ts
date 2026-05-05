@@ -262,9 +262,9 @@ describe('handleCommand', () => {
     expect(result).toContain('engineer');
   });
 
-  // --- !unsafe / !safe ---
+  // --- !unsafe / !safe (#235, #239) ---
 
-  it('!unsafe enables unsafe mode for the current channel and acks', () => {
+  it('!unsafe arms a pending escalation and asks for confirmation (no state change)', () => {
     const sm = mockSessionManager();
     const unsafe = createUnsafeRegistry();
     const result = handleCommand('!unsafe', testConfig, sm, {
@@ -272,12 +272,13 @@ describe('handleCommand', () => {
       projectName: 'Alpha',
       isThread: false,
     }, unsafe);
-    expect(result).toMatch(/unsafe mode enabled/i);
+    expect(result).toMatch(/!unsafe confirm/i);
     expect(result).toContain('Alpha');
-    expect(unsafe.isEnabled('ch-1')).toBe(true);
+    expect(unsafe.isEnabled('ch-1')).toBe(false);     // not enabled yet
+    expect(unsafe.hasPendingArm('ch-1')).toBe(true);  // arm recorded
   });
 
-  it('!unsafe in a thread enables for the thread channel id', () => {
+  it('!unsafe in a thread arms the thread channel id (not the parent)', () => {
     const sm = mockSessionManager();
     const unsafe = createUnsafeRegistry();
     handleCommand('!unsafe', testConfig, sm, {
@@ -285,8 +286,59 @@ describe('handleCommand', () => {
       projectName: 'Alpha',
       isThread: true,
     }, unsafe);
-    expect(unsafe.isEnabled('thread-99')).toBe(true);
+    expect(unsafe.hasPendingArm('thread-99')).toBe(true);
+    expect(unsafe.hasPendingArm('ch-1')).toBe(false);
+    expect(unsafe.isEnabled('thread-99')).toBe(false);
+  });
+
+  it('!unsafe confirm within window enables and acks', () => {
+    const sm = mockSessionManager();
+    const unsafe = createUnsafeRegistry();
+    handleCommand('!unsafe', testConfig, sm, {
+      channelId: 'ch-1', projectName: 'Alpha', isThread: false,
+    }, unsafe);
+    const result = handleCommand('!unsafe confirm', testConfig, sm, {
+      channelId: 'ch-1', projectName: 'Alpha', isThread: false,
+    }, unsafe);
+    expect(result).toMatch(/unsafe mode enabled/i);
+    expect(unsafe.isEnabled('ch-1')).toBe(true);
+    expect(unsafe.hasPendingArm('ch-1')).toBe(false);
+  });
+
+  it('!unsafe confirm without prior !unsafe returns a no-pending error', () => {
+    const sm = mockSessionManager();
+    const unsafe = createUnsafeRegistry();
+    const result = handleCommand('!unsafe confirm', testConfig, sm, {
+      channelId: 'ch-1', projectName: 'Alpha', isThread: false,
+    }, unsafe);
+    expect(result).toMatch(/no pending|expired/i);
     expect(unsafe.isEnabled('ch-1')).toBe(false);
+  });
+
+  it('!unsafe confirm after the window expires does NOT enable', () => {
+    const sm = mockSessionManager();
+    let t = 1_000_000;
+    const unsafe = createUnsafeRegistry({ now: () => t, windowMs: 1_000 });
+    handleCommand('!unsafe', testConfig, sm, {
+      channelId: 'ch-1', projectName: 'Alpha', isThread: false,
+    }, unsafe);
+    t += 2_000; // past window
+    const result = handleCommand('!unsafe confirm', testConfig, sm, {
+      channelId: 'ch-1', projectName: 'Alpha', isThread: false,
+    }, unsafe);
+    expect(result).toMatch(/no pending|expired/i);
+    expect(unsafe.isEnabled('ch-1')).toBe(false);
+  });
+
+  it('!unsafe when already enabled informs the operator and does NOT arm', () => {
+    const sm = mockSessionManager();
+    const unsafe = createUnsafeRegistry();
+    unsafe.enable('ch-1');
+    const result = handleCommand('!unsafe', testConfig, sm, {
+      channelId: 'ch-1', projectName: 'Alpha', isThread: false,
+    }, unsafe);
+    expect(result).toMatch(/already in unsafe mode/i);
+    expect(unsafe.hasPendingArm('ch-1')).toBe(false);
   });
 
   it('!safe disables unsafe mode and acks', () => {
@@ -313,6 +365,16 @@ describe('handleCommand', () => {
     expect(result).toMatch(/already in safe mode/i);
   });
 
+  it('!safe also clears any pending arm', () => {
+    const sm = mockSessionManager();
+    const unsafe = createUnsafeRegistry();
+    unsafe.armPending('ch-1');
+    handleCommand('!safe', testConfig, sm, {
+      channelId: 'ch-1', projectName: 'Alpha', isThread: false,
+    }, unsafe);
+    expect(unsafe.hasPendingArm('ch-1')).toBe(false);
+  });
+
   it('!unsafe without context returns a usage hint', () => {
     const sm = mockSessionManager();
     const unsafe = createUnsafeRegistry();
@@ -331,11 +393,12 @@ describe('handleCommand', () => {
     expect(result).toBeNull();
   });
 
-  it('!help mentions !unsafe / !safe when registry support is present', () => {
+  it('!help mentions !unsafe / !unsafe confirm / !safe when registry support is present', () => {
     const sm = mockSessionManager();
     const unsafe = createUnsafeRegistry();
     const result = handleCommand('!help', testConfig, sm, undefined, unsafe);
     expect(result).toContain('!unsafe');
+    expect(result).toContain('!unsafe confirm');
     expect(result).toContain('!safe');
   });
 
