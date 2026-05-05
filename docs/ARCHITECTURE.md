@@ -277,7 +277,7 @@ Claude sessions are sandboxed via CLI flags:
 | Mode | How it's set | Capabilities |
 |------|--------------|--------------|
 | **Default** | `--permission-mode acceptEdits` (gateway default) | Read/edit files in project dir; tool calls outside the curated allowlist are denied. Shell commands auto-denied in `--print` mode for tools not in the allowlist. |
-| **Per-session escalation** | `!unsafe` arms a pending escalation; the operator must reply `!unsafe confirm` within 60s (any other message cancels). Once confirmed, `--permission-mode bypassPermissions` is applied for that channel/thread until `!safe`. | Full Claude permission for the rest of the session. Operator-explicit, two-step (#239); never the default. Gated by `allowedRoles` when configured (#237). |
+| **Per-session escalation** | `!unsafe` arms a pending escalation; the operator must reply `!unsafe confirm` within 60s (any other message cancels). Once confirmed, `--permission-mode bypassPermissions` is applied for that channel/thread until `!safe`. Threads inherit unsafe mode from their parent channel; `!safe` inside a thread sets a per-thread force-safe override that wins over inheritance (#238). | Full Claude permission for the rest of the session. Operator-explicit, two-step (#239); never the default. Gated by `allowedRoles` when configured (#237). |
 | **Legacy unrestricted** | `--dangerously-skip-permissions` in `claudeArgs` | Full OS access. Triggers a startup warning pointing at #235; supported for backward compatibility but discouraged. |
 
 ### Tool restrictions
