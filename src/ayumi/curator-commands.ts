@@ -13,6 +13,7 @@
 import type { BrokerClient } from '../broker-client.js';
 import { createBrokerClientFromEnv } from '../broker-client.js';
 import type { Topic } from 'ayumi';
+import { topicVaultPath } from 'ayumi';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -37,17 +38,9 @@ interface FolderMap {
 }
 
 const TOPIC_FOLDERS: readonly Topic[] = ['work', 'travel', 'finance', 'health', 'social', 'hobbies'];
-const SENSITIVE_TOPICS: Topic[] = ['finance', 'health'];
 const MANIFEST_NAME = 'pending-review.json';
 
 // ---- Vault helpers (previously in vault-writer.ts) ----
-
-function topicDir(vaultPath: string, topic: Topic): string {
-  if (SENSITIVE_TOPICS.includes(topic)) {
-    return join(vaultPath, 'topics', '_sensitive', topic);
-  }
-  return join(vaultPath, 'topics', topic);
-}
 
 function generateFrontmatter(opts: {
   tier: 1 | 2 | 3;
@@ -288,7 +281,7 @@ async function handleVaultApprove(vaultPath: string, arg: string): Promise<strin
 
     const entry = manifest.topics[topic];
     const topicName = topic as Topic;
-    const dir = topicDir(vaultPath, topicName);
+    const dir = topicVaultPath(vaultPath, topicName);
 
     // Write the approved summary.md to vault with frontmatter
     await mkdir(dir, { recursive: true });
